@@ -12,8 +12,15 @@ prescribed chord, sweep, rake and twist wrapped around an analytic NACA
 path uses, and checks the numbers that come back are the ones that went in,
 signs included.
 
-Needs only numpy: the stacks are assembled directly as `Section` records, so
-no CAD and no OCCT binding are involved.
+It also checks the tilted tip section: a stack of horizontal sections capped
+by one section tilted about the thickness axis must report tilt 0 on every
+horizontal row and the prescribed tilt, chord and shape on the tip row, with
+the fits left untouched by it; and the rotations that tilt and untilt a
+section (`rot_axis`) must be exact inverses.
+
+Needs only numpy (and rot_axis.py / skew_symmetric_matrix.py next to it):
+the stacks are assembled directly as `Section` records, so no CAD and no
+OCCT binding are involved.
 
     python _rudder_param_test.py
 """
@@ -23,9 +30,11 @@ from __future__ import annotations
 import numpy as np
 
 from Rudder_geom_extraction import (
-    CHORD_AXIS, SPAN_AXIS, THICK_AXIS,
-    Section, spanwise_distributions,
+    CHORD_AXIS, SPAN_AXIS, THICK_AXIS, TILT_AXIS,
+    Section, fit_distributions, spanwise_distributions, tip_section_summary,
+    xcad_loop,
 )
+from rot_axis import rot_axis
 
 
 # --------------------------------------------------------------------------- #
@@ -243,12 +252,118 @@ def test_symmetric_section_has_no_camber_position():
     check("x/c of max camber is NaN", np.isfinite(d.x_cmax).sum(), 0, 0)
 
 
+def tilt_section(s: Section, tilt_deg: float) -> Section:
+    """
+    Turn a horizontal synthetic section by `tilt_deg` about the thickness axis
+    through its LE (TE up for a positive tilt), the way the tip section sits.
+    """
+    rot = rot_axis(TILT_AXIS, np.radians(tilt_deg))
+    pivot = s.le.copy()
+
+    def turn(p):
+        return pivot + (np.atleast_2d(p) - pivot) @ rot.T
+
+    return Section(y=s.y, le=turn(s.le)[0], te=turn(s.te)[0], chord=s.chord,
+                   outline=turn(s.outline), airfoil_raw=s.airfoil_raw,
+                   airfoil_norm=s.airfoil_norm, tilt_deg=float(tilt_deg))
+
+
+def test_tilted_tip_section():
+    """
+    A straight, tapered, swept stack capped by one tilted section whose LE sits
+    on the LE line and whose TE sits on the TE line, higher up: the geometry
+    of the rudder's tip section, with round numbers.
+    """
+    print("\ntilted tip section on a swept, tapered stack")
+    span, sweep, t = 220.0, 4.0, 0.16
+    upper, lower = naca4(0.0, 0.0, t)
+    x_le = lambda y: y * np.tan(np.radians(sweep))
+    c = lambda y: 180.0 - 0.21 * y
+    x_te = lambda y: x_le(y) + c(y)
+    ys = np.linspace(0.0, 199.5, 60)
+    stack = build_stack(ys, chord=c, x_le=x_le, z_le=lambda y: 0.0,
+                        twist=lambda y: 0.0, upper=upper, lower=lower)
+
+    # tip section: LE at the top of the LE line, TE on the TE line 8.5 higher
+    y_top, rise = 200.0, 8.5
+    run = x_te(y_top + rise) - x_le(y_top)
+    tilt = np.degrees(np.arctan2(rise, run))
+    chord_tip = float(np.hypot(run, rise))
+    flat = make_section(y_top, chord_tip, x_le(y_top), 0.0, 0.0, upper, lower)
+    tip = tilt_section(flat, tilt)
+    check("tip TE lands on the TE line, 8.5 higher",
+          tip.te[[CHORD_AXIS, SPAN_AXIS]], [x_te(y_top + rise), y_top + rise], 1e-9)
+
+    d = spanwise_distributions(stack + [tip], span)
+    h = d.horizontal
+    check("tip section is the last row, alone", [h.sum(), (~h).sum(), h[-1]],
+          [len(ys), 1, 0], 0)
+    check("tilt is 0 on every horizontal row", d.tilt[h], 0.0, 0.0)
+    check("tilt_ratio is 0 on every horizontal row", d.tilt_ratio[h], 0.0, 0.0)
+    check("tilt of the tip row", d.tilt[-1], tilt, 1e-9)
+    check("tilt_ratio of the tip row = tan(tilt)", d.tilt_ratio[-1],
+          np.tan(np.radians(tilt)), 1e-12)
+    check("y_te of the tip row", d.y_te[-1], y_top + rise, 1e-9)
+    check("y_te = y on the horizontal rows", d.y_te[h] - d.y[h], 0.0, 0.0)
+    check("tip chord is its own, not the projection", d.chord[-1], chord_tip, 1e-9)
+    check("tip chordwise projection", d.chord_x[-1], run, 1e-9)
+    check("tip twist stays zero", d.twist[-1], 0.0, 1e-9)
+    check("tip t/c is the section's, measured untilted", d.t_over_c[-1], t, 1e-4)
+    # LE and TE sit on the straight edges, each at its own height
+    check("tip LE sweep = edge sweep", d.sweep_le[-1], sweep, 1e-9)
+    te_sweep = np.degrees(np.arctan2(x_te(1.0) - x_te(0.0), 1.0))
+    check("tip TE sweep = edge sweep (at the TE's own height)",
+          d.sweep_te[-1], te_sweep, 1e-9)
+    check("local columns are NaN on the tip row",
+          np.isfinite([d.sweep_le_local[-1], d.sweep_c4_local[-1],
+                       d.dihedral_local[-1]]).sum(), 0, 0)
+
+    fits = fit_distributions(d)
+    check("chord fit still linear (tip row left out)",
+          fits["chord"]["form"] == "linear", 1, 0)
+    check("LE sweep fit still constant", fits["sweep_le"]["form"] == "constant", 1, 0)
+    check("fits see the horizontal rows only", fits["chord"]["n_valid"], len(ys), 0)
+    tipsum = tip_section_summary(d)
+    check("tip summary tilt", tipsum["tilt_deg"], tilt, 1e-9)
+
+
+def test_tilt_rotation_round_trip():
+    """
+    `Section.points_3d`, `untilt` and `retilt` are the rot_axis rotation about
+    the thickness axis through the LE and its inverse: exact to round-off, and
+    the tilted points must lie on the tilted plane through the LE.
+    """
+    print("\ntilt and untilt round trip (rot_axis)")
+    upper, lower = naca4(0.0, 0.0, 0.16, n=101)
+    chord, tilt, y0, xle = 136.95, 3.5766, 200.0, 14.0
+    raw = chord * np.vstack([upper[::-1], lower[1:]])          # Selig order
+    flat = make_section(y0, chord, xle, 0.0, 0.0, upper, lower)
+    flat.airfoil_raw, flat.airfoil_norm = raw, raw / chord
+    tip = tilt_section(flat, tilt)
+
+    p = tip.points_3d(raw)
+    level = np.column_stack([xle + raw[:, 0], np.full(len(raw), y0), raw[:, 1]])
+    check("untilt(points_3d) is the level section at the LE height",
+          tip.untilt(p), level, 1e-12)
+    check("retilt(untilt(p)) = p", tip.retilt(tip.untilt(p)), p, 1e-12)
+    th = np.radians(tilt)
+    normal = np.array([-np.sin(th), np.cos(th), 0.0])
+    check("tilted points lie on the tilted plane", (p - tip.le) @ normal, 0.0, 1e-12)
+
+    loop = xcad_loop(tip)
+    i_te = (len(raw) + 1) // 2 - 1
+    check("XCAD loop starts and ends at the LE", [loop[0], loop[-1]], [tip.le, tip.le], 1e-12)
+    check("XCAD loop TE is the tilted TE", loop[i_te], tip.te, 1e-12)
+
+
 def main():
     print("Step 6 parametrisation self-check")
     test_straight_swept_raked_twisted()
     test_curved_leading_edge()
     test_section_shape()
     test_symmetric_section_has_no_camber_position()
+    test_tilted_tip_section()
+    test_tilt_rotation_round_trip()
 
     print()
     if _FAILED:

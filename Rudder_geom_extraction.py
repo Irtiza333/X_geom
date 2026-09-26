@@ -14,13 +14,22 @@ Step 4 : Extract the LE / TE corner points of the root section and of the cut
          section (the four "red dots") and store them.
 Step 5 : Extract the 2D airfoil coordinates of the root section and of the cut
          section at `num_pts` points per section (default 200), and the whole
-         `num_sec`-section stack from the root up to the top of the LE.
+         stack: `num_sec` horizontal sections evenly spaced from the root up to
+         a gap d below the top of the LE (d = half the spacing by default), and
+         on top of them one tilted tip section, the planar cut through the top
+         of the LE and the top of the TE. The tip section is also written
+         untilted (rotated back about the thickness axis through its LE), so
+         its airfoil can be read directly. The stack is also written in XCAD's
+         point format (see `write_xcad`).
 Step 6 : Parametrise that stack root-to-tip: chord, sweep, rake / dihedral,
-         twist and the section shape (t/c, camber, LE radius) as spanwise
-         distributions, each fitted with a constant, a straight line and a
-         polynomial so a rudder that really is "4 deg aft all the way up with
-         no rake and no twist" reports itself as exactly that. The tolerances
-         only decide how a distribution is *described*; they never clip it.
+         twist, the section tilt and the section shape (t/c, camber, LE
+         radius) as spanwise distributions, each fitted with a constant, a
+         straight line and a polynomial so a rudder that really is "4 deg aft
+         all the way up with no rake and no twist" reports itself as exactly
+         that. The tolerances only decide how a distribution is *described*;
+         they never clip it. The fits use the horizontal sections only; the
+         tilt of the tip section is reported on its own, as the design
+         variable it is meant to become.
 
 Working frame after Step 2 (standard aerodynamic convention):
     origin = root leading-edge point
@@ -52,6 +61,16 @@ import os
 from dataclasses import dataclass
 
 import numpy as np
+
+# Rotation helpers from the X_geom repo; they sit next to this script there.
+try:
+    from rot_axis import rot_axis                            # Rodrigues rotation matrix
+    from skew_symmetric_matrix import skew_symmetric_matrix  # [v]x, the cross-product matrix
+except ImportError as _exc:                                  # pragma: no cover
+    raise ImportError(
+        "Rudder_geom_extraction.py needs rot_axis.py and skew_symmetric_matrix.py "
+        "(from the X_geom repo) in the same folder"
+    ) from _exc
 
 # --------------------------------------------------------------------------- #
 # OCCT binding shim: pythonocc-core (OCC.Core) or cadquery-ocp (OCP)
@@ -108,6 +127,10 @@ GCPnts_QuasiUniformAbscissa = _occ("GCPnts", "GCPnts_QuasiUniformAbscissa")
 _bnd_mod = importlib.import_module(f"{_PKG}.BRepBndLib")
 _bnd_owner = getattr(_bnd_mod, "brepbndlib", None) or getattr(_bnd_mod, "BRepBndLib")
 _bnd_add = _static(_bnd_owner, "Add")
+try:
+    _bnd_add_optimal = _static(_bnd_owner, "AddOptimal")
+except AttributeError:                                       # pragma: no cover
+    _bnd_add_optimal = None
 
 _tds_mod = importlib.import_module(f"{_PKG}.TopoDS")
 _tds_owner = getattr(_tds_mod, "topods", None) or getattr(_tds_mod, "TopoDS")
@@ -127,6 +150,11 @@ LE_SIGN = -1
 TE_SIGN = +1
 
 _SPAN_DIR = [gp_Dir(1, 0, 0), gp_Dir(0, 1, 0), gp_Dir(0, 0, 1)][SPAN_AXIS]
+
+# The tip section is tilted about the thickness axis: its plane still contains
+# the thickness direction, but it climbs from the top of the LE to the top of
+# the TE instead of lying at one height.
+TILT_AXIS = np.eye(3)[THICK_AXIS]
 
 DEFAULT_NUM_PTS = 200     # points per airfoil section
 DEFAULT_NUM_SEC = 200     # spanwise cross-sections in the stack
@@ -156,9 +184,20 @@ def load_cad(path: str):
 
 
 def bounding_box(shape):
-    """Exact (no tolerance gap) bounding box as two numpy points."""
+    """
+    Tight bounding box as two numpy points.
+
+    `BRepBndLib.Add` without a triangulation boxes the control net of each
+    B-spline face, and on a trimmed face that is the untrimmed surface. The
+    wind-tunnel rudder's side surfaces are a loft that runs to about 218 mm
+    before the tip trims it, so `Add` reports a top of 218.07 mm for a part
+    that ends at 211.36 mm. `AddOptimal` bounds the trimmed geometry itself.
+    """
     box = Bnd_Box()
-    _bnd_add(shape, box, False)
+    if _bnd_add_optimal is not None:
+        _bnd_add_optimal(shape, box, False, False)
+    else:                                                    # pragma: no cover
+        _bnd_add(shape, box, False)
     box.SetGap(0.0)
     lo, hi = box.CornerMin(), box.CornerMax()
     return (np.array([lo.X(), lo.Y(), lo.Z()]),
@@ -230,6 +269,25 @@ def _edge_polyline(edge, n_pts: int) -> np.ndarray:
     return _curve_polyline(BRepAdaptor_Curve(edge), n_pts)
 
 
+def _plane_curves(lateral, plane, what: str):
+    """The curves of one planar cut through the lateral faces."""
+    algo = BRepAlgoAPI_Section(lateral, plane, False)
+    algo.ComputePCurveOn1(True)
+    algo.Approximation(True)
+    algo.Build()
+    if not algo.IsDone():
+        raise RuntimeError(f"Section {what} failed")
+
+    curves = []
+    exp = TopExp_Explorer(algo.Shape(), TopAbs_EDGE)
+    while exp.More():
+        curves.append(BRepAdaptor_Curve(_as_edge(exp.Current())))
+        exp.Next()
+    if not curves:
+        raise RuntimeError(f"Section {what} is empty - outside the part?")
+    return curves
+
+
 def section_curves(lateral, y: float):
     """
     Step 3 - one horizontal planar cut at spanwise station `y`.
@@ -238,21 +296,14 @@ def section_curves(lateral, y: float):
     LE, TE) is derived from this one result, so a station costs one cut.
     """
     plane = gp_Pln(gp_Pnt(*[0.0 if i != SPAN_AXIS else y for i in range(3)]), _SPAN_DIR)
-    algo = BRepAlgoAPI_Section(lateral, plane, False)
-    algo.ComputePCurveOn1(True)
-    algo.Approximation(True)
-    algo.Build()
-    if not algo.IsDone():
-        raise RuntimeError(f"Section at y = {y} failed")
+    return _plane_curves(lateral, plane, f"at y = {y}")
 
-    curves = []
-    exp = TopExp_Explorer(algo.Shape(), TopAbs_EDGE)
-    while exp.More():
-        curves.append(BRepAdaptor_Curve(_as_edge(exp.Current())))
-        exp.Next()
-    if not curves:
-        raise RuntimeError(f"Section at y = {y} is empty - outside the part?")
-    return curves
+
+def tilted_section_curves(lateral, point: np.ndarray, normal: np.ndarray):
+    """One planar cut through `point` with unit `normal`, for the tilted section."""
+    plane = gp_Pln(gp_Pnt(*[float(v) for v in point]),
+                   gp_Dir(*[float(v) for v in normal]))
+    return _plane_curves(lateral, plane, f"through {np.round(point, 6).tolist()}")
 
 
 def section_polyline(lateral, y: float, dense: int = _DENSE_PER_EDGE) -> np.ndarray:
@@ -297,19 +348,28 @@ def _chain(strips) -> np.ndarray:
     return pts
 
 
-def _extreme_on_curves(curves, sign: int) -> np.ndarray:
+def _extreme_on_curves(curves, sign: int, direction=None) -> np.ndarray:
     """
-    Chordwise extremum over a section's curves (sign = -1 -> TE, +1 -> LE),
+    Chordwise extremum over a section's curves (sign = LE_SIGN or TE_SIGN),
     bracketed on a dense parameter sample then refined by golden section on
     the curve itself, not read off a polyline.
+
+    `direction` is the chordwise axis to measure along; the default is the
+    global X. A tilted section passes its own chord direction instead.
     """
+    e = None if direction is None else np.asarray(direction, float) / np.linalg.norm(direction)
     best_val, best_pnt = -np.inf, None
     for curve in curves:
         u0, u1 = curve.FirstParameter(), curve.LastParameter()
 
-        def f(u):
-            p = curve.Value(u)
-            return sign * [p.X(), p.Y(), p.Z()][CHORD_AXIS]
+        if e is None:
+            def f(u):
+                p = curve.Value(u)
+                return sign * [p.X(), p.Y(), p.Z()][CHORD_AXIS]
+        else:
+            def f(u):
+                p = curve.Value(u)
+                return sign * (e[0] * p.X() + e[1] * p.Y() + e[2] * p.Z())
 
         us = np.linspace(u0, u1, 400)
         vals = np.array([f(u) for u in us])
@@ -386,43 +446,41 @@ def _point_to_polyline(q: np.ndarray, poly: np.ndarray) -> float:
     return float(np.linalg.norm(q - (a + t[:, None] * ab), axis=1).min())
 
 
-def leading_edge_top(shape, lateral, span: float, n_probe: int = 10):
+def _edge_top(shape, lateral, span: float, point_at, names, n_probe: int = 10):
     """
-    Spanwise station where the leading edge ends.
+    Top end of the edge traced by `point_at(lateral, y)` - the LE or the TE
+    point of a horizontal section - as a 3D point, with how it was found.
 
-    The tip surface is inclined, so above this station a horizontal cut no
-    longer produces a complete airfoil - the nose of the cut is the tip blend
-    rather than the true leading edge.
+    Preferred route: probe the point over the lower span, find the B-rep edges
+    those points actually lie on, and take the top of that curve. That is exact
+    whenever the exporter wrote the edge as an edge, which is the usual case
+    for a lofted surface. Falls back to bisecting where the point leaves the
+    locus extrapolated from below.
 
-    Preferred route: probe the LE point over the lower span, find the B-rep
-    edges those points actually lie on, and take the top of that curve. That
-    is exact whenever the exporter wrote the leading edge as an edge, which is
-    the usual case for a lofted surface. Falls back to bisecting where the LE
-    point leaves the locus extrapolated from below.
-
-    Returns (y_top, how).
+    `names` = (long, short) name of the edge for the `how` string.
     """
     probes = np.linspace(0.02, 0.60, n_probe) * span
-    pts = [leading_edge_point(lateral, float(y)) for y in probes]
+    pts = [point_at(lateral, float(y)) for y in probes]
     tol = max(1.0e-7, 1.0e-6 * span)
 
-    tops = []
+    best = None
     exp = TopExp_Explorer(shape, TopAbs_EDGE)
     while exp.More():
         poly = _edge_polyline(_as_edge(exp.Current()), 200)
         if any(_point_to_polyline(q, poly) < tol for q in pts):
-            tops.append(float(poly[:, SPAN_AXIS].max()))
+            top = poly[int(np.argmax(poly[:, SPAN_AXIS]))]
+            if best is None or top[SPAN_AXIS] > best[SPAN_AXIS]:
+                best = top.copy()
         exp.Next()
-    if tops:
-        return max(tops), "top of the b-rep leading-edge curve"
+    if best is not None:
+        return best, f"top of the b-rep {names[0]} curve"
 
-    # fallback - the LE locus is smooth below the break and leaves it after
+    # fallback - the locus is smooth below the break and leaves it after
     fit = np.polyfit(probes, [p[CHORD_AXIS] for p in pts], 1)
 
     def on_locus(y):
         try:
-            return abs(leading_edge_point(lateral, y)[CHORD_AXIS]
-                       - np.polyval(fit, y)) < tol
+            return abs(point_at(lateral, y)[CHORD_AXIS] - np.polyval(fit, y)) < tol
         except RuntimeError:
             return False
 
@@ -433,7 +491,31 @@ def leading_edge_top(shape, lateral, span: float, n_probe: int = 10):
             lo = mid
         else:
             hi = mid
-    return lo, "bisection on the extrapolated LE locus"
+    return point_at(lateral, lo), f"bisection on the extrapolated {names[1]} locus"
+
+
+def leading_edge_top_point(shape, lateral, span: float, n_probe: int = 10):
+    """
+    Where the leading edge ends, as a 3D point: (point, how).
+
+    The tip surface is inclined, so above this station a horizontal cut no
+    longer produces a complete airfoil - the nose of the cut is the tip blend
+    rather than the true leading edge.
+    """
+    return _edge_top(shape, lateral, span, leading_edge_point,
+                     ("leading-edge", "LE"), n_probe)
+
+
+def trailing_edge_top_point(shape, lateral, span: float, n_probe: int = 10):
+    """Where the trailing edge ends, as a 3D point: (point, how)."""
+    return _edge_top(shape, lateral, span, trailing_edge_point,
+                     ("trailing-edge", "TE"), n_probe)
+
+
+def leading_edge_top(shape, lateral, span: float, n_probe: int = 10):
+    """Spanwise station where the leading edge ends: (y_top, how)."""
+    point, how = leading_edge_top_point(shape, lateral, span, n_probe)
+    return float(point[SPAN_AXIS]), how
 
 
 # --------------------------------------------------------------------------- #
@@ -480,13 +562,51 @@ def reframe_to_root_le(shape):
 # --------------------------------------------------------------------------- #
 @dataclass
 class Section:
-    y: float                 # spanwise station in the reframed system
-    le: np.ndarray           # leading-edge point  (3,)
-    te: np.ndarray           # trailing-edge point (3,)
-    chord: float
-    outline: np.ndarray      # dense closed loop, (N, 3)
-    airfoil_raw: np.ndarray  # (num_pts, 2) mm,  Selig order, airfoil frame
+    y: float                 # spanwise station; on a tilted section, the height of its LE
+    le: np.ndarray           # leading-edge point  (3,), where it sits on the part
+    te: np.ndarray           # trailing-edge point (3,), where it sits on the part
+    chord: float             # LE -> TE, chordwise, in the section's own (untilted) frame
+    outline: np.ndarray      # dense closed loop, (N, 3), where it sits on the part
+    airfoil_raw: np.ndarray  # (num_pts, 2) mm,  Selig order, airfoil frame (untilted)
     airfoil_norm: np.ndarray  # (num_pts, 2) normalised by chord
+    tilt_deg: float = 0.0    # plane turned about the thickness axis through the LE,
+                             # positive when the TE is higher; 0 for a horizontal cut
+
+    @property
+    def tilted(self) -> bool:
+        return self.tilt_deg != 0.0
+
+    def _turn(self, pts, sign: float) -> np.ndarray:
+        """Rotate (N, 3) points by sign * tilt about the thickness axis through
+        the LE. The pivot height is `y`, so the untilted section lies at y."""
+        pts = np.asarray(pts, dtype=float)
+        if not self.tilted:
+            return pts.copy()
+        pivot = np.zeros(3)
+        pivot[CHORD_AXIS] = self.le[CHORD_AXIS]
+        pivot[SPAN_AXIS] = self.y
+        rot = rot_axis(TILT_AXIS, sign * np.radians(self.tilt_deg))
+        return pivot + (pts - pivot) @ rot.T
+
+    def untilt(self, pts) -> np.ndarray:
+        """Points on the part -> the section's own horizontal frame at height y."""
+        return self._turn(pts, -1.0)
+
+    def retilt(self, pts) -> np.ndarray:
+        """The inverse of `untilt`: back to where the section sits on the part."""
+        return self._turn(pts, +1.0)
+
+    def points_3d(self, xy: np.ndarray) -> np.ndarray:
+        """
+        Airfoil-frame points (x aft of this section's LE, y = thickness) -> 3D
+        in the working frame, where the section sits on the part.
+        """
+        xy = np.asarray(xy, dtype=float)
+        pts = np.empty((len(xy), 3))
+        pts[:, CHORD_AXIS] = self.le[CHORD_AXIS] + xy[:, 0]
+        pts[:, SPAN_AXIS] = self.y
+        pts[:, THICK_AXIS] = xy[:, 1]
+        return self.retilt(pts) if self.tilted else pts
 
     def as_dict(self):
         return {
@@ -494,6 +614,7 @@ class Section:
             "chord": self.chord,
             "le": self.le.tolist(),
             "te": self.te.tolist(),
+            "tilt_deg": self.tilt_deg,
         }
 
 
@@ -545,6 +666,18 @@ def _resample(arc2d: np.ndarray, n: int, spacing: str) -> np.ndarray:
                             np.interp(s_t, s, arc2d[:, 1])])
 
 
+def _airfoil_coords(outline: np.ndarray, le: np.ndarray, te: np.ndarray,
+                    num_pts: int, spacing: str) -> np.ndarray:
+    """A horizontal section outline -> `num_pts` airfoil-frame points, Selig order."""
+    upper, lower = _split_surfaces(outline, le, te)
+    up2, lo2 = _to_airfoil_frame(upper, le), _to_airfoil_frame(lower, le)
+
+    n_half = (num_pts + 1) // 2
+    up = _resample(up2, n_half, spacing)[::-1]              # TE -> LE
+    lo = _resample(lo2, num_pts - n_half + 1, spacing)      # LE -> TE
+    return np.vstack([up, lo[1:]])                          # Selig order
+
+
 def extract_section(lateral, y: float, num_pts: int = DEFAULT_NUM_PTS,
                     spacing: str = "cosine",
                     dense: int = _DENSE_PER_EDGE) -> Section:
@@ -555,28 +688,92 @@ def extract_section(lateral, y: float, num_pts: int = DEFAULT_NUM_PTS,
     te = _extreme_on_curves(curves, TE_SIGN)
     chord = float(te[CHORD_AXIS] - le[CHORD_AXIS])
 
-    upper, lower = _split_surfaces(outline, le, te)
-    up2, lo2 = _to_airfoil_frame(upper, le), _to_airfoil_frame(lower, le)
-
-    n_half = (num_pts + 1) // 2
-    up = _resample(up2, n_half, spacing)[::-1]              # TE -> LE
-    lo = _resample(lo2, num_pts - n_half + 1, spacing)      # LE -> TE
-    raw = np.vstack([up, lo[1:]])                           # Selig order
-
+    raw = _airfoil_coords(outline, le, te, num_pts, spacing)
     return Section(y=float(y), le=le, te=te, chord=chord, outline=outline,
                    airfoil_raw=raw, airfoil_norm=raw / chord)
+
+
+def tilted_plane(le_top: np.ndarray, te_top: np.ndarray):
+    """
+    The plane through the top of the LE and the top of the TE that still
+    contains the thickness axis: (unit normal, unit chord direction, tilt_deg).
+
+    The normal is thickness-axis x chord, formed with the skew-symmetric
+    (cross-product) matrix; for a level chord it is +span, like a horizontal
+    cut. The tilt is the rise of the chord over its run, positive TE up.
+    """
+    c = np.asarray(te_top, float) - np.asarray(le_top, float)
+    normal = skew_symmetric_matrix(TILT_AXIS) @ c
+    normal = normal / np.linalg.norm(normal)
+    tilt_deg = float(np.degrees(np.arctan2(c[SPAN_AXIS], c[CHORD_AXIS])))
+    chord_dir = rot_axis(TILT_AXIS, np.radians(tilt_deg)) @ np.eye(3)[CHORD_AXIS]
+    return normal, chord_dir, tilt_deg
+
+
+def extract_tilted_section(lateral, le_top: np.ndarray, te_top: np.ndarray,
+                           num_pts: int = DEFAULT_NUM_PTS, spacing: str = "cosine",
+                           dense: int = _DENSE_PER_EDGE) -> Section:
+    """
+    The tip section: one planar cut through the top of the LE and the top of
+    the TE, tilted about the thickness axis (see `tilted_plane`).
+
+    Its LE and TE are the chordwise extremes along its own chord direction.
+    The outline is then turned back by -tilt about the thickness axis through
+    the LE (`rot_axis`), which lays it flat at the height of the LE, and from
+    there it is resampled exactly like a horizontal section. So `airfoil_raw`
+    is the untilted airfoil, while `le`, `te` and `outline` stay where the
+    section sits on the part; `Section.points_3d` puts any airfoil-frame
+    points back on the tilted plane.
+    """
+    normal, chord_dir, tilt_deg = tilted_plane(le_top, te_top)
+    curves = tilted_section_curves(lateral, le_top, normal)
+    outline = _chain([_curve_polyline(c, dense) for c in curves])
+    le = _extreme_on_curves(curves, LE_SIGN, chord_dir)
+    te = _extreme_on_curves(curves, TE_SIGN, chord_dir)
+
+    sec = Section(y=float(le[SPAN_AXIS]), le=le, te=te, chord=float("nan"),
+                  outline=outline, airfoil_raw=np.empty((0, 2)),
+                  airfoil_norm=np.empty((0, 2)), tilt_deg=tilt_deg)
+    flat = sec.untilt(outline)
+    le_f, te_f = sec.untilt(np.vstack([le, te]))
+    sec.chord = float(te_f[CHORD_AXIS] - le_f[CHORD_AXIS])
+    sec.airfoil_raw = _airfoil_coords(flat, le_f, te_f, num_pts, spacing)
+    sec.airfoil_norm = sec.airfoil_raw / sec.chord
+    return sec
+
+
+def tip_spacing(y_le_top: float, num_sec: int, d: float | None = None):
+    """
+    Layout of the horizontal sections under the tilted tip section:
+    (dz, d). They run evenly from the root to y_le_top - d.
+
+    By default d = dz / 2, half a step below the top of the LE, with dz the
+    step itself, so dz = y_le_top / (num_sec - 1/2). An explicit `d` (mm)
+    fixes the gap instead and dz follows from it.
+    """
+    if num_sec < 2:
+        raise ValueError("num_sec must be at least 2")
+    if d is None:
+        dz = y_le_top / (num_sec - 0.5)
+        return dz, 0.5 * dz
+    d = float(d)
+    if not 0.0 <= d < y_le_top:
+        raise ValueError(f"tip gap d = {d} must lie in [0, {y_le_top})")
+    return (y_le_top - d) / (num_sec - 1), d
 
 
 def extract_stack(lateral, y_top: float, num_sec: int = DEFAULT_NUM_SEC,
                   num_pts: int = DEFAULT_NUM_PTS, spacing: str = "cosine",
                   y_root: float = 0.0, progress=None):
     """
-    `num_sec` cross-sections evenly spaced from the root up to `y_top`, the
-    top of the leading edge. Returned bottom-to-top; the writer flips them.
+    `num_sec` horizontal cross-sections evenly spaced from the root up to
+    `y_top`. Returned bottom-to-top; the writer flips them.
 
-    Nothing above `y_top` is covered: the tip surface is inclined, so a
-    horizontal cut up there cuts through the tip blend and no longer returns
-    a complete airfoil. That part of the shape needs a different treatment.
+    Horizontal cuts stop at the top of the leading edge: above it the tip
+    surface is inclined, so a horizontal cut there cuts through the tip blend
+    and no longer returns a complete airfoil. `run` stops this stack d below
+    the top of the LE and puts the tilted tip section on it
+    (`extract_tilted_section`).
     """
     if num_sec < 2:
         raise ValueError("num_sec must be at least 2")
@@ -770,6 +967,10 @@ class Distributions:
     camber: np.ndarray            # max camber / c, signed
     x_cmax: np.ndarray            # x/c of maximum camber
     r_le: np.ndarray              # LE radius / c
+    y_te: np.ndarray              # TE height; equal to y unless the section is tilted
+    tilt_ratio: np.ndarray        # (y_te - y) / (x_te - x_le), rise over run
+    tilt: np.ndarray              # deg, arctan(tilt_ratio), positive TE up
+    horizontal: np.ndarray        # bool: rows the fits and the local columns use
     span: float                   # full geometric span of the part [mm]
 
 
@@ -799,6 +1000,10 @@ _DIST_COLUMNS = (
     ("camber",         "-",   "shape",       "maximum camber / chord, signed"),
     ("x_cmax",         "-",   "position",    "x/c of maximum camber, NaN on a symmetric section"),
     ("r_le",           "-",   "shape",       "leading-edge radius / chord"),
+    # appended last so the column numbers above stay what they were
+    ("y_te",           "mm",  None,          "trailing-edge height; equal to y except on the tilted tip section"),
+    ("tilt_ratio",     "-",   None,          "(y_te - y) / (x_te - x_le), rise of the chord line over its run"),
+    ("tilt",           "deg", None,          "section tilt about the thickness axis, arctan(tilt_ratio), positive TE up"),
 )
 
 
@@ -826,14 +1031,34 @@ def _cumulative_angle(dy: np.ndarray, offset: np.ndarray,
     return out
 
 
+def _flat_copy(s: Section) -> Section:
+    """A tilted section laid flat (see `Section.untilt`), for measuring it."""
+    le_f, te_f = s.untilt(np.vstack([s.le, s.te]))
+    return Section(y=s.y, le=le_f, te=te_f, chord=s.chord,
+                   outline=s.untilt(s.outline), airfoil_raw=s.airfoil_raw,
+                   airfoil_norm=s.airfoil_norm)
+
+
 def spanwise_distributions(stack, span: float) -> Distributions:
-    """Step 6 - turn a section stack into root-to-tip parameter distributions."""
-    secs = sorted(stack, key=lambda s: s.y)
-    if len(secs) < 2:
-        raise ValueError("need at least two sections to build a distribution")
+    """
+    Step 6 - turn a section stack into root-to-tip parameter distributions.
+
+    Every section gets a row. A tilted section (the tip section) is measured
+    in its own plane, laid flat about its LE, so its chord, twist and shape
+    are those of its own airfoil; its LE and TE are then put back where they
+    sit on the part, and every reference point (LE, c/4, c/2, TE) is taken at
+    its own height. The local (tangent) columns are derivatives up the stack
+    of horizontal sections and are left NaN on a tilted row.
+    """
+    secs = sorted(stack, key=lambda s: (s.y, s.tilted))
+    horizontal = np.array([not s.tilted for s in secs])
+    if horizontal.sum() < 2:
+        raise ValueError("need at least two horizontal sections to build a distribution")
 
     y = np.array([s.y for s in secs])
-    chord_x = np.array([s.chord for s in secs])
+    # chordwise (X) projection of the chord; the tilt shortens it like the twist does
+    chord_x = np.array([s.chord * np.cos(np.radians(s.tilt_deg)) if s.tilted else s.chord
+                        for s in secs])
 
     le = np.empty((len(secs), 3))
     te = np.empty((len(secs), 3))
@@ -841,29 +1066,49 @@ def spanwise_distributions(stack, span: float) -> Distributions:
     twist = np.empty(len(secs))
     shape = np.empty((len(secs), 5))
     for i, s in enumerate(secs):
-        le[i], te[i], chord[i], twist[i] = _section_chord_line(s)
-        shape[i] = section_shape(s, le[i], te[i], chord[i])
+        if s.tilted:
+            flat = _flat_copy(s)
+            le_f, te_f, chord[i], twist[i] = _section_chord_line(flat)
+            shape[i] = section_shape(flat, le_f, te_f, chord[i])
+            le[i], te[i] = s.retilt(np.vstack([le_f, te_f]))
+        else:
+            le[i], te[i], chord[i], twist[i] = _section_chord_line(s)
+            shape[i] = section_shape(s, le[i], te[i], chord[i])
+
+    # heights of the LE and TE: one station height on a horizontal section
+    y_te = y.copy()
+    y_te[~horizontal] = te[~horizontal, SPAN_AXIS]
+    run_x = te[:, CHORD_AXIS] - le[:, CHORD_AXIS]
+    tilt_ratio = (y_te - y) / run_x
+    tilt = np.degrees(np.arctan2(y_te - y, run_x))
 
     def ref_line(frac):
-        """x and z of the point `frac` of the way along each chord line."""
+        """x, z and height of the point `frac` of the way along each chord line."""
         return (le[:, CHORD_AXIS] + frac * (te[:, CHORD_AXIS] - le[:, CHORD_AXIS]),
-                le[:, THICK_AXIS] + frac * (te[:, THICK_AXIS] - le[:, THICK_AXIS]))
+                le[:, THICK_AXIS] + frac * (te[:, THICK_AXIS] - le[:, THICK_AXIS]),
+                y + frac * (y_te - y))
 
-    dy = y - y[0]
+    h = horizontal
+
+    def local_angle(v, heights):
+        out = np.full(len(secs), np.nan)
+        out[h] = np.degrees(np.arctan(_slope(v[h], heights[h])))
+        return out
 
     def sweep(frac):
-        x_ref, _ = ref_line(frac)
+        x_ref, _, h_ref = ref_line(frac)
         offset = x_ref - x_ref[0]
-        local = np.degrees(np.arctan(_slope(x_ref, y)))
-        return _cumulative_angle(dy, offset, local), local
+        local = local_angle(x_ref, h_ref)
+        return _cumulative_angle(h_ref - h_ref[0], offset, local), local
 
     sweep_le, sweep_le_local = sweep(0.0)
     sweep_c4, sweep_c4_local = sweep(0.25)
     sweep_c2, _ = sweep(0.50)
     sweep_te, _ = sweep(1.00)
 
+    dy = y - y[0]
     rake = le[:, THICK_AXIS] - le[0, THICK_AXIS]
-    dihedral_local = np.degrees(np.arctan(_slope(le[:, THICK_AXIS], y)))
+    dihedral_local = local_angle(le[:, THICK_AXIS], y)
     dihedral = _cumulative_angle(dy, rake, dihedral_local)
 
     return Distributions(
@@ -875,27 +1120,56 @@ def spanwise_distributions(stack, span: float) -> Distributions:
         rake=rake, dihedral=dihedral, dihedral_local=dihedral_local, twist=twist,
         t_over_c=shape[:, 0], x_tmax=shape[:, 1],
         camber=shape[:, 2], x_cmax=shape[:, 3], r_le=shape[:, 4],
+        y_te=y_te, tilt_ratio=tilt_ratio, tilt=tilt, horizontal=horizontal,
         span=float(span),
     )
 
 
 def planform_summary(d: Distributions) -> dict:
-    """Integrated planform quantities over the extracted span."""
+    """Integrated planform quantities over the horizontal sections."""
     trapz = getattr(np, "trapezoid", None) or np.trapz   # renamed in numpy 2
-    b = float(d.y[-1] - d.y[0])
-    area = float(trapz(d.chord, d.y))
-    mac = float(trapz(d.chord ** 2, d.y) / area) if area > 0 else float("nan")
+    h = d.horizontal
+    y, c = d.y[h], d.chord[h]
+    b = float(y[-1] - y[0])
+    area = float(trapz(c, y))
+    mac = float(trapz(c ** 2, y) / area) if area > 0 else float("nan")
     return {
         "span_geometric_mm": d.span,
         "span_extracted_mm": b,
-        "chord_root_mm": float(d.chord[0]),
-        "chord_tip_mm": float(d.chord[-1]),
-        "taper_ratio": float(d.chord[-1] / d.chord[0]) if d.chord[0] else float("nan"),
+        "chord_root_mm": float(c[0]),
+        "chord_tip_mm": float(c[-1]),
+        "taper_ratio": float(c[-1] / c[0]) if c[0] else float("nan"),
         "area_mm2": area,
         "mean_aerodynamic_chord_mm": mac,
         "aspect_ratio": float(b * b / area) if area > 0 else float("nan"),
-        "note": "integrals cover the extracted span only, root up to the top "
-                "station; nothing above it is included",
+        "note": "integrals cover the horizontal sections only, root up to the top "
+                "horizontal station; the tilted tip section and anything above it "
+                "are not included",
+    }
+
+
+def tip_section_summary(d: Distributions):
+    """The tilted tip section, if the stack has one, as its own record."""
+    rows = np.flatnonzero(~d.horizontal)
+    if len(rows) == 0:
+        return None
+    i = int(rows[-1])
+    return {
+        "le_mm": [float(d.x_le[i]), float(d.y[i]), float(d.z_le[i])],
+        "te_mm": [float(d.x_te[i]), float(d.y_te[i]), float(d.z_te[i])],
+        "tilt_deg": float(d.tilt[i]),
+        "tilt_ratio": float(d.tilt_ratio[i]),
+        "chord_mm": float(d.chord[i]),
+        "chord_x_mm": float(d.chord_x[i]),
+        "twist_deg": float(d.twist[i]),
+        "t_over_c": float(d.t_over_c[i]),
+        "x_tmax": float(d.x_tmax[i]),
+        "camber": float(d.camber[i]),
+        "x_cmax": float(d.x_cmax[i]),
+        "r_le": float(d.r_le[i]),
+        "definition": "planar cut through the top of the LE and the top of the TE, "
+                      "tilted about the thickness axis; shape parameters are those of "
+                      "its own airfoil, measured untilted",
     }
 
 
@@ -959,7 +1233,12 @@ def fit_distribution(eta: np.ndarray, values: np.ndarray, tol: float,
 
 
 def fit_distributions(d: Distributions, deg: int = DEFAULT_FIT_DEG) -> dict:
-    """Fit every distribution that carries a tolerance key."""
+    """
+    Fit every distribution that carries a tolerance key, over the horizontal
+    sections only: the tilted tip section is a different kind of cut, and one
+    row of it would bend every fit at the top.
+    """
+    h = d.horizontal
     tols = {
         "angle": TOL_ANGLE_DEG,
         "chord": TOL_LENGTH_REL * float(d.chord[0]),
@@ -967,15 +1246,38 @@ def fit_distributions(d: Distributions, deg: int = DEFAULT_FIT_DEG) -> dict:
         "shape": TOL_SHAPE,
         "position": TOL_POSITION,
     }
-    return {name: fit_distribution(d.eta, getattr(d, name), tols[key], deg)
+    return {name: fit_distribution(d.eta[h], getattr(d, name)[h], tols[key], deg)
             for name, _unit, key, _desc in _DIST_COLUMNS if key is not None}
+
+
+def design_variables(d: Distributions) -> dict:
+    """
+    Quantities earmarked as design variables for the optimisation stage.
+    For now: the tilt of the tip section.
+    """
+    tip = tip_section_summary(d)
+    if tip is None:
+        return {}
+    return {
+        "tip_tilt_deg": {
+            "value": tip["tilt_deg"],
+            "tan": tip["tilt_ratio"],
+            "pivot_mm": tip["le_mm"],
+            "axis": "thickness (+Z in the working frame, -Y in the XCAD file)",
+            "sign": "positive raises the TE end of the tip section",
+            "note": "tilt of the tip section, the last section of the stack; "
+                    "a design variable in the optimisation stage",
+        },
+    }
 
 
 def parametrise(stack, span: float, deg: int = DEFAULT_FIT_DEG) -> dict:
     """Step 6 end to end: distributions, their fits and the planform summary."""
     d = spanwise_distributions(stack, span)
     return {"distributions": d, "fits": fit_distributions(d, deg),
-            "summary": planform_summary(d)}
+            "summary": planform_summary(d),
+            "tip_section": tip_section_summary(d),
+            "design_variables": design_variables(d)}
 
 
 # --------------------------------------------------------------------------- #
@@ -994,28 +1296,34 @@ def write_selig(path: str, coords: np.ndarray, name: str) -> None:
             fh.write(f"{_snap(x, 8):12.8f}  {_snap(y, 8):12.8f}\n")
 
 
-def write_raw_dat(path: str, coords: np.ndarray, y: float) -> None:
+def write_raw_dat(path: str, coords: np.ndarray, y: float, notes=()) -> None:
     """Whitespace-delimited .dat, `#` comment header, loadable with np.loadtxt."""
     with open(path, "w") as fh:
         fh.write("# airfoil frame, millimetres, Selig order (TE -> upper -> LE -> lower -> TE)\n")
         fh.write(f"# section at y = {y:.6f} mm; x = 0 at this section's LE and grows aft,"
                  " y = thickness (+Z side up)\n")
+        for note in notes:
+            fh.write(f"# {note}\n")
         fh.write(f"# {'x_mm':>18s} {'y_mm':>18s}\n")
         for x, yy in coords:
             fh.write(f"{_snap(x):20.9f} {_snap(yy):18.9f}\n")
 
 
 def write_section_stack(path: str, sections, source: str, y_top: float,
-                        how: str = "", y_le_top: float | None = None) -> None:
+                        how: str = "", y_le_top: float | None = None,
+                        layout: dict | None = None) -> None:
     """
     Every cross-section in one .dat, ordered TOP to BOTTOM.
 
     All metadata sits on `#` lines, so the numbers load in one call:
         np.loadtxt(path).reshape(n_sections, n_points, 2)
-    with section 0 the topmost.
+    with section 0 the topmost. A tilted tip section, when there is one, is
+    section 0, written untilted; its header says how to put it back.
     """
-    ordered = sorted(sections, key=lambda s: -s.y)
+    ordered = sorted(sections, key=lambda s: (-s.y, not s.tilted))
     n_pts = len(ordered[0].airfoil_raw)
+    flat = [s for s in ordered if not s.tilted]
+    tips = [s for s in ordered if s.tilted]
 
     with open(path, "w") as fh:
         fh.write("# Rudder cross-sectional airfoil coordinates\n")
@@ -1024,17 +1332,46 @@ def write_section_stack(path: str, sections, source: str, y_top: float,
                  " +X LE->TE, +Y root->tip, +Z thickness\n")
         fh.write(f"# n_sections    : {len(ordered)}\n")
         fh.write(f"# n_points      : {n_pts} per section\n")
-        fh.write(f"# section order : TOP to BOTTOM, y = {ordered[0].y:.6f}"
-                 f" down to y = {ordered[-1].y:.6f} mm, evenly spaced\n")
+        if tips:
+            t = tips[0]
+            fh.write("# section order : TOP to BOTTOM. Section 1 is the tilted tip section,"
+                     f" LE at y = {t.y:.6f},\n")
+            fh.write(f"#                 TE at y = {t.te[SPAN_AXIS]:.6f} mm"
+                     f" (tilt {t.tilt_deg:.6f} deg); then {len(flat)} horizontal"
+                     " sections,\n")
+            fh.write(f"#                 y = {flat[0].y:.6f} down to y = {flat[-1].y:.6f} mm,"
+                     " evenly spaced\n")
+        else:
+            fh.write(f"# section order : TOP to BOTTOM, y = {ordered[0].y:.6f}"
+                     f" down to y = {ordered[-1].y:.6f} mm, evenly spaced\n")
+        if layout and layout.get("tip"):
+            fh.write(f"# layout        : horizontal step dz = {layout['dz']:.9f} mm; the top"
+                     f" horizontal section sits\n")
+            fh.write(f"#                 d = {layout['d']:.9f} mm below the top of the LE"
+                     + (" (d = dz / 2)\n" if layout.get("d_default") else " (given)\n"))
         fh.write("# point order   : Selig, TE -> upper -> LE -> lower -> TE\n")
         fh.write("# columns       : x_mm y_mm in that section's own airfoil frame,"
                  " x = 0 at its LE\n")
         fh.write("#                 and growing aft, y = thickness with the +Z side"
                  " positive\n")
         fh.write("# 3D recovery   : X = x_le + x_mm,  Y = y_section,  Z = y_mm\n")
+        if tips:
+            fh.write("#                 for the tilted section that gives it untilted;"
+                     " rotate the points by\n")
+            fh.write("#                 +tilt about the thickness (Z) axis through"
+                     " (x_le, y_section) to put it back\n")
         fh.write("# load          : np.loadtxt(path).reshape"
                  f"({len(ordered)}, {n_pts}, 2)\n")
-        if y_le_top is not None and abs(y_top - y_le_top) > 1.0e-6:
+        if tips:
+            fh.write(f"# top station   : the top of the leading edge, y = {y_le_top:.6f} mm"
+                     + (f" ({how})\n" if how else "\n"))
+            fh.write("#                 horizontal cuts stop below it; above it the"
+                     " inclined tip surface takes\n")
+            fh.write("#                 over the nose. The tilted section closes the"
+                     " stack from the top of the\n")
+            fh.write("#                 LE to the top of the TE; the tip cap above it"
+                     " is not covered here\n")
+        elif y_le_top is not None and abs(y_top - y_le_top) > 1.0e-6:
             fh.write(f"# top station   : y = {y_top:.6f} mm, requested\n")
             fh.write(f"#                 the leading edge itself runs up to"
                      f" y = {y_le_top:.6f} mm"
@@ -1058,10 +1395,78 @@ def write_section_stack(path: str, sections, source: str, y_top: float,
             fh.write(f"# SECTION {k:d} / {len(ordered):d}"
                      f"   y = {s.y:.6f}   chord = {s.chord:.6f}"
                      f"   x_le = {s.le[CHORD_AXIS]:.6f}"
-                     f"   x_te = {s.te[CHORD_AXIS]:.6f}\n")
+                     f"   x_te = {s.te[CHORD_AXIS]:.6f}"
+                     + (f"   y_te = {s.te[SPAN_AXIS]:.6f}   tilt = {s.tilt_deg:.6f} deg"
+                        "   (tilted tip section, written untilted)" if s.tilted else "")
+                     + "\n")
             fh.write(f"# {'x_mm':>18s} {'y_mm':>18s}\n")
             for x, yy in s.airfoil_raw:
                 fh.write(f"{_snap(x):20.9f} {_snap(yy):18.9f}\n")
+
+
+XCAD_UNITS = {"m": 1.0e-3, "mm": 1.0}   # scale from the working frame (mm)
+
+# Working frame -> XCAD frame: height (span) becomes Z. A +90 deg rotation about
+# X: x' = x, y' = -z, z' = y. Swapping the Y and Z columns instead would be a
+# mirror (det -1) and would reverse the loops about the span axis.
+XCAD_FRAME = np.array([[1.0, 0.0, 0.0],
+                       [0.0, 0.0, -1.0],
+                       [0.0, 1.0, 0.0]])
+
+
+def xcad_loop(sec: Section) -> np.ndarray:
+    """
+    One section as a closed 3D loop, in the point order of ORCA101.dat:
+    start at the leading edge, run along the +Z side to the trailing edge,
+    come back along the -Z side, and repeat the first point to close.
+
+    Same point count as the Selig section (`num_pts`, closure included), with
+    the trailing edge at index (num_pts + 1) // 2 - 1. Working frame, mm. A
+    tilted section comes out tilted, where it sits on the part.
+    """
+    raw = sec.airfoil_raw                        # Selig: TE -> +Z -> LE -> -Z -> TE
+    n = len(raw)
+    i_le = (n + 1) // 2 - 1                      # where extract_section put the LE
+    if abs(raw[i_le, 0]) > 1.0e-9:
+        raise ValueError(f"section y = {sec.y}: leading edge not at index {i_le}")
+    upper = raw[:i_le + 1][::-1]                 # LE -> TE along +Z
+    lower = raw[i_le:][::-1]                     # TE -> LE along -Z
+    loop2 = np.vstack([upper, lower[1:]])        # LE ... TE ... LE, n points
+    return sec.points_3d(loop2)
+
+
+def write_xcad(path: str, sections, units: str = "m") -> None:
+    """
+    The section stack in the point format XCAD reads (the layout of the
+    ORCA101.dat propeller file), with # and the section number on its own
+    line before each section:
+
+        #1
+        x y z        <- leading edge
+        ...          <- -y side to the trailing edge, then back along +y
+        x y z        <- leading edge again, closing the loop
+        #2
+        ...
+
+    Sections run from the root (1) up to the top station, as ORCA101 runs
+    from hub to tip. Columns are X Y Z in the XCAD frame, with the height as
+    Z: origin at the root LE, +X chordwise LE->TE, +Z spanwise root->tip,
+    and Y thickness, equal to -Z of the working frame (`XCAD_FRAME`, a
+    rotation, so the frame stays right-handed and the loops turn the same
+    way about the span axis as in ORCA101). Metres as in ORCA101
+    (units="m") or millimetres (units="mm"). Eight decimals, single spaces,
+    no header, Windows (CRLF) line endings.
+    """
+    if units not in XCAD_UNITS:
+        raise ValueError(f"units must be one of {sorted(XCAD_UNITS)}")
+    scale = XCAD_UNITS[units]
+    ordered = sorted(sections, key=lambda s: s.y)
+
+    with open(path, "w", newline="\r\n") as fh:
+        for k, sec in enumerate(ordered, start=1):
+            fh.write(f"#{k}\n")
+            for x, y, z in (xcad_loop(sec) @ XCAD_FRAME.T) * scale:
+                fh.write(f"{_snap(x, 8):.8f} {_snap(y, 8):.8f} {_snap(z, 8):.8f}\n")
 
 
 def write_corner_points(path_dat: str, path_json: str, sections, rotated) -> None:
@@ -1073,9 +1478,11 @@ def write_corner_points(path_dat: str, path_json: str, sections, rotated) -> Non
     Row 1 is the root, the last row is the top of the leading edge, so the
     first three columns trace the LE up the span and the last three trace the
     TE. Ordered root first, the opposite of the section stack, which the user
-    asked to have running top to bottom.
+    asked to have running top to bottom. When the stack ends in the tilted tip
+    section, that is the last row, and its TE sits higher than its LE.
     """
-    ordered = sorted(sections, key=lambda s: s.y)
+    ordered = sorted(sections, key=lambda s: (s.y, s.tilted))
+    tilted = any(s.tilted for s in ordered)
 
     with open(path_dat, "w") as fh:
         fh.write("# LE and TE corner points, one spanwise station per row\n")
@@ -1084,8 +1491,16 @@ def write_corner_points(path_dat: str, path_json: str, sections, rotated) -> Non
         fh.write("# point 1 : leading edge      point 2 : trailing edge\n")
         fh.write(f"# rows    : {len(ordered)}, root first,"
                  f" y = {ordered[0].y:.6f} up to y = {ordered[-1].y:.6f} mm\n")
-        fh.write("#           y1 and y2 are the same station height;"
-                 " chord = x2 - x1\n")
+        if tilted:
+            fh.write("#           y1 and y2 are the same station height on every"
+                     " horizontal row; chord = x2 - x1\n")
+            fh.write("#           the last row is the tilted tip section, top of the LE"
+                     " to top of the TE:\n")
+            fh.write("#           tilt = arctan((y2 - y1) / (x2 - x1)),"
+                     " chord = sqrt((x2 - x1)^2 + (y2 - y1)^2)\n")
+        else:
+            fh.write("#           y1 and y2 are the same station height;"
+                     " chord = x2 - x1\n")
         fh.write("# load    : np.loadtxt(path)  ->"
                  f" ({len(ordered)}, 6), LE = [:, :3], TE = [:, 3:]\n")
         fh.write("# {:>16s} {:>16s} {:>16s} {:>18s} {:>16s} {:>16s}\n".format(
@@ -1110,7 +1525,10 @@ def write_corner_points(path_dat: str, path_json: str, sections, rotated) -> Non
                 "row_order": "root first",
                 "stations": [
                     {"y": s.y, "chord": s.chord,
-                     "le": s.le.tolist(), "te": s.te.tolist()}
+                     "le": s.le.tolist(), "te": s.te.tolist(),
+                     **({"tilt_deg": s.tilt_deg,
+                         "note": "tilted tip section; chord in its own plane"}
+                        if s.tilted else {})}
                     for s in ordered
                 ],
             },
@@ -1128,6 +1546,7 @@ def write_parameters(path_dat: str, path_json: str, param: dict,
     """
     d = param["distributions"]
     fits, summary = param["fits"], param["summary"]
+    tip = param.get("tip_section")
     names = [c[0] for c in _DIST_COLUMNS]
     table = np.column_stack([getattr(d, n) for n in names])
 
@@ -1145,8 +1564,28 @@ def write_parameters(path_dat: str, path_json: str, param: dict,
                  " Equal for a straight edge.\n")
         fh.write("# twist    : angle of the section chord line, positive nose-up"
                  " (LE on the +Z side)\n")
+        fh.write("# tilt     : slope of the chord line in the span direction, from the"
+                 " LE and TE heights:\n")
+        fh.write("#            tilt_ratio = (y_te - y) / (x_te - x_le), tilt ="
+                 " arctan(tilt_ratio), positive TE up.\n")
+        fh.write("#            In the XCAD file (height along z) these are z1 and z2"
+                 " of the LE and TE.\n")
         fh.write(f"# rows     : {len(d.y)}, y = {d.y[0]:.6f} up to"
                  f" {d.y[-1]:.6f} mm\n")
+        if tip is not None:
+            fh.write("# tip      : the last row is the tilted tip section, top of the LE"
+                     " to top of the TE,\n")
+            fh.write(f"#            tilt {tip['tilt_deg']:.6f} deg (ratio"
+                     f" {tip['tilt_ratio']:.9f}); every other row is horizontal,"
+                     " tilt 0.\n")
+            fh.write("#            Its chord, twist and shape are those of its own"
+                     " airfoil, measured untilted;\n")
+            fh.write("#            its reference points sit at their own heights. The"
+                     " fits and the planform\n")
+            fh.write("#            summary use the horizontal rows only, and the local"
+                     " (tangent) columns are NaN\n")
+            fh.write("#            on the tilted row. Its tilt is a design variable for"
+                     " the optimisation stage.\n")
         fh.write(f"# load     : np.loadtxt(path)  ->"
                  f" ({len(d.y)}, {len(names)})\n")
         fh.write("#\n# columns\n")
@@ -1188,17 +1627,26 @@ def write_parameters(path_dat: str, path_json: str, param: dict,
                     "dihedral": "same construction as the sweep but on the rake, "
                                 "positive toward +Z; the wing name for propeller rake angle",
                     "twist": "angle of the section chord line, positive nose-up",
+                    "tilt": "slope of the chord line in the span direction from the LE and "
+                            "TE heights: tilt_ratio = (y_te - y) / (x_te - x_le), tilt = "
+                            "arctan(tilt_ratio), positive TE up; 0 on a horizontal section",
                     "shape_parameters": "normalised by the local chord, measured in the "
                                         "section's own chord-aligned frame so twist does "
                                         "not leak into thickness or camber",
                     "tolerances": "decide only how a distribution is labelled; the "
                                   "tabulated values are the raw measurements",
+                    "fit_rows": "fits, the planform summary and the local (tangent) "
+                                "columns use the horizontal sections only",
                 },
                 "columns": [
                     {"name": n, "unit": u, "description": desc}
                     for n, u, _k, desc in _DIST_COLUMNS
                 ],
                 "summary": summary,
+                **({"stack_layout": param["layout"]} if param.get("layout") else {}),
+                **({"tip_section": tip} if tip is not None else {}),
+                **({"design_variables": param["design_variables"]}
+                   if param.get("design_variables") else {}),
                 "fits": fits,
                 "stations": [
                     {n: float(v) for n, v in zip(names, row)} for row in table
@@ -1209,13 +1657,83 @@ def write_parameters(path_dat: str, path_json: str, param: dict,
         )
 
 
+def write_tip_section(out_dir: str, sec: Section, source: str) -> dict:
+    """
+    The tilted tip section on its own, untilted so its airfoil can be read:
+
+      section_tip_untilted_selig.dat   normalised by its chord, Selig order
+      section_tip_untilted_raw_mm.dat  the same in mm
+      section_tip_3d_mm.dat            3D, as it sits on the part (x y z) and
+                                       unrotated (x_u y_u z_u), row for row
+
+    The untilted points are the tilted ones turned back by -tilt about the
+    thickness axis through the section's LE (`rot_axis`); they lie at the
+    height of the LE. Returns the file paths.
+    """
+    base = os.path.join(out_dir, "section_tip")
+    paths = {"selig": base + "_untilted_selig.dat",
+             "raw_mm": base + "_untilted_raw_mm.dat",
+             "xyz_mm": base + "_3d_mm.dat"}
+    rot_note = (f"tilted tip section shown untilted: turned by {-sec.tilt_deg:.6f} deg about"
+                f" the thickness axis through its LE ({sec.le[CHORD_AXIS]:.6f},"
+                f" {sec.y:.6f}, 0)")
+    write_selig(paths["selig"], sec.airfoil_norm,
+                f"{source} tip section untilted (tilt {sec.tilt_deg:.4f} deg)"
+                f" c={sec.chord:.4f}mm")
+    write_raw_dat(paths["raw_mm"], sec.airfoil_raw, sec.y,
+                  notes=(rot_note,
+                         f"its chord in its own plane is {sec.chord:.6f} mm; on the part"
+                         f" its TE is at y = {sec.te[SPAN_AXIS]:.6f} mm"))
+
+    tilted = sec.points_3d(sec.airfoil_raw)
+    untilted = sec.untilt(tilted)
+    with open(paths["xyz_mm"], "w") as fh:
+        fh.write("# Tilted tip section, 3D, millimetres\n")
+        fh.write(f"# source   : {source}\n")
+        fh.write("# frame    : origin at the root leading edge;"
+                 " +X LE->TE, +Y root->tip, +Z thickness\n")
+        fh.write(f"# section  : planar cut through the top of the LE"
+                 f" ({sec.le[0]:.6f}, {sec.le[1]:.6f}, {sec.le[2]:.6f})\n")
+        fh.write(f"#            and the top of the TE"
+                 f" ({sec.te[0]:.6f}, {sec.te[1]:.6f}, {sec.te[2]:.6f}),\n")
+        fh.write(f"#            tilted {sec.tilt_deg:.9f} deg about the thickness (Z)"
+                 " axis, TE up\n")
+        fh.write("# columns  : x y z        where the section sits on the part\n")
+        fh.write(f"#            x_u y_u z_u  the same points turned by {-sec.tilt_deg:.6f}"
+                 " deg about the Z axis\n")
+        fh.write(f"#                         through the LE: a horizontal section at"
+                 f" y = {sec.y:.6f}\n")
+        fh.write("# points   : Selig order, TE -> +Z side -> LE -> -Z side -> TE, the same"
+                 " rows as\n")
+        fh.write("#            section_tip_untilted_raw_mm.dat\n")
+        fh.write(f"# load     : np.loadtxt(path)  -> ({len(tilted)}, 6)\n")
+        fh.write("# {:>16s} {:>16s} {:>16s} {:>18s} {:>16s} {:>16s}\n".format(
+            "x", "y", "z", "x_u", "y_u", "z_u"))
+        for p, q in zip(tilted, untilted):
+            fh.write(f"{_snap(p[0]):18.9f} {_snap(p[1]):16.9f} {_snap(p[2]):16.9f}"
+                     f" {_snap(q[0]):18.9f} {_snap(q[1]):16.9f} {_snap(q[2]):16.9f}\n")
+    return paths
+
+
 # --------------------------------------------------------------------------- #
 # Driver
 # --------------------------------------------------------------------------- #
 def run(cad_path: str, cut_height: float = 80.0, num_pts: int = DEFAULT_NUM_PTS,
         out_dir: str | None = None, spacing: str = "cosine", plot: bool = True,
         num_sec: int | None = DEFAULT_NUM_SEC, y_top: float | None = None,
-        progress=None, fit_deg: int = DEFAULT_FIT_DEG):
+        progress=None, fit_deg: int = DEFAULT_FIT_DEG, xcad_units: str = "m",
+        tip: bool = True, tip_d: float | None = None):
+    """
+    Steps 1-6 end to end.
+
+    When the stack runs to the top of the LE (no `y_top`, or `y_top` equal to
+    it) and `tip` is on, it is laid out for the tilted tip section: `num_sec`
+    horizontal sections from the root to d below the top of the LE (d = half
+    the step unless `tip_d` gives it in mm), then the tilted section through
+    the top of the LE and the top of the TE. With `tip` off, or a `y_top`
+    below the top of the LE, the stack is `num_sec` horizontal sections from
+    the root to the top station, as before.
+    """
     out_dir = out_dir or os.path.join(os.path.dirname(os.path.abspath(cad_path)), "outputs")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -1239,7 +1757,8 @@ def run(cad_path: str, cut_height: float = 80.0, num_pts: int = DEFAULT_NUM_PTS,
 
     # always locate the top of the LE, even when the stack is asked to stop
     # lower, so the report and the file headers can say where it actually is
-    y_le_top, how = leading_edge_top(shape, lateral, span)
+    le_top, how = leading_edge_top_point(shape, lateral, span)
+    y_le_top = float(le_top[SPAN_AXIS])
     if y_top is None:
         y_top = y_le_top
     elif y_top > y_le_top + 1.0e-6:
@@ -1247,12 +1766,39 @@ def run(cad_path: str, cut_height: float = 80.0, num_pts: int = DEFAULT_NUM_PTS,
               f"leading edge at y = {y_le_top:.6f}; sections up there cut through "
               f"the tip blend and may fail")
 
+    use_tip = bool(num_sec) and tip and abs(y_top - y_le_top) <= 1.0e-6
+    layout = {"tip": use_tip, "n_horizontal": int(num_sec or 0)}
     stack = None
+    tip_sec = None
+    xcad_path = None
+    tip_paths = None
+    te_top, te_how = None, ""
     if num_sec:
-        stack = extract_stack(lateral, y_top, num_sec, num_pts, spacing,
-                              progress=progress)
+        if use_tip:
+            te_top, te_how = trailing_edge_top_point(shape, lateral, span)
+            dz, d = tip_spacing(y_le_top, num_sec, tip_d)
+            y_flat_top = y_le_top - d
+            layout.update(dz=dz, d=d, d_default=tip_d is None,
+                          y_top_horizontal=y_flat_top, le_top=le_top.tolist(),
+                          te_top=te_top.tolist(), te_top_how=te_how)
+            stack = extract_stack(lateral, y_flat_top, num_sec, num_pts, spacing,
+                                  progress=progress)
+            tip_sec = extract_tilted_section(lateral, le_top, te_top, num_pts, spacing)
+            stack.append(tip_sec)
+            layout["tilt_deg"] = tip_sec.tilt_deg
+        else:
+            stack = extract_stack(lateral, y_top, num_sec, num_pts, spacing,
+                                  progress=progress)
+            layout.update(dz=(y_top / (num_sec - 1)) if num_sec > 1 else 0.0,
+                          y_top_horizontal=y_top)
         write_section_stack(os.path.join(out_dir, "sections_stack_raw_mm.dat"),
-                            stack, os.path.basename(cad_path), y_top, how, y_le_top)
+                            stack, os.path.basename(cad_path), y_top, how, y_le_top,
+                            layout)
+        # the same stack for XCAD: 3D closed loops, root first, numbered sections
+        xcad_path = os.path.join(out_dir, f"sections_xcad_{xcad_units}.dat")
+        write_xcad(xcad_path, stack, xcad_units)
+        if tip_sec is not None:
+            tip_paths = write_tip_section(out_dir, tip_sec, os.path.basename(cad_path))
 
     # one row per station: the LE/TE edge table, root first up to the top of
     # the LE. With no stack it falls back to the two named cuts.
@@ -1263,12 +1809,18 @@ def run(cad_path: str, cut_height: float = 80.0, num_pts: int = DEFAULT_NUM_PTS,
 
     # Step 6 - the parametrisation, off the same stations, no further cuts
     param = parametrise(stations, span, fit_deg)
+    if use_tip:
+        param["layout"] = layout
+        dv = param["design_variables"].get("tip_tilt_deg")
+        if dv is not None:              # the pivot is the corner itself, not a sample
+            dv["pivot_mm"] = le_top.tolist()
+            dv["pivot"] = "top of the LE, the end of the b-rep leading-edge curve"
     write_parameters(os.path.join(out_dir, "parameters.dat"),
                      os.path.join(out_dir, "parameters.json"),
                      param, os.path.basename(cad_path))
 
     if plot:
-        _plot(out_dir, root, cut, span, lateral, stack, y_top, y_le_top)
+        _plot(out_dir, root, cut, span, lateral, stack, y_top, y_le_top, tip_sec)
         _plot_parameters(out_dir, param)
 
     return {"shape": shape, "lateral": lateral, "trsf": trsf,
@@ -1276,7 +1828,9 @@ def run(cad_path: str, cut_height: float = 80.0, num_pts: int = DEFAULT_NUM_PTS,
             "root": root, "cut": cut,
             "span": span, "out_dir": out_dir, "y_top": y_top,
             "y_le_top": y_le_top, "y_top_how": how, "stack": stack,
-            "param": param}
+            "le_top": le_top, "te_top": te_top, "te_top_how": te_how,
+            "tip_section": tip_sec, "tip_paths": tip_paths, "layout": layout,
+            "param": param, "xcad_path": xcad_path, "xcad_units": xcad_units}
 
 
 def planform(lateral, span: float, n_stations: int = 25, frac: float = 0.92):
@@ -1288,7 +1842,7 @@ def planform(lateral, span: float, n_stations: int = 25, frac: float = 0.92):
 
 
 def _plot(out_dir, root, cut, span, lateral=None, stack=None, y_top=None,
-          y_le_top=None):
+          y_le_top=None, tip_sec=None):
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -1299,15 +1853,29 @@ def _plot(out_dir, root, cut, span, lateral=None, stack=None, y_top=None,
     fig, ax = plt.subplots(1, 3, figsize=(15, 4.2))
 
     if lateral is not None:
-        ys, le, te = planform(lateral, span)
+        if y_le_top is not None:          # the edges as far as they go
+            ys, le, te = planform(lateral, y_le_top, frac=1.0)
+        else:
+            ys, le, te = planform(lateral, span)
         ax[0].plot(le[:, CHORD_AXIS], ys, "-", color="0.35", lw=1.2, label="LE")
         ax[0].plot(te[:, CHORD_AXIS], ys, "-", color="0.35", lw=1.2, label="TE")
         ax[0].fill_betweenx(ys, te[:, CHORD_AXIS], le[:, CHORD_AXIS],
                             color="0.85", zorder=0)
     if stack:
         for s in stack:
+            if s.tilted:
+                continue
             ax[0].plot([s.le[CHORD_AXIS], s.te[CHORD_AXIS]], [s.y, s.y],
                        "-", color="tab:blue", lw=0.3, alpha=0.6, zorder=1)
+    if tip_sec is not None:
+        ax[0].plot([tip_sec.le[CHORD_AXIS], tip_sec.te[CHORD_AXIS]],
+                   [tip_sec.le[SPAN_AXIS], tip_sec.te[SPAN_AXIS]],
+                   "-", color="tab:orange", lw=1.6, zorder=3)
+        ax[0].annotate(f"tilted tip section, {tip_sec.tilt_deg:.3f} deg",
+                       (tip_sec.te[CHORD_AXIS], tip_sec.te[SPAN_AXIS]),
+                       textcoords="offset points", xytext=(-2, -26), ha="right",
+                       fontsize=7.5, color="tab:orange",
+                       bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85))
     if y_le_top is not None and (y_top is None or abs(y_top - y_le_top) > 1e-6):
         ax[0].axhline(y_le_top, color="0.45", lw=1.0, ls=":", zorder=2)
         ax[0].annotate(f"top of LE, y = {y_le_top:.3f}", (0, y_le_top),
@@ -1334,8 +1902,11 @@ def _plot(out_dir, root, cut, span, lateral=None, stack=None, y_top=None,
               ylabel="y (span) [mm]", ylim=(-15, span * 1.02))
     ax[0].set_aspect("equal")
 
-    for s, lab in ((root, f"root  y=0, c={root.chord:.3f}"),
-                   (cut, f"cut   y={cut.y:g}, c={cut.chord:.3f}")):
+    shown = [(root, f"root  y=0, c={root.chord:.3f}"),
+             (cut, f"cut   y={cut.y:g}, c={cut.chord:.3f}")]
+    if tip_sec is not None:
+        shown.append((tip_sec, f"tip, untilted, c={tip_sec.chord:.3f}"))
+    for s, lab in shown:
         ax[1].plot(s.airfoil_raw[:, 0], s.airfoil_raw[:, 1], lw=1.0, label=lab)
         ax[2].plot(s.airfoil_norm[:, 0], s.airfoil_norm[:, 1], ".-", ms=2, lw=0.7, label=lab)
     ax[1].set(title="airfoil sections [mm]", xlabel="x aft of LE [mm]", ylabel="y [mm]")
@@ -1359,11 +1930,26 @@ def _plot_parameters(out_dir, param):
     except ImportError:
         return
 
-    d, fits = param["distributions"], param["fits"]
+    d_all, fits = param["distributions"], param["fits"]
+    h = d_all.horizontal
+    tips = np.flatnonzero(~h)
+
+    class _Rows:
+        """The horizontal rows of every distribution, for the lines."""
+        def __getattr__(self, name):
+            return getattr(d_all, name)[h]
+
+    d = _Rows()
     y = d.y
 
     fig, ax = plt.subplots(2, 3, figsize=(15, 8))
     a = ax.ravel()
+
+    def tip_mark(axis, name, color="tab:red", label=False):
+        """The tilted tip section: one marker at the height of its LE."""
+        for i in tips:
+            axis.plot(getattr(d_all, name)[i], d_all.y[i], "*", color=color, ms=9,
+                      zorder=5, label="tilted tip section" if label else None)
 
     def label(name, text):
         return f"{text}  [{fits[name]['form']}]" if name in fits else text
@@ -1381,6 +1967,7 @@ def _plot_parameters(out_dir, param):
     a[0].plot(d.chord, y, "-", color="tab:blue", lw=1.4,
               label=label("chord", "chord"))
     a[0].plot(d.chord_x, y, ":", color="0.5", lw=1.0, label="chordwise projection")
+    tip_mark(a[0], "chord", label=True)
     a[0].set(title="chord distribution", xlabel="chord [mm]")
 
     a[1].plot(d.sweep_le, y, "-", color="tab:blue", lw=1.4,
@@ -1404,7 +1991,15 @@ def _plot_parameters(out_dir, param):
 
     a[3].plot(d.twist, y, "-", color="tab:blue", lw=1.4,
               label=label("twist", "twist"))
-    a[3].set(title="twist / pitch angle, positive nose-up", xlabel="twist [deg]")
+    a[3].plot(d_all.tilt, d_all.y, "-", color="tab:red", lw=1.0,
+              label="tilt, TE up (0 below the tip section)")
+    tip_mark(a[3], "tilt")
+    if len(tips):
+        i = tips[-1]
+        a[3].annotate(f"tip tilt {d_all.tilt[i]:.3f} deg", (d_all.tilt[i], d_all.y[i]),
+                      textcoords="offset points", xytext=(-6, -12), ha="right",
+                      fontsize=8, color="tab:red")
+    a[3].set(title="twist (nose-up) and section tilt", xlabel="angle [deg]")
 
     a[4].plot(d.t_over_c, y, "-", color="tab:blue", lw=1.4,
               label=label("t_over_c", "t/c"))
@@ -1412,6 +2007,7 @@ def _plot_parameters(out_dir, param):
               label=label("camber", "max camber / c"))
     a[4].plot(d.r_le, y, "-", color="tab:green", lw=1.0,
               label=label("r_le", "LE radius / c"))
+    tip_mark(a[4], "t_over_c", color="tab:blue", label=True)
     a[4].set(title="section shape", xlabel="fraction of chord")
 
     a[5].plot(d.x_le, y, "-", color="tab:blue", lw=1.4, label="LE")
@@ -1419,6 +2015,9 @@ def _plot_parameters(out_dir, param):
               lw=1.0, label="c/4")
     a[5].plot(d.x_te, y, "-", color="tab:green", lw=1.4, label="TE")
     a[5].fill_betweenx(y, d.x_le, d.x_te, color="0.88", zorder=0)
+    for i in tips:
+        a[5].plot([d_all.x_le[i], d_all.x_te[i]], [d_all.y[i], d_all.y_te[i]], "-",
+                  color="tab:red", lw=1.4, label="tilted tip section")
     a[5].set(title="planform and reference lines", xlabel="x [mm]")
     a[5].set_aspect("equal")
 
@@ -1445,14 +2044,24 @@ def main():
     ap.add_argument("--num-pts", type=int, default=DEFAULT_NUM_PTS,
                     help="points per airfoil section (default 200)")
     ap.add_argument("--num-sec", type=int, default=DEFAULT_NUM_SEC,
-                    help="cross-sections from the root to the top of the LE "
+                    help="horizontal cross-sections from the root up to d below the "
+                         "top of the LE, the tilted tip section going on top "
                          "(default 200; 0 skips the stack)")
     ap.add_argument("--top", type=float, default=None,
-                    help="override the top station in mm instead of detecting it")
+                    help="stop the stack at this height in mm instead of the top of "
+                         "the LE (horizontal sections only, no tip section)")
+    ap.add_argument("--tip-d", type=float, default=None,
+                    help="gap d in mm between the top horizontal section and the top "
+                         "of the LE (default: half the horizontal step)")
+    ap.add_argument("--no-tip", action="store_true",
+                    help="no tilted tip section: horizontal sections right up to the "
+                         "top of the LE, as before")
     ap.add_argument("--spacing", choices=("cosine", "uniform"), default="cosine")
     ap.add_argument("--fit-deg", type=int, default=DEFAULT_FIT_DEG,
                     help="degree of the polynomial fitted to each spanwise "
                          f"distribution (default {DEFAULT_FIT_DEG})")
+    ap.add_argument("--xcad-units", choices=("m", "mm"), default="m",
+                    help="units of the XCAD section file (default m, as in ORCA101.dat)")
     ap.add_argument("--out-dir", default=None)
     ap.add_argument("--no-plot", action="store_true")
     args = ap.parse_args()
@@ -1465,7 +2074,8 @@ def main():
 
     res = run(args.cad, args.cut, args.num_pts, args.out_dir,
               args.spacing, not args.no_plot, args.num_sec, args.top,
-              progress if args.num_sec else None, args.fit_deg)
+              progress if args.num_sec else None, args.fit_deg,
+              xcad_units=args.xcad_units, tip=not args.no_tip, tip_d=args.tip_d)
 
     root, cut = res["root"], res["cut"]
     print(f"CAD              : {args.cad}")
@@ -1490,21 +2100,51 @@ def main():
 
     if res["stack"]:
         st = res["stack"]
+        flat = [s for s in st if not s.tilted]
+        tip = res["tip_section"]
         capped = abs(res["y_top"] - res["y_le_top"]) > 1e-6
         print()
-        print(f"section stack              : {len(st)} sections, "
-              f"y = 0 .. {res['y_top']:.6f} mm, step {st[1].y - st[0].y:.6f} mm")
-        print(f"  chord {st[0].chord:.6f} at the root -> "
-              f"{st[-1].chord:.6f} at y = {res['y_top']:.4f}")
-        if capped:
-            print(f"top station                : requested; the leading edge itself "
-                  f"runs to y = {res['y_le_top']:.6f} mm")
-        else:
-            print("top station                : top of the leading edge"
+        if tip is not None:
+            lay = res["layout"]
+            print(f"section stack              : {len(flat)} horizontal sections, "
+                  f"y = 0 .. {flat[-1].y:.6f} mm, step {lay['dz']:.6f} mm,")
+            print(f"  d = {lay['d']:.6f} mm below the top of the LE"
+                  + (" (half a step)" if lay["d_default"] else "")
+                  + ", + 1 tilted tip section on top")
+            print(f"  chord {flat[0].chord:.6f} at the root -> "
+                  f"{flat[-1].chord:.6f} at y = {flat[-1].y:.4f}")
+            print("top of the LE              : "
+                  f"{np.round(res['le_top'], 6).tolist()}"
                   + (f" ({res['y_top_how']})" if res["y_top_how"] else ""))
-        print(f"  nothing above y = {res['y_top']:.4f} mm is covered; above "
-              f"y = {res['y_le_top']:.4f} the inclined")
-        print("  tip surface means a horizontal cut is not a complete airfoil at all")
+            print("top of the TE              : "
+                  f"{np.round(res['te_top'], 6).tolist()}"
+                  + (f" ({res['te_top_how']})" if res["te_top_how"] else ""))
+            print(f"tilted tip section         : LE {np.round(tip.le, 6).tolist()}, "
+                  f"TE {np.round(tip.te, 6).tolist()}")
+            print(f"  tilt {tip.tilt_deg:.6f} deg about the thickness axis, TE up; "
+                  f"chord {tip.chord:.6f} mm in its own plane")
+            print("  untilted copy            : " + ", ".join(
+                os.path.basename(p) for p in res["tip_paths"].values()))
+            print("  the tip cap above it (up to y = "
+                  f"{res['span']:.4f} mm) is not covered yet")
+        else:
+            print(f"section stack              : {len(st)} sections, "
+                  f"y = 0 .. {res['y_top']:.6f} mm, step {st[1].y - st[0].y:.6f} mm")
+            print(f"  chord {st[0].chord:.6f} at the root -> "
+                  f"{st[-1].chord:.6f} at y = {res['y_top']:.4f}")
+            if capped:
+                print(f"top station                : requested; the leading edge itself "
+                      f"runs to y = {res['y_le_top']:.6f} mm")
+            else:
+                print("top station                : top of the leading edge"
+                      + (f" ({res['y_top_how']})" if res["y_top_how"] else ""))
+            print(f"  nothing above y = {res['y_top']:.4f} mm is covered; above "
+                  f"y = {res['y_le_top']:.4f} the inclined")
+            print("  tip surface means a horizontal cut is not a complete airfoil at all")
+        print(f"XCAD file                  : {os.path.basename(res['xcad_path'])}, "
+              f"{len(st)} numbered sections root first, {len(st[0].airfoil_raw)} points "
+              f"each (closed at the LE), height along z, in {'metres' if res['xcad_units'] == 'm' else 'mm'}"
+              + (", the last one tilted" if tip is not None else ""))
 
     _report_parameters(res["param"])
     print(f"\noutputs -> {res['out_dir']}")
@@ -1513,17 +2153,26 @@ def main():
 def _report_parameters(param: dict) -> None:
     """Console form of Step 6."""
     d, fits, summary = param["distributions"], param["fits"], param["summary"]
+    tip = param.get("tip_section")
 
     print()
     print(f"parametrisation            : {len(d.y)} stations,"
-          f" y = {d.y[0]:.4f} .. {d.y[-1]:.4f} mm")
+          f" y = {d.y[0]:.4f} .. {d.y[-1]:.4f} mm"
+          + (", the last one the tilted tip section" if tip is not None else ""))
+    if tip is not None:
+        print(f"  tip section: tilt {tip['tilt_deg']:.6f} deg (ratio {tip['tilt_ratio']:.6f}),"
+              f" chord {tip['chord_mm']:.4f} mm, t/c {tip['t_over_c']:.5f},"
+              f" twist {tip['twist_deg']:.2e} deg")
+        print("  its tilt is recorded as the design variable 'tip_tilt_deg';"
+              " every other row has tilt 0")
+        print("  the fits and the planform summary below use the horizontal rows only")
     print(f"  root chord {summary['chord_root_mm']:.4f} mm ->"
           f" tip chord {summary['chord_tip_mm']:.4f} mm,"
           f" taper {summary['taper_ratio']:.6f}")
     print(f"  planform area {summary['area_mm2']:.2f} mm2,"
           f" MAC {summary['mean_aerodynamic_chord_mm']:.4f} mm,"
           f" aspect ratio {summary['aspect_ratio']:.4f}"
-          " (extracted span only)")
+          " (horizontal sections only)")
     print()
     print(f"  {'distribution':<16s} {'form':<22s} {'root':>12s} {'tip':>12s}"
           f" {'mean':>12s} {'spread':>11s}")
@@ -1533,7 +2182,7 @@ def _report_parameters(param: dict) -> None:
         f = fits[name]
         if "mean" not in f:
             print(f"  {name:<16s} {f['form']:<22s}"
-                  f" {f['n_valid']} of {len(d.y)} stations finite")
+                  f" {f['n_valid']} of {int(d.horizontal.sum())} stations finite")
             continue
         print(f"  {name:<16s} {f['form']:<22s} {f['root']:12.6f} {f['tip']:12.6f}"
               f" {f['mean']:12.6f} {f['max_dev_from_mean']:11.3e}  {unit}")
