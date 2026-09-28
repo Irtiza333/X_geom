@@ -16,6 +16,9 @@
 #            its reference points sit at their own heights. The fits and the planform
 #            summary use the horizontal rows only, and the local (tangent) columns are NaN
 #            on the tilted row. Its tilt is a design variable for the optimisation stage.
+# cap      : the tip cap above the tilted section (Step 7, tip_cap.py): face 0.6167 -> 2.9939 mm,
+#            crown radius 59.198 mm, edge radius 0.7070 mm, TE corner radius 3.2949 mm;
+#            fit to 0.1163 mm max, 0.0427 mm rms. Details in parameters.json and cap_profile.dat.
 # load     : np.loadtxt(path)  -> (201, 26)
 #
 # columns

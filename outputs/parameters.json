@@ -203,6 +203,53 @@
     "r_le": 0.027379732022207975,
     "definition": "planar cut through the top of the LE and the top of the TE, tilted about the thickness axis; shape parameters are those of its own airfoil, measured untilted"
   },
+  "tip_cap": {
+    "definition": "the part above the tilted tip section: an inclined face over the tip section, face(u) = h_le (1-u) + h_te u + 3u(1-u) [b1 (1-u) + b2 u], crowned across the thickness with radius crown_radius (top of the cap H = face + w^2 / (2 crown_radius), w = the tip section's half-thickness), a constant edge_radius joining the side walls to the crown and rounding the LE end, and te_radius rounding the TE end; model in tip_cap.py",
+    "frame": "u = x / chord along the tip section's chord from the top of the LE; heights above the tip section's plane along its normal; lengths in mm",
+    "chord_mm": 136.95042405203856,
+    "params": {
+      "h_le": 0.6167316396870676,
+      "h_te": 2.993929654660984,
+      "b1": -0.1284679305333002,
+      "b2": 0.12944330529026363,
+      "crown_radius": 59.19781273752077,
+      "edge_radius": 0.7070071951323655,
+      "te_radius": 3.2948690255954505
+    },
+    "face_inclination_deg": 0.9944455245415493,
+    "fit": {
+      "stations": 48,
+      "core_stations": 37,
+      "max_dev_mm": 0.11626450622719031,
+      "rms_dev_mm": 0.042660522353798615,
+      "core_max_dev_mm": 0.10435697646372549,
+      "core_rms_dev_mm": 0.03854765752212677,
+      "note": "distance from the CAD cap's cross-section points to the model's"
+    },
+    "xcad": {
+      "file": "sections_xcad_with_cap_m.dat",
+      "cap_loops": 10,
+      "first_cap_loop": 202,
+      "height_fractions": [
+        0.18904999999999994,
+        0.35819999999999985,
+        0.50745,
+        0.6368,
+        0.74625,
+        0.8358,
+        0.9054499999999999,
+        0.9551999999999999,
+        0.98505,
+        0.995
+      ],
+      "note": "loops over the cap after the stack, each at a fixed fraction of the local cap height, starting at the top of the LE like the sections; they all meet the tip section at the top of the LE and the top of the TE"
+    },
+    "files": {
+      "profile": "cap_profile.dat",
+      "grid": "tip_cap_grid_mm.dat",
+      "xcad": "sections_xcad_with_cap_m.dat"
+    }
+  },
   "design_variables": {
     "tip_tilt_deg": {
       "value": 3.576625633614478,
@@ -216,6 +263,22 @@
       "sign": "positive raises the TE end of the tip section",
       "note": "tilt of the tip section, the last section of the stack; a design variable in the optimisation stage",
       "pivot": "top of the LE, the end of the b-rep leading-edge curve"
+    },
+    "cap_face_inclination_deg": {
+      "value": 0.9944455245415493,
+      "definition": "inclination of the cap's face relative to the tip section, arctan((h_te - h_le) / chord); changing it moves h_te with h_le and the bow held"
+    },
+    "cap_edge_radius_mm": {
+      "value": 0.7070071951323655,
+      "definition": "edge radius joining the side walls to the cap's crown, also rounding the cap's LE end"
+    },
+    "cap_fixed": {
+      "h_le_mm": 0.6167316396870676,
+      "b1_mm": -0.1284679305333002,
+      "b2_mm": 0.12944330529026363,
+      "crown_radius_mm": 59.19781273752077,
+      "te_radius_mm": 3.2948690255954505,
+      "note": "cap parameters held fixed for now"
     }
   },
   "fits": {
