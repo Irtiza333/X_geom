@@ -1,0 +1,61 @@
+Bezier replica of a rudder section: fitted parameters
+======================================================
+Written 28 Sep 2026 from control.py in X_geom (settings below).
+All lengths are given as fractions of a chord (stated per block) and in mm.
+
+SECTION
+  file                    section_cut_y80_selig.dat  (copy of outputs/section_cut_y80_selig.dat: Wind_Tunnel_Rudder.stp, y = 80 mm)
+  chord c                 163.3312 mm
+  max thickness           t/c 0.1619 at x/c 0.307  (26.44 mm)
+  LE radius               0.02803 c = 4.58 mm  (circle through the LE and the next point)
+  TE circle               R = 0.004592 c = 0.750 mm, centre x/c = 0.995408, 4 points on the arc per side
+  fillet start            x/c = 0.996236 (tangent point), flank slope -0.18336 (10.39 deg)
+  sharpened TE            x/c = 1.020868, so the sharp chord c_s = 1.020868 c = 166.7397 mm
+                          flank from x/c = 0.993719 extended to y = 0; the 5 points from x/c = 0.995977 on replaced (slope_tol 0.001)
+
+PARAMETRIZATION
+  Quartic Bezier half-section in sharp-chord units, section symmetric (lower = mirror):
+  P0 = (0, 0)   P1 = (0, Y1)   P2 = (X2, Y1)   P3 = (X3, Y3)   P4 = (1, 0)
+  LE radius = 4 Y1^2 / (3 X2),   TE half-angle = atan(Y3 / (1 - X3))
+
+FITTED PARAMETERS (fractions of the sharp chord c_s)
+  name       value      lower   upper   note
+  Y1      0.0733727     0.00    0.15
+  X2      0.2177685     0.05    0.50
+  X3      0.3000000     0.30    0.95   on lower bound
+  Y3      0.1235418     0.00    0.15
+
+CONTROL POINTS
+  point      x/c_s       y/c_s        x/c         y/c        x (mm)     y (mm)
+  P0      0.000000    0.000000    0.000000    0.000000      0.000      0.000
+  P1      0.000000    0.073373    0.000000    0.074904      0.000     12.234
+  P2      0.217769    0.073373    0.222313    0.074904     36.311     12.234
+  P3      0.300000    0.123542    0.306261    0.126120     50.022     20.599
+  P4      1.000000    0.000000    1.020868    0.000000    166.740      0.000
+
+DERIVED (replica vs original)
+  LE radius               5.50 mm  vs 4.58 mm
+  TE half-angle           10.01 deg  vs flank 10.39 deg
+  max thickness           t/c 0.1620 at x/c 0.313  vs t/c 0.1619 at x/c 0.307
+  TE radius               0.716 mm  vs 0.750 mm
+  TE point                x/c = 0.999867  vs 1.000000
+
+FIT QUALITY
+  objective               RMS vertical gap at the 96 points of the sharpened section (Obj = 0)
+  Main_PSO alone          6.0060e-04 c_s = 100.1 um  (100 iterations, 5000 evaluations)
+  after the polish        5.0183e-04 c_s = 83.7 um
+  gap to the original     74.3 um RMS, 123.5 um max (+123.5 um at x = 2.6 mm)
+                          normal distance from each point of the original's upper surface (100 points)
+                          to the fitted foil, + where the fitted foil is outside; over the TE fillet 28.0 um max
+
+TE ROUNDING
+  fillet_method           0, circle tangent to the replica where the original's fillet starts
+  cut at                  x/c = 0.996236, y/c = 0.004317
+  fillet centre           x/c = 0.995485, radius 0.004382 c = 0.716 mm
+
+SETTINGS
+  Main_PSO                swarm 50, iterations 100, C1 2.05, C2 2.05, variant 1 (constriction factor), Vmax 0.2 of each range
+                          constraint handling 3 (clip to the bounds), stall stop 15, seed 42, X2 <= X3 off
+  polish                  bounded least squares (scipy, trust-region reflective, analytic Jacobian)
+  foil                    n_bez_samples 200, n_target_stations 0 (the section's own points)
+  figure                  outputs/section_fit_y80.png
