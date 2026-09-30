@@ -168,6 +168,12 @@ TILT_AXIS = np.eye(3)[THICK_AXIS]
 
 DEFAULT_NUM_PTS = 200     # points per airfoil section
 DEFAULT_NUM_SEC = 200     # spanwise cross-sections in the stack
+# Height of the cut, mm above the root: Z_opt, the height below which the
+# rudder's shape is to be optimised (the user's choice per case; the part above
+# it stays as extracted). The horizontal section there is written as
+# section_cut_y*; the stack stations are spaced separately in extract_stack,
+# from the root up to y_top.
+DEFAULT_CUT_HEIGHT = 200
 _DENSE_PER_EDGE = 800     # polyline density used before resampling
 
 
@@ -1299,6 +1305,20 @@ def _snap(v: float, places: int = 9) -> float:
     return 0.0 if abs(v) < 0.5 * 10.0 ** (-places) else float(v)
 
 
+def _height_tag(y: float) -> str:
+    """`y80` for a station at 80 mm, `y0` for the root. Goes in output filenames."""
+    return f"y{float(y):g}"
+
+
+def _height_span_tag(sections) -> str:
+    """`y0_y80` from the lowest and highest section height in the file."""
+    ys = [float(s.y) for s in sections]
+    lo, hi = min(ys), max(ys)
+    if lo == hi:
+        return _height_tag(lo)
+    return f"{_height_tag(lo)}_{_height_tag(hi)}"
+
+
 def write_selig(path: str, coords: np.ndarray, name: str) -> None:
     with open(path, "w") as fh:
         fh.write(f"{name}\n")
@@ -1686,18 +1706,20 @@ def write_parameters(path_dat: str, path_json: str, param: dict,
 
 def write_tip_section(out_dir: str, sec: Section, source: str) -> dict:
     """
-    The tilted tip section on its own, untilted so its airfoil can be read:
+    The tilted tip section on its own, untilted so its airfoil can be read.
+    The height of its LE is in the name (`section_tip_y200_...` for the wind
+    tunnel rudder, whose LE ends at 200 mm):
 
-      section_tip_untilted_selig.dat   normalised by its chord, Selig order
-      section_tip_untilted_raw_mm.dat  the same in mm
-      section_tip_3d_mm.dat            3D, as it sits on the part (x y z) and
-                                       unrotated (x_u y_u z_u), row for row
+      section_tip_y*_untilted_selig.dat   normalised by its chord, Selig order
+      section_tip_y*_untilted_raw_mm.dat  the same in mm
+      section_tip_y*_3d_mm.dat            3D, as it sits on the part (x y z) and
+                                          unrotated (x_u y_u z_u), row for row
 
     The untilted points are the tilted ones turned back by -tilt about the
     thickness axis through the section's LE (`rot_axis`); they lie at the
     height of the LE. Returns the file paths.
     """
-    base = os.path.join(out_dir, "section_tip")
+    base = os.path.join(out_dir, f"section_tip_{_height_tag(sec.y)}")
     paths = {"selig": base + "_untilted_selig.dat",
              "raw_mm": base + "_untilted_raw_mm.dat",
              "xyz_mm": base + "_3d_mm.dat"}
@@ -1732,7 +1754,7 @@ def write_tip_section(out_dir: str, sec: Section, source: str) -> dict:
                  f" y = {sec.y:.6f}\n")
         fh.write("# points   : Selig order, TE -> +Z side -> LE -> -Z side -> TE, the same"
                  " rows as\n")
-        fh.write("#            section_tip_untilted_raw_mm.dat\n")
+        fh.write(f"#            section_tip_{_height_tag(sec.y)}_untilted_raw_mm.dat\n")
         fh.write(f"# load     : np.loadtxt(path)  -> ({len(tilted)}, 6)\n")
         fh.write("# {:>16s} {:>16s} {:>16s} {:>18s} {:>16s} {:>16s}\n".format(
             "x", "y", "z", "x_u", "y_u", "z_u"))
@@ -1833,7 +1855,7 @@ def write_cap_grid(path: str, g: np.ndarray, source: str) -> None:
 # --------------------------------------------------------------------------- #
 # Driver
 # --------------------------------------------------------------------------- #
-def run(cad_path: str, cut_height: float = 80.0, num_pts: int = DEFAULT_NUM_PTS,
+def run(cad_path: str, cut_height: float = DEFAULT_CUT_HEIGHT, num_pts: int = DEFAULT_NUM_PTS,
         out_dir: str | None = None, spacing: str = "cosine", plot: bool = True,
         num_sec: int | None = DEFAULT_NUM_SEC, y_top: float | None = None,
         progress=None, fit_deg: int = DEFAULT_FIT_DEG, xcad_units: str = "m",
@@ -1856,6 +1878,13 @@ def run(cad_path: str, cut_height: float = 80.0, num_pts: int = DEFAULT_NUM_PTS,
     to cap_profile.dat, the model as a point grid, and the stack with
     `cap_loops` loops over the cap (the last at height fraction `cap_top`) as a
     second XCAD file.
+
+    `cut_height` is Z_opt, the height below which the rudder's shape is to
+    be optimised (rudder_modify.py); the horizontal section there is written
+    as section_cut_y*, with a warning when it lies above the top of the LE.
+    Files that depend on a height carry it in their names: y0 for the root,
+    y80 for a cut at 80 mm, y0_y80 for a stack from the root to 80 mm (the
+    tilted tip section counts at the height of its LE).
     """
     out_dir = out_dir or os.path.join(os.path.dirname(os.path.abspath(cad_path)), "outputs")
     os.makedirs(out_dir, exist_ok=True)
@@ -1869,15 +1898,6 @@ def run(cad_path: str, cut_height: float = 80.0, num_pts: int = DEFAULT_NUM_PTS,
     if not (0.0 <= cut_height <= span):
         raise ValueError(f"cut height {cut_height} outside span 0 .. {span:.4f}")
 
-    root = extract_section(lateral, 0.0, num_pts, spacing)          # Steps 3-5
-    cut = extract_section(lateral, cut_height, num_pts, spacing)
-
-    for sec, tag in ((root, "root_y0"), (cut, f"cut_y{cut_height:g}")):
-        base = os.path.join(out_dir, f"section_{tag}")
-        write_selig(base + "_selig.dat", sec.airfoil_norm,
-                    f"{os.path.basename(cad_path)} y={sec.y:g}mm c={sec.chord:.4f}mm")
-        write_raw_dat(base + "_raw_mm.dat", sec.airfoil_raw, sec.y)
-
     # always locate the top of the LE, even when the stack is asked to stop
     # lower, so the report and the file headers can say where it actually is
     le_top, how = leading_edge_top_point(shape, lateral, span)
@@ -1888,6 +1908,19 @@ def run(cad_path: str, cut_height: float = 80.0, num_pts: int = DEFAULT_NUM_PTS,
         print(f"  warning: requested top y = {y_top:.6f} is above the top of the "
               f"leading edge at y = {y_le_top:.6f}; sections up there cut through "
               f"the tip blend and may fail")
+    if cut_height > y_le_top + 1.0e-6:
+        print(f"  warning: the cut at y = {cut_height:.6f} is above the top of the "
+              f"leading edge at y = {y_le_top:.6f}; it passes through the tip blend, "
+              f"so it is not a complete airfoil")
+
+    root = extract_section(lateral, 0.0, num_pts, spacing)          # Steps 3-5
+    cut = extract_section(lateral, cut_height, num_pts, spacing)
+
+    for sec, kind in ((root, "root"), (cut, "cut")):
+        base = os.path.join(out_dir, f"section_{kind}_{_height_tag(sec.y)}")
+        write_selig(base + "_selig.dat", sec.airfoil_norm,
+                    f"{os.path.basename(cad_path)} y={sec.y:g}mm c={sec.chord:.4f}mm")
+        write_raw_dat(base + "_raw_mm.dat", sec.airfoil_raw, sec.y)
 
     use_tip = bool(num_sec) and tip and abs(y_top - y_le_top) <= 1.0e-6
     layout = {"tip": use_tip, "n_horizontal": int(num_sec or 0)}
@@ -1914,11 +1947,12 @@ def run(cad_path: str, cut_height: float = 80.0, num_pts: int = DEFAULT_NUM_PTS,
                                   progress=progress)
             layout.update(dz=(y_top / (num_sec - 1)) if num_sec > 1 else 0.0,
                           y_top_horizontal=y_top)
-        write_section_stack(os.path.join(out_dir, "sections_stack_raw_mm.dat"),
+        span_tag = _height_span_tag(stack)
+        write_section_stack(os.path.join(out_dir, f"sections_stack_{span_tag}_raw_mm.dat"),
                             stack, os.path.basename(cad_path), y_top, how, y_le_top,
                             layout)
         # the same stack for XCAD: 3D closed loops, root first, numbered sections
-        xcad_path = os.path.join(out_dir, f"sections_xcad_{xcad_units}.dat")
+        xcad_path = os.path.join(out_dir, f"sections_xcad_{span_tag}_{xcad_units}.dat")
         write_xcad(xcad_path, stack, xcad_units)
         if tip_sec is not None:
             tip_paths = write_tip_section(out_dir, tip_sec, os.path.basename(cad_path))
@@ -1935,7 +1969,7 @@ def run(cad_path: str, cut_height: float = 80.0, num_pts: int = DEFAULT_NUM_PTS,
         cap_paths = {
             "profile": os.path.join(out_dir, "cap_profile.dat"),
             "grid": os.path.join(out_dir, "tip_cap_grid_mm.dat"),
-            "xcad": os.path.join(out_dir, f"sections_xcad_with_cap_{xcad_units}.dat"),
+            "xcad": os.path.join(out_dir, f"sections_xcad_with_cap_{span_tag}_{xcad_units}.dat"),
         }
         write_cap_profile(cap_paths["profile"], cap_report, cap_params, base.chord, source)
         write_cap_grid(cap_paths["grid"], tip_cap.grid(cap_params, base), source)
@@ -2306,8 +2340,10 @@ def _plot_cap(out_dir, cap_res):
 def main():
     ap = argparse.ArgumentParser(description="Extract rudder section geometry from a CAD file.")
     ap.add_argument("cad", nargs="?", default="Wind_Tunnel_Rudder.stp")
-    ap.add_argument("--cut", type=float, default=80.0,
-                    help="spanwise cut height in mm above the root (default 80)")
+    ap.add_argument("--cut", type=float, default=DEFAULT_CUT_HEIGHT,
+                    help="cut height Z_opt in mm above the root, below which the "
+                         "shape is to be optimised "
+                         f"(default {DEFAULT_CUT_HEIGHT:g})")
     ap.add_argument("--num-pts", type=int, default=DEFAULT_NUM_PTS,
                     help="points per airfoil section (default 200)")
     ap.add_argument("--num-sec", type=int, default=DEFAULT_NUM_SEC,

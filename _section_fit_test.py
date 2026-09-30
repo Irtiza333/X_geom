@@ -3,11 +3,14 @@ _section_fit_test.py
 
 Self-check for the rudder section fit: Main_PSO (with bound_check, penalty and
 repair), the Bezier replica (replica_funcs), the TE fillet (retruncate), the
-sharpening (temp_funcs) and the whole match on section_cut_y80_selig.dat.
+sharpening (temp_funcs), the whole match on section_cut_y80_selig.dat, and the
+rounded section built from the thickness-format numbers (rounded_section).
 
     python _section_fit_test.py
 """
 
+import os
+import tempfile
 from types import SimpleNamespace
 
 import numpy as np
@@ -169,10 +172,56 @@ def test_match():
                   np.dot(cut - (rc[0] - [r, 0]), [1.0, s[0]]), 0.0, 1e-12)
             again = match_rudder_section(xr, yr, xs, ys, cs, pso, foil, BOUNDS)
             check("same settings, same replica", again[3], rc, 0.0)
+            check("method 0: X1, X2, T1, T2, r alone rebuild the replica",
+                  RF.rounded_section(P[1], P[2], P[0], P[3], r / cs, chord=cs), rc, 1e-12)
         elif method == 1:
             check("method 1: TE point is the original's", rc[0], [xr[-1], yr[-1]], 1e-12)
         else:
             check("method 2: TE radius is the original's", r, te["R"], 1e-12)
+            check("method 2: X1, X2, T1, T2, r alone rebuild the replica",
+                  RF.rounded_section(P[1], P[2], P[0], P[3], r / cs, chord=cs), rc, 1e-12)
+
+
+def test_rounded_section():
+    print("\nrounded section from X1, X2, T1, T2, r")
+    X1, X2, T1, T2, r = 0.2177685, 0.3, 0.0733727, 0.1235418, 0.0045
+    xi = [T1, X1, X2, T2]
+    xy = RF.rounded_section(X1, X2, T1, T2, r)
+    le = int(np.argmin(xy[:, 0]))
+    check("closed, Selig order, LE once at (0, 0)",
+          [*(xy[0] - xy[-1]), *xy[le], le == len(xy) // 2, np.sum(xy[:, 0] == 0.0)], [0, 0, 0, 0, 1, 1], 0.0)
+    cut, center = xy[25], xy[0] - [r, 0.0]
+    y, s = RF.y_and_slope(xi, cut[0])
+    check("cut point on the Bezier", cut[1], y[0], 1e-14)
+    check("fillet: radius r, centre on y = 0, tangent at the cut",
+          [np.hypot(*(cut - center)) - r, center[1], np.dot(cut - center, [1.0, s[0]])], [0, 0, 0], 1e-12)
+    big = RF.rounded_section(X1, X2, T1, T2, 0.05)
+    check("large r: cut where the tangent circle has that radius", big[25][0], 0.684312, 1e-6)
+    act = RF.rounded_section(X1, X2, T1, T2, r, chord=163.3312, chord_type="actual")
+    check("chord_type 'actual': LE at 0, TE at the given chord", [act[le][0], act[0][0]], [0.0, 163.3312], 1e-10)
+    check("chord_type 'sharp': the same shape, scaled", act / act[0][0], xy / xy[0][0], 1e-14)
+    fixed = RF.rounded_section(X1, X2, T1, T2, r, n_per_side=100)
+    up = fixed[:100][::-1]
+    on_arc = up[:, 0] > cut[0]
+    check("n_per_side 100: 199 points, TE first and last, LE once",
+          [len(fixed), *(fixed[0] - fixed[-1]), np.sum(fixed[:, 0] == 0.0)], [199, 0, 0, 1], 0.0)
+    check("n_per_side: points on the Bezier and on the arc",
+          [np.abs(RF.half_airfoil_y(xi, up[~on_arc, 0])[0] - up[~on_arc, 1]).max(),
+           np.abs(np.hypot(*(up[on_arc] - center).T) - r).max()], [0, 0], 1e-12)
+    check("n_per_side: lower surface mirrors the upper", fixed[99:], up * [1, -1], 0.0)
+    try:
+        RF.rounded_section(X1, X2, T1, T2, 0.08)
+        check("r above the half-thickness raises", 0, 1, 0)
+    except ValueError:
+        check("r above the half-thickness raises", 0, 0, 0)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "thickness.txt")
+        with open(path, "w") as fh:
+            fh.write("Section # | X1 | X2 | T1 | T2 | r\n\n        1  0.2176845|0.3000000|0.0733644|0.1235665|0.0038914\n"
+                     "        2  0.2 | 0.31 | 0.07 | 0.12 | 0.004\n")
+        secs, params = RF.read_thickness_params(path)
+    check("read_thickness_params: sections and values", [*secs, *params.ravel()],
+          [1, 2, 0.2176845, 0.3, 0.0733644, 0.1235665, 0.0038914, 0.2, 0.31, 0.07, 0.12, 0.004], 0.0)
 
 
 def main():
@@ -181,6 +230,7 @@ def main():
     test_replica()
     test_te()
     test_match()
+    test_rounded_section()
     print()
     if _FAILED:
         print(f"{len(_FAILED)} check(s) FAILED: " + ", ".join(_FAILED))

@@ -8,7 +8,7 @@
 #            x_u y_u z_u  the same points turned by -3.576626 deg about the Z axis
 #                         through the LE: a horizontal section at y = 200.000000
 # points   : Selig order, TE -> +Z side -> LE -> -Z side -> TE, the same rows as
-#            section_tip_untilted_raw_mm.dat
+#            section_tip_y200_untilted_raw_mm.dat
 # load     : np.loadtxt(path)  -> (200, 6)
 #                x                y                z                x_u              y_u              z_u
      150.683680421    208.543427562      0.000000000      150.950424052    200.000000000      0.000000000

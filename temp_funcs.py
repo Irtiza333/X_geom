@@ -40,7 +40,13 @@ def get_reference_half_raw(ref_path):
 
     Returns (x, y, chord).
     """
-    coords = load_dat_coords(ref_path)
+    return reference_half(load_dat_coords(ref_path))
+
+
+def reference_half(coords):
+    """The same as get_reference_half_raw for Selig-ordered points already in
+    memory, (n, 2)."""
+    coords = np.asarray(coords, dtype=float)
     le = int(np.argmin(coords[:, 0]))
     le_x, le_y = coords[le]
 
