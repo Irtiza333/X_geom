@@ -5,8 +5,9 @@ Change an existing rudder below a height H and keep it as it is above.
 
 The rudder is the one Rudder_geom_extraction.py measured, in its working frame
 (mm): origin at the root LE, x chordwise LE -> TE, y up the span (the height),
-z thickness. Below H, which is at most Z_opt (the height the user allows the
-shape to change below):
+z thickness. Below H, a design variable between the user's bounds h_min and
+h_max (h_max at most z_top, the top horizontal section of the extracted stack,
+z_full - d):
 
 Planform  The TE line stays. The x of the LE follows a spanwise curve (below).
 Sections  Horizontal, n_sec of them from the root to H (both included). Each is
@@ -28,12 +29,12 @@ Degree    The original sections are quartics (the PSO section fits of the
           (exact), so the original shape is the same whatever the degree; adding
           a section control point raises the degree by one and adds two curves
           (change_degree carries a design over).
-Original  The original shape is known at every height up to Z_opt from Bezier
+Original  The original shape is known at every height up to z_top from Bezier
           fits to its distributions (fit_original): the LE of corner_points.dat
           and the coordinates of the per-section fits of fit_section_table (the
-          thickness_params_H*_info.dat tables). Wherever H is, the pinned values
-          and slopes come from these fits, and baseline_design rebuilds the
-          original below any H.
+          thickness_params_*_info.dat tables, thickness_params_y0_y200_info.dat
+          for the whole stack). Wherever H is, the pinned values and slopes come
+          from these fits, and baseline_design rebuilds the original below any H.
 
 Above H the extracted sections stay exactly as extracted: their loops are
 copied line for line from the extraction's XCAD file (write_modified_xcad).
@@ -357,13 +358,13 @@ def quartic_polygons(X1, X2, T1, T2):
 
 @dataclass
 class OriginalShape:
-    """The original rudder's shape from the root to z_opt, as fitted Bezier
+    """The original rudder's shape from the root to z_top, as fitted Bezier
     curves in the (y, value) plane, top first: x of the LE (mm) and the
     coordinates of the section control points at `degree` (fractions of the
     sharp chord). The TE line is kept as the extraction measured it."""
-    z_opt: float
+    z_top: float                 # the fits cover [0, z_top]; H may go up to z_top
     degree: int
-    curves: dict                 # name -> Bezier over [0, z_opt]
+    curves: dict                 # name -> Bezier over [0, z_top]
     data: dict                   # name -> (y, value) the curve was fitted to
     residuals: dict              # name -> residuals of the fit at the data
     y_rows: np.ndarray           # heights of the horizontal corner-point rows, root first
@@ -378,9 +379,9 @@ class OriginalShape:
 
     def _heights(self, y):
         y = np.atleast_1d(np.asarray(y, dtype=float))
-        if np.any(y < -_TOL_Y) or np.any(y > self.z_opt + _TOL_Y):
-            raise ValueError(f"heights outside [0, Z_opt = {self.z_opt:g}] mm")
-        return np.clip(y, 0.0, self.z_opt)
+        if np.any(y < -_TOL_Y) or np.any(y > self.z_top + _TOL_Y):
+            raise ValueError(f"heights outside [0, z_top = {self.z_top:g}] mm, the fitted original")
+        return np.clip(y, 0.0, self.z_top)
 
     def value(self, name, y):
         """The fitted original value of `name` at the heights y."""
@@ -404,11 +405,11 @@ class OriginalShape:
         if degree == self.degree:
             return self
         b = self.base
-        return _original(self.z_opt, degree, b["le"], b["y_tab"], b["ctrl4"], self.y_rows, self.x_te_rows,
+        return _original(self.z_top, degree, b["le"], b["y_tab"], b["ctrl4"], self.y_rows, self.x_te_rows,
                          self.x_le_rows, b["orders"], b["weights"], b["free_heights"], self.sources)
 
 
-def _original(z_opt, degree, le, y_tab, ctrl4, y_rows, x_te_rows, x_le_rows, orders, weights, free_heights,
+def _original(z_top, degree, le, y_tab, ctrl4, y_rows, x_te_rows, x_le_rows, orders, weights, free_heights,
               sources):
     degree = int(degree)
     if degree < BASE_DEGREE:
@@ -417,45 +418,52 @@ def _original(z_opt, degree, le, y_tab, ctrl4, y_rows, x_te_rows, x_le_rows, ord
     data = {"LE": le, **{c: (y_tab, coords[c]) for c in BS.coord_names(degree)}}
     curves, residuals = {}, {}
     for c in curve_names(degree):
-        curves[c], residuals[c] = fit_law(*data[c], orders.get(c, DEFAULT_ORDER), top=z_opt, bottom=0.0,
+        curves[c], residuals[c] = fit_law(*data[c], orders.get(c, DEFAULT_ORDER), top=z_top, bottom=0.0,
                                           weights=weights.get(c), free_heights=free_heights)
     base = {"le": le, "y_tab": y_tab, "ctrl4": ctrl4, "orders": orders, "weights": weights,
             "free_heights": free_heights}
-    return OriginalShape(z_opt, degree, curves, data, residuals, y_rows, x_te_rows, x_le_rows, sources, base)
+    return OriginalShape(z_top, degree, curves, data, residuals, y_rows, x_te_rows, x_le_rows, sources, base)
 
 
-def fit_original(corner_points, section_table, z_opt, orders=None, weights=None, free_heights=False,
+def fit_original(corner_points, section_table, z_top=None, orders=None, weights=None, free_heights=False,
                  degree=BASE_DEGREE):
-    """Fit the original shape from the root to z_opt.
+    """Fit the original shape from the root to z_top.
 
     corner_points   the extraction's corner_points.dat: the LE (x1, y1) of the
-                    horizontal rows up to z_opt (plus the LE interpolated at
-                    z_opt when no row sits there) is fitted; the TE rows are
+                    horizontal rows up to z_top (plus the LE interpolated at
+                    z_top when no row sits there) is fitted; the TE rows are
                     kept as the TE line
     section_table   the per-section fits (fit_section_table, e.g.
-                    thickness_params_H80_info.dat); the control points of their
-                    rows up to z_opt, raised to `degree`, are fitted
+                    thickness_params_y0_y200_info.dat); the control points of
+                    their rows up to z_top, raised to `degree`, are fitted
+    z_top           the top of the fits, the highest H a design may use
+                    (default: the table's top row, at most the top horizontal
+                    row of corner_points)
     orders          {curve: order} of each fit (default 3)
     free_heights    fit_law's option: search the inner control heights too
     degree          of the section Bezier (4, the table's quartics, or more)
     """
-    z_opt = float(z_opt)
     rows = np.loadtxt(corner_points, ndmin=2)
     rows = rows[np.abs(rows[:, 1] - rows[:, 4]) < _TOL_Y]          # the horizontal rows
     rows = rows[np.argsort(rows[:, 1])]
     y_rows = rows[:, 1]
-    if not 0.0 < z_opt <= y_rows[-1] + _TOL_Y:
-        raise ValueError(f"Z_opt = {z_opt:g} must lie in (0, {y_rows[-1]:g}], the top horizontal station")
-    below = y_rows < z_opt - _TOL_Y
-    le = (np.append(y_rows[below], z_opt), np.append(rows[below, 0], np.interp(z_opt, y_rows, rows[:, 0])))
     table = load_section_table(section_table)
-    keep = table["y_mm"] <= z_opt + 1e-6
+    if z_top is None:                               # the table's top row (its heights have 4 decimals: snap to the row)
+        z_top = min(float(table["y_mm"].max()), float(y_rows[-1]))
+        near = y_rows[np.abs(y_rows - z_top) < 1e-3]
+        z_top = float(near.max()) if len(near) else z_top
+    z_top = float(z_top)
+    if not 0.0 < z_top <= y_rows[-1] + _TOL_Y:
+        raise ValueError(f"z_top = {z_top:g} must lie in (0, {y_rows[-1]:g}], the top horizontal station")
+    below = y_rows < z_top - _TOL_Y
+    le = (np.append(y_rows[below], z_top), np.append(rows[below, 0], np.interp(z_top, y_rows, rows[:, 0])))
+    keep = table["y_mm"] <= z_top + 1e-6
     y_tab = table["y_mm"][keep]
-    if len(y_tab) < 2 or y_tab.min() > 1e-6 or y_tab.max() < z_opt - 2.0 * np.ptp(y_tab) / (len(y_tab) - 1):
+    if len(y_tab) < 2 or y_tab.min() > 1e-6 or y_tab.max() < z_top - 2.0 * np.ptp(y_tab) / (len(y_tab) - 1):
         print(f"  warning: the section table covers y = {y_tab.min():g} .. {y_tab.max():g} mm, "
-              f"not 0 .. {z_opt:g}; its laws are extrapolated there")
+              f"not 0 .. {z_top:g}; its laws are extrapolated there")
     ctrl4 = quartic_polygons(table["X1"][keep], table["X2"][keep], table["T1"][keep], table["T2"][keep])
-    return _original(z_opt, degree, le, y_tab, ctrl4, y_rows, rows[:, 3], rows[:, 0], dict(orders or {}),
+    return _original(z_top, degree, le, y_tab, ctrl4, y_rows, rows[:, 3], rows[:, 0], dict(orders or {}),
                      dict(weights or {}), free_heights,
                      {"corner_points": corner_points, "section_table": section_table})
 
@@ -518,16 +526,16 @@ def pin(design, orig):
     """A copy of the design with its pinned control points set from the
     original at H: s_0 = 1 and s_n = 0; the value at H; with join 'G1' the
     value of C1 on the original's tangent at H (its height as designed).
-    Checks that H lies in (0, Z_opt], that the design and the original have
+    Checks that H lies in (0, z_top], that the design and the original have
     the same section degree and that no curve's heights rise towards the root."""
     d = design.copy()
     d.H = float(d.H)
-    if not 0.0 < d.H <= orig.z_opt + _TOL_Y:
-        raise ValueError(f"H = {d.H:g} mm must lie in (0, Z_opt = {orig.z_opt:g}]")
+    if not 0.0 < d.H <= orig.z_top + _TOL_Y:
+        raise ValueError(f"H = {d.H:g} mm must lie in (0, z_top = {orig.z_top:g}]")
     if sorted(d.curves) != sorted(orig.names) or d.degree != orig.degree:
         raise ValueError(f"the design has sections of degree {d.degree} and the original of degree "
                          f"{orig.degree} (curves {sorted(d.curves)}); use change_degree or orig.at_degree")
-    d.H = min(d.H, orig.z_opt)
+    d.H = min(d.H, orig.z_top)
     for name in orig.names:
         c = d.curves[name]
         c.s, c.v = np.array(c.s, dtype=float), np.array(c.v, dtype=float)
@@ -550,7 +558,7 @@ def baseline_design(orig, H, orders=None, join="G1", weights=None, n_samples=401
     H = float(H)
     orders = dict(orders or {})
     weights = weights or {}
-    yd = np.linspace(0.0, min(H, orig.z_opt), n_samples)
+    yd = np.linspace(0.0, min(H, orig.z_top), n_samples)
     curves = {}
     for c in orig.names:
         jn = join.get(c, "G1") if isinstance(join, dict) else join
@@ -603,17 +611,18 @@ def change_degree(design, orig, degree, n_samples=401):
     return pin(Design(d.H, curves, degree), o2), o2, err
 
 
-def default_bounds(z_opt, h_min=None):
-    """Bounds of the design vector (DesignSpace) by group: H from h_min (the
-    user's choice; a quarter of Z_opt when not given) up to Z_opt; height
-    fractions d in [0.05, 0.95]; LE control points up to 4 Z_opt forward of the
-    original LE and not behind it (the range of Alternate truncation/
-    Geometry.py); section x coordinates in [0, 1] and z coordinates in
-    [0, 0.2] (fractions of the sharp chord)."""
-    h_min = 0.25 * z_opt if h_min is None else float(h_min)
-    if not 0.0 < h_min <= z_opt:
-        raise ValueError(f"H_min = {h_min:g} mm must lie in (0, Z_opt = {z_opt:g}]")
-    return {"H": (h_min, z_opt), "d": (0.05, 0.95), "LE": (-4.0 * z_opt, 0.0), "x": (0.0, 1.0), "z": (0.0, 0.2)}
+def default_bounds(z_top, h_min=None, h_max=None):
+    """Bounds of the design vector (DesignSpace) by group: H from h_min to
+    h_max (the user's choice; default a quarter of h_max and z_top, h_max at
+    most z_top); height fractions d in [0.05, 0.95]; LE control points up to
+    4 h_max forward of the original LE and not behind it (the range of
+    Alternate truncation/Geometry.py); section x coordinates in [0, 1] and z
+    coordinates in [0, 0.2] (fractions of the sharp chord)."""
+    h_max = float(z_top) if h_max is None else float(h_max)
+    h_min = 0.25 * h_max if h_min is None else float(h_min)
+    if not 0.0 < h_min <= h_max <= z_top + _TOL_Y:
+        raise ValueError(f"H bounds [{h_min:g}, {h_max:g}] mm must satisfy 0 < h_min <= h_max <= z_top = {z_top:g}")
+    return {"H": (h_min, h_max), "d": (0.05, 0.95), "LE": (-4.0 * h_max, 0.0), "x": (0.0, 1.0), "z": (0.0, 0.2)}
 
 
 class DesignSpace:
@@ -628,8 +637,9 @@ class DesignSpace:
     height, negative forward; section coordinates are the fractions of the
     sharp chord themselves.
 
-    h_min      the lowest H (the user's choice; H runs from h_min to Z_opt)
-    bounds     overrides entries of default_bounds(z_opt, h_min) by group
+    h_min      the lowest H, h_max the highest (the user's choices; h_max at
+               most orig.z_top)
+    bounds     overrides entries of default_bounds(z_top, h_min, h_max) by group
                ("LE", "d" for every height fraction, "x" / "z" for every
                section x / z coordinate), by curve ("P2z") or by slot name
                ("LE.dx3": (-40, 0)); a slot beats its curve, a curve its group
@@ -639,7 +649,8 @@ class DesignSpace:
     all_names / all_bounds cover every slot, names / bounds the free ones;
     len(space) is the number of design variables."""
 
-    def __init__(self, orig, orders=None, join="G1", weights=None, bounds=None, h_min=None, fixed=None):
+    def __init__(self, orig, orders=None, join="G1", weights=None, bounds=None, h_min=None, h_max=None,
+                 fixed=None):
         self.orig = orig
         self.curves = orig.names
         orders = dict(orders or {})
@@ -648,7 +659,7 @@ class DesignSpace:
         weights = weights or {}
         self.weights = {c: (None if weights.get(c) is None else np.asarray(weights[c], dtype=float))
                         for c in self.curves}
-        b = {**default_bounds(orig.z_opt, h_min), **(bounds or {})}
+        b = {**default_bounds(orig.z_top, h_min, h_max), **(bounds or {})}
         self._slots = [("", "H", 0)]
         for c in self.curves:
             n = self.orders[c]
@@ -747,7 +758,8 @@ class DesignSpace:
         whether it is free, and the design vector (names, values, bounds).
         from_dict reads it back."""
         vals = self.values(design)
-        return {"z_opt_mm": self.orig.z_opt, "h_min_mm": float(self.all_bounds[0, 0]),
+        return {"z_top_mm": self.orig.z_top, "h_min_mm": float(self.all_bounds[0, 0]),
+                "h_max_mm": float(self.all_bounds[0, 1]),
                 "degree": int(self.orig.degree),
                 "orders": {c: int(self.orders[c]) for c in self.curves}, "join": dict(self.join),
                 "weights": {c: (None if self.weights[c] is None else self.weights[c].tolist()) for c in self.curves},
@@ -765,8 +777,31 @@ class DesignSpace:
         bounds = {q["name"]: (q["lo"], q["hi"]) for q in slots}
         fixed = {q["name"]: q["value"] for q in slots if not q["free"]}
         weights = {c: w for c, w in (rec.get("weights") or {}).items() if w is not None}
-        space = cls(orig, rec["orders"], rec["join"], weights, bounds, h_min=bounds["H"][0], fixed=fixed)
+        space = cls(orig, rec["orders"], rec["join"], weights, bounds, h_min=bounds["H"][0], h_max=bounds["H"][1],
+                    fixed=fixed)
         return space, space.design_of({q["name"]: q["value"] for q in slots})
+
+
+def load_design_space(path):
+    """(space, design, record) of a set-up the design tool saved
+    (<case>_design_space.json). The original shape is fitted again from the
+    files and fit settings the record names (paths relative to the folder the
+    tool ran in), so the space is the one the tool set up:
+
+        space, design, rec = load_design_space("outputs/modified/gui_design_space.json")
+        x0, bounds = space.to_vector(design), space.bounds      # the free variables
+        d = space.to_design(x)                                  # a candidate x
+        problems = design_problems(d, space.orig, rec["settings"]["n_sections"])
+        write_case(out_dir, name, d, space.orig, rec["files"]["xcad_original"], ...)
+    """
+    with open(path) as fh:
+        rec = json.load(fh)
+    f, s = rec["files"], rec["settings"]
+    orig = fit_original(f["corner_points"], f["section_table"], s.get("z_top"), s.get("fit_orders"),
+                        free_heights=s.get("fit_free_heights", False),
+                        degree=rec["space"].get("degree", BASE_DEGREE))
+    space, design = DesignSpace.from_dict(orig, rec["space"])
+    return space, design, rec
 
 
 def refit_curve(design, orig, name, order, n_samples=401):
@@ -1043,19 +1078,27 @@ def write_xcad_lines(path, loops):
 
 
 def kept_loops(loops, H, gap, units="m"):
-    """Indices of the loops (read_xcad) that lie wholly at or above H + gap."""
-    return [k for k, (_, pts) in enumerate(loops) if pts[:, 2].min() / XCAD_UNITS[units] >= H + gap - _TOL_Y]
+    """Indices of the loops (read_xcad) kept above H: the horizontal ones lying
+    wholly at or above H + gap, the others (the tilted tip section, the cap)
+    lying wholly at or above H."""
+    out = []
+    for k, (_, pts) in enumerate(loops):
+        z = pts[:, 2] / XCAD_UNITS[units]
+        if z.min() >= H + (gap if np.ptp(z) <= 1e-6 * max(1.0, abs(z).max()) else 0.0) - _TOL_Y:
+            out.append(k)
+    return out
 
 
 def write_modified_xcad(path, sections, original_xcad, H, gap_mm=None, units="m",
                         original_units="m"):
     """The modified rudder as one XCAD file: the modified sections from the
-    root to H, then every loop of the original file that lies wholly at or
-    above H + gap (the extracted sections, the tilted tip section and the
+    root to H, then the loops of the original file above them (kept_loops:
+    the extracted sections from H + gap up, the tilted tip section and the
     cap), copied line for line when the units match. The gap (default one
-    modified step, H / (n_sec - 1)) leaves out the extracted loops just above
-    H, which would sit a fraction of a millimetre from the replica at H and
-    differ from it by the fit error. Returns what was written."""
+    modified step, H / (n_sec - 1)) leaves out the extracted sections just
+    above H, which would sit a fraction of a millimetre from the replica at H
+    and differ from it by the fit error; the tip section and the cap stay
+    whatever H is. Returns what was written."""
     gap = H / (len(sections) - 1) if gap_mm is None else float(gap_mm)
     loops = read_xcad(original_xcad)
     kept = kept_loops(loops, H, gap, original_units)
@@ -1286,7 +1329,7 @@ def design_from_record(rec):
 
 def original_record(orig):
     """The original-shape fits as plain lists, for JSON."""
-    out = {"z_opt_mm": orig.z_opt, "degree": int(orig.degree), "sources": orig.sources, "curves": {}}
+    out = {"z_top_mm": orig.z_top, "degree": int(orig.degree), "sources": orig.sources, "curves": {}}
     for c in orig.names:
         b = orig.curves[c]
         res = orig.residuals[c]
@@ -1301,13 +1344,13 @@ def write_original_fit(out_dir, orig):
     """original_fit_Zopt<z>.json (the fitted control points) and .dat (the
     data and the fits at the data heights)."""
     os.makedirs(out_dir, exist_ok=True)
-    tag = f"Zopt{orig.z_opt:g}"
+    tag = f"y0_y{orig.z_top:g}"
     pj = os.path.join(out_dir, f"original_fit_{tag}.json")
     with open(pj, "w") as fh:
         json.dump(original_record(orig), fh, indent=1)
     pd_ = os.path.join(out_dir, f"original_fit_{tag}.dat")
     coords = BS.coord_names(orig.degree)
-    head = [f"# Bezier fits to the original shape from the root to Z_opt = {orig.z_opt:g} mm "
+    head = [f"# Bezier fits to the original shape from the root to z_top = {orig.z_top:g} mm "
             "(rudder_modify.fit_original)",
             f"# written      : {datetime.date.today():%d %b %Y}",
             f"# sources      : {orig.sources.get('corner_points')} (LE), {orig.sources.get('section_table')} "
@@ -1334,7 +1377,7 @@ def write_original_fit(out_dir, orig):
 
 def write_case(out_dir, case, design, orig, original_xcad, n_sec=50, num_pts=200, te_radius_mm=0.75,
                gap_mm=None, units="m", original_units="m", stack=None, plot=True, space=None,
-               h_min=None):
+               h_min=None, h_max=None):
     """Build the modified sections of a design and write, to out_dir:
 
     <case>_sections_xcad_<units>.dat  the whole rudder for XCAD: the modified
@@ -1351,12 +1394,15 @@ def write_case(out_dir, case, design, orig, original_xcad, n_sec=50, num_pts=200
                                       vector too
     <case>_check.png                  planform, curves and sections (plot_case)
 
-    h_min, when given, is the lowest H allowed: a design below it is refused.
+    h_min and h_max, when given, are the bounds on H: a design outside them is
+    refused.
 
     Returns a dict: the pinned design, the sections, the XCAD summary and
     the paths."""
     if h_min is not None and design.H < float(h_min) - _TOL_Y:
-        raise ValueError(f"{case}: H = {design.H:g} mm is below H_min = {float(h_min):g} mm")
+        raise ValueError(f"{case}: H = {design.H:g} mm is below h_min = {float(h_min):g} mm")
+    if h_max is not None and design.H > float(h_max) + _TOL_Y:
+        raise ValueError(f"{case}: H = {design.H:g} mm is above h_max = {float(h_max):g} mm")
     os.makedirs(out_dir, exist_ok=True)
     d = pin(design, orig)
     secs = modified_sections(d, orig, n_sec, num_pts, te_radius_mm)
@@ -1369,7 +1415,7 @@ def write_case(out_dir, case, design, orig, original_xcad, n_sec=50, num_pts=200
         write_params_txt(p["params"], secs)
     else:
         p.pop("params")
-    notes = [f"case         : {case}; H = {d.H:g} mm (Z_opt {orig.z_opt:g} mm), {len(secs)} sections, "
+    notes = [f"case         : {case}; H = {d.H:g} mm (original fitted up to {orig.z_top:g} mm), {len(secs)} sections, "
              f"TE radius {te_radius_mm:g} mm",
              f"XCAD file    : {os.path.basename(p['xcad'])}, these sections then the original loops "
              f"{xinfo['kept'][0] if xinfo['kept'] else '-'} .. {xinfo['kept'][-1] if xinfo['kept'] else '-'}"
@@ -1377,7 +1423,8 @@ def write_case(out_dir, case, design, orig, original_xcad, n_sec=50, num_pts=200
              + (f" (from y = {xinfo['first_kept_y']:.4f} mm)" if xinfo["kept"] else "")]
     write_sections_dat(p["table"], secs, notes)
     rec = {"case": case, "written": f"{datetime.date.today():%d %b %Y}",
-           "settings": {"z_opt_mm": orig.z_opt, "h_min_mm": None if h_min is None else float(h_min),
+           "settings": {"z_top_mm": orig.z_top, "h_min_mm": None if h_min is None else float(h_min),
+                        "h_max_mm": None if h_max is None else float(h_max),
                         "degree": int(d.degree), "n_sections": len(secs), "num_pts": num_pts,
                         "te_radius_mm": te_radius_mm, "gap_mm": xinfo["gap_mm"], "xcad_units": units},
            "thickness_format": ("written" if quartic else
@@ -1455,9 +1502,10 @@ def plot_case(path, case, design, orig, sections, stack=None, every=7):
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
     d = pin(design, orig)
-    H, Z = d.H, orig.z_opt
+    H = d.H
+    top = min(orig.z_top, max(1.3 * H, H + 20.0))           # the plots show the original up to here
     yy = np.linspace(0.0, H, 400)
-    yz = np.linspace(0.0, Z, 400)
+    yz = np.linspace(0.0, top, 400)
     coords = BS.coord_names(d.degree)
     ncol = 4
     nrow = -(-(len(coords) + 2) // ncol)
@@ -1466,7 +1514,7 @@ def plot_case(path, case, design, orig, sections, stack=None, every=7):
     axs = fig.subplots(nrow, ncol).ravel()
 
     ax = axs[0]
-    m = orig.y_rows <= 1.3 * Z
+    m = orig.y_rows <= top
     ax.plot(orig.x_le_rows[m], orig.y_rows[m], "k--", lw=1, label="original LE")
     ax.plot(orig.x_te_rows[m], orig.y_rows[m], "k-", lw=1, label="TE line (kept)")
     le = d.curve("LE")
@@ -1476,8 +1524,6 @@ def plot_case(path, case, design, orig, sections, stack=None, every=7):
     ax.plot(pts[:, 1], pts[:, 0], "b-", lw=2, label=f"new LE (order {le.order}, {d.curves['LE'].join})")
     ax.plot(le.ctrl[:, 1], le.ctrl[:, 0], "o--", color="tab:blue", ms=5, lw=0.8, mfc="w", label="LE control points")
     ax.axhline(H, color="r", ls=":", lw=1, label=f"H = {H:g} mm")
-    if Z != H:
-        ax.axhline(Z, color="m", ls=":", lw=1, label=f"Z_opt = {Z:g} mm")
     ax.set_xlabel("x (mm)")
     ax.set_ylabel("y, height (mm)")
     ax.set_title("planform (sections every %d shown)" % every, fontsize=9)
@@ -1487,6 +1533,7 @@ def plot_case(path, case, design, orig, sections, stack=None, every=7):
     for ax, c in zip(axs[1:], coords):
         law = d.curve(c)
         yd, vd = orig.data[c]
+        yd, vd = yd[yd <= top], vd[yd <= top]
         ax.plot(vd, yd, "k.", ms=3, label="section fits (original)")
         ax.plot(orig.value(c, yz), yz, "k-", lw=1, label=f"original (order {orig.curves[c].order})")
         ax.plot(law.at(yy)[:, 1], yy, "b-", lw=2, label=f"design (order {law.order}, {d.curves[c].join})")
@@ -1519,7 +1566,7 @@ def plot_case(path, case, design, orig, sections, stack=None, every=7):
     ax.legend(fontsize=6)
     for ax in axs[len(coords) + 2:]:
         ax.set_visible(False)
-    fig.suptitle(f"{case}: modified below H = {H:g} mm (Z_opt = {Z:g} mm), {len(sections)} sections of degree "
+    fig.suptitle(f"{case}: modified below H = {H:g} mm, {len(sections)} sections of degree "
                  f"{d.degree}")
     fig.tight_layout()
     fig.savefig(path, dpi=110)

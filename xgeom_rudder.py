@@ -43,6 +43,9 @@ BLUE, ORANGE, AQUA, RED, GREY = "#2a78d6", "#eb6834", "#1baf7a", "#e34948", "#9a
 MAX_DEGREE = 12
 MAX_ORDER = 12
 SKELETON_UNCHANGED = 90          # original loops drawn above H, at most (the tip and cap loops always)
+N_VIEW = 5                       # sections drawn in the Design tab's 3D view, from the root to H
+Z_STRETCH = 3.0                  # the 3D view stretches the thickness by this, so the polygons show
+SECTION_COLORS = ("#1f4e9a", "#2a78d6", "#3fa0c8", "#1baf7a", "#0f7a55", "#0b5e43", "#08452f")
 
 
 @dataclass
@@ -64,15 +67,18 @@ class RudderAdapter:
         self.files = {"corner_points": MC.CORNER_POINTS, "section_table": MC.SECTION_TABLE,
                       "xcad_original": MC.XCAD_ORIGINAL, "stack": MC.STACK}
         self.out_dir = MC.OUT_DIR
-        self.settings = {"z_opt": float(s.z_opt), "h_min": float(s.h_min), "n_sections": int(s.n_sections),
-                         "num_pts": int(s.num_pts), "te_radius_mm": float(s.te_radius_mm), "gap_mm": s.gap_mm,
-                         "xcad_units": s.xcad_units, "plot": bool(s.plot)}
-        self.title = f"Rudder below H (Z_opt = {s.z_opt:g} mm)"
-        self.orig = RM.fit_original(MC.CORNER_POINTS, MC.SECTION_TABLE, s.z_opt, MC.FIT_ORDERS,
+        self.orig = RM.fit_original(MC.CORNER_POINTS, MC.SECTION_TABLE, None, MC.FIT_ORDERS,
                                     free_heights=s.fit_free_heights, degree=getattr(MC, "DEGREE", RM.BASE_DEGREE))
+        z_top = self.orig.z_top
+        self.settings = {"z_top": z_top, "h_min": float(s.h_min), "h_max": min(float(s.h_max), z_top),
+                         "n_sections": int(s.n_sections), "num_pts": int(s.num_pts),
+                         "te_radius_mm": float(s.te_radius_mm), "gap_mm": s.gap_mm, "xcad_units": s.xcad_units,
+                         "plot": bool(s.plot), "fit_orders": dict(MC.FIT_ORDERS),
+                         "fit_free_heights": bool(s.fit_free_heights)}
+        self.title = "Rudder, modified below H"
         self.stack = RM.read_stack(MC.STACK)
         self.loops0 = [RM.xcad_to_working(pts, "m") for _, pts in RM.read_xcad(MC.XCAD_ORIGINAL)]
-        H = min(max(float(MC.H), s.h_min), s.z_opt)
+        H = min(max(float(MC.H), self.settings["h_min"]), self.settings["h_max"])
         self.orders = {c: int(MC.ORDERS.get(c, RM.DEFAULT_ORDER)) for c in self.orig.names}
         self.join = {c: MC.JOIN for c in self.orig.names}
         self.design = RM.baseline_design(self.orig, H, self.orders, self.join)
@@ -92,13 +98,13 @@ class RudderAdapter:
         """The space for the present degree, orders and joins, keeping the
         bounds and free flags of every slot that is still there. New slots of
         P1x start held (unticked): P1x = 0 keeps the LE round."""
-        full = RM.DesignSpace(self.orig, self.orders, self.join, h_min=self.settings["h_min"])
+        h = dict(h_min=self.settings["h_min"], h_max=self.settings["h_max"])
+        full = RM.DesignSpace(self.orig, self.orders, self.join, **h)
         self.meta = {n: self.meta.get(n, {"lo": float(lo), "hi": float(hi), "free": not n.startswith("P1x.")})
                      for n, (lo, hi) in zip(full.all_names, full.all_bounds)}
-        self.meta["H"].update(lo=self.settings["h_min"], hi=self.settings["z_opt"])
+        self.meta["H"].update(lo=h["h_min"], hi=h["h_max"])
         self.space = RM.DesignSpace(self.orig, self.orders, self.join,
-                                    bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()},
-                                    h_min=self.settings["h_min"])
+                                    bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()}, **h)
         self.values = self.space.values(self.design)
 
     def get(self, name):
@@ -123,10 +129,10 @@ class RudderAdapter:
     def set_bounds(self, name, lo, hi):
         lo, hi = float(lo), float(hi)
         if name == "H":
-            hi = self.settings["z_opt"]
-            if not 0.0 < lo <= hi:
-                raise ValueError(f"H_min must lie in (0, {hi:g}] mm")
-            self.settings["h_min"] = lo
+            top = self.settings["z_top"]
+            if not 0.0 < lo < hi <= top + 1e-9:
+                raise ValueError(f"H bounds must satisfy 0 < low < high <= {top:.4f} mm (the top horizontal section)")
+            self.settings["h_min"], self.settings["h_max"] = lo, min(hi, top)
         elif not lo < hi:
             raise ValueError("the lower bound must be below the upper one")
         if re.search(r"\.d\d+$", name) and not 0.0 <= lo < hi <= 1.0:
@@ -205,7 +211,7 @@ class RudderAdapter:
     def row_info(self, name):
         """Where a variable's control point sits (height, mm)."""
         if name == "H":
-            return ""
+            return f"max {self.settings['z_top']:.1f}"
         curve, slot = name.split(".")
         cd = self.design.curves[curve]
         k = int(slot.lstrip("dxv"))
@@ -218,8 +224,9 @@ class RudderAdapter:
     # ---------------------------------------------------------------- preview
     def preview(self, skeleton=False):
         """What the live views draw: the pinned design, its problems, the
-        curves, the sections at the root, H / 2 and H, and (skeleton=True)
-        the loops of the 3D view."""
+        curves, N_VIEW sections from the root to H, the tracks of the section
+        control points along the span, and (skeleton=True) the loops of the
+        3D sections tab."""
         t0 = time.time()
         d = self.design
         s = self.settings
@@ -227,14 +234,31 @@ class RudderAdapter:
         yy = np.linspace(0.0, d.H, 160)
         curves = {c: d.curve(c).at(yy)[:, 1] for c in self.names}
         try:
-            sections = RM.build_sections(d, self.orig, [0.0, 0.5 * d.H, d.H], s["num_pts"], s["te_radius_mm"])
+            sections = RM.build_sections(d, self.orig, np.linspace(0.0, d.H, N_VIEW), s["num_pts"],
+                                         s["te_radius_mm"])
         except ValueError as exc:
             sections = str(exc)
-        out = {"design": d, "problems": problems, "yy": yy, "curves": curves, "sections": sections}
+        out = {"design": d, "problems": problems, "yy": yy, "curves": curves, "sections": sections,
+               "tracks": self.tracks(d)}
         if skeleton:
             out["skeleton"] = self.skeleton(problems)
         out["seconds"] = time.time() - t0
         return out
+
+    def tracks(self, d, n=25):
+        """Where each section control point P0 .. Pn sits along the span, at n
+        heights from the root to H: (n, degree + 1, 3) as x, z (thickness) and
+        y, mm (the polygon scaled by the sharp chord, from the LE)."""
+        ys = np.linspace(0.0, d.H, n)
+        val = RM.curve_values(d, ys)
+        ctrl = BS.polygon_from_values(val, d.degree)
+        chord = self.orig.x_te(ys) - val["LE"]
+        try:
+            cs = BS.sharp_chord(ctrl, chord, self.settings["te_radius_mm"])[0]
+        except (ValueError, RuntimeError):
+            cs = chord                                 # a design with problems: close enough to draw
+        x = val["LE"][:, None] + ctrl[:, :, 0] * cs[:, None]
+        return np.stack((x, ctrl[:, :, 1] * cs[:, None], np.repeat(ys[:, None], d.degree + 1, axis=1)), axis=2)
 
     def skeleton(self, problems=None):
         """The loops of the 3D view, working frame (mm): 'modified' (the
@@ -250,9 +274,8 @@ class RudderAdapter:
             secs = RM.modified_sections(d, self.orig, s["n_sections"], s["num_pts"], s["te_radius_mm"])
             mod = [sec.loop() for sec in secs]
         gap = d.H / (s["n_sections"] - 1) if s["gap_mm"] is None else float(s["gap_mm"])
-        kept = [lp for lp in self.loops0 if lp[:, 1].min() >= d.H + gap - 1e-9]
-        flat = [lp for lp in kept if np.ptp(lp[:, 1]) < 1e-9]
-        tip = [lp for lp in kept if np.ptp(lp[:, 1]) >= 1e-9]
+        flat = [lp for lp in self.loops0 if np.ptp(lp[:, 1]) < 1e-9 and lp[0, 1] >= d.H + gap - 1e-9]
+        tip = [lp for lp in self.loops0 if np.ptp(lp[:, 1]) >= 1e-9 and lp[:, 1].min() >= d.H - 1e-9]
         step = max(1, int(np.ceil(len(flat) / SKELETON_UNCHANGED)))
         flat = flat[::step] + ([flat[-1]] if flat and (len(flat) - 1) % step else [])
         if not mod:
@@ -276,27 +299,38 @@ class RudderAdapter:
         fixed = {n: self.values[n] for n in self.space.all_names if not self.meta[n]["free"]}
         return RM.DesignSpace(self.orig, self.orders, self.join,
                               bounds={n: (self.meta[n]["lo"], self.meta[n]["hi"]) for n in self.space.all_names},
-                              h_min=self.settings["h_min"], fixed=fixed)
+                              h_min=self.settings["h_min"], h_max=self.settings["h_max"], fixed=fixed)
 
     def space_record(self):
+        """The set-up as plain data: the design space (every variable with its
+        value, bounds and free flag, the curves' orders and joins, the section
+        degree), the settings and the input files. rudder_modify.
+        load_design_space reads it back for the optimiser."""
         return {"geometry": "rudder", "written": time.strftime("%d %b %Y %H:%M"),
                 "settings": dict(self.settings), "files": dict(self.files),
                 "space": self.free_space().to_dict(self.design)}
 
+    def save_space(self, path):
+        """Write space_record() as JSON."""
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "w") as fh:
+            json.dump(self.space_record(), fh, indent=1)
+        return path
+
     def load_space(self, path):
-        """Start from a design space written by an XCAD run (<case>_design_space.json)."""
+        """Start from a saved set-up (<case>_design_space.json)."""
         with open(path) as fh:
             rec = json.load(fh)
         if rec.get("geometry") != "rudder":
             raise ValueError(f"{path} is not a rudder design space")
-        for k in ("n_sections", "te_radius_mm", "h_min"):
+        for k in ("n_sections", "te_radius_mm"):
             if k in rec.get("settings", {}):
                 self.settings[k] = rec["settings"][k]
         space, design = RM.DesignSpace.from_dict(self.orig, rec["space"])
         self.orig = space.orig
         self.orders, self.join, self.design = dict(space.orders), dict(space.join), design
         self.meta = {q["name"]: {"lo": q["lo"], "hi": q["hi"], "free": q["free"]} for q in rec["space"]["slots"]}
-        self.settings["h_min"] = self.meta["H"]["lo"]
+        self.settings["h_min"], self.settings["h_max"] = self.meta["H"]["lo"], self.meta["H"]["hi"]
         self._rebuild()
 
     def xcad_task(self, case, plot=None, cad=True):
@@ -317,7 +351,7 @@ class RudderAdapter:
             t0 = time.time()
             res = RM.write_case(out_dir, case, design, orig, xcad0, s["n_sections"], s["num_pts"],
                                 s["te_radius_mm"], s["gap_mm"], s["xcad_units"], stack=stack, plot=plot,
-                                space=space, h_min=s["h_min"])
+                                space=space, h_min=s["h_min"], h_max=s["h_max"])
             path = os.path.join(out_dir, f"{case}_design_space.json")
             with open(path, "w") as fh:
                 json.dump(copy.deepcopy(record), fh, indent=1)
@@ -342,21 +376,26 @@ class RudderAdapter:
 
 
 class RudderViews:
-    """The Design tab: planform, the selected curve, and the sections at the
-    root, H / 2 and H with their control points (labelled P0 .. Pn)."""
+    """The Design tab: planform, the selected curve, and in 3D the sections
+    from the root to H with their control polygons (labelled P0 .. Pn) and the
+    track of each control point along the span."""
 
     def __init__(self, adapter, fig):
         self.a = adapter
         self.fig = fig
-        gs = fig.add_gridspec(2, 2, width_ratios=[1.0, 1.0], height_ratios=[1.35, 1.0], wspace=0.22, hspace=0.3,
-                              left=0.07, right=0.98, top=0.95, bottom=0.07)
+        gs = fig.add_gridspec(2, 2, width_ratios=[1.0, 1.0], height_ratios=[1.0, 1.3], wspace=0.22, hspace=0.38,
+                              left=0.09, right=0.98, top=0.95, bottom=0.03)
         self.ax_plan = fig.add_subplot(gs[0, 0])
         self.ax_curve = fig.add_subplot(gs[0, 1])
-        self.ax_sec = fig.add_subplot(gs[1, :])
-        for ax in (self.ax_plan, self.ax_curve, self.ax_sec):
+        self.ax_sec = fig.add_subplot(gs[1, :], projection="3d")
+        self.ax_sec.view_init(elev=28, azim=-58)
+        self.box = None                                      # the 3D box's aspect, set when drawn
+        fig.canvas.mpl_connect("motion_notify_event", self._on_turn)
+        fig.canvas.mpl_connect("resize_event", lambda event: self._fit_box())
+        for ax in (self.ax_plan, self.ax_curve):
             ax.grid(True, color=GRID, lw=0.6)
         o = adapter.orig
-        m = o.y_rows <= min(o.y_rows.max(), 1.3 * o.z_opt)
+        m = o.y_rows <= o.z_top + 1e-9
         ax = self.ax_plan
         ax.plot(o.x_le_rows[m], o.y_rows[m], "--", color=INK2, lw=1, label="original LE")
         ax.plot(o.x_te_rows[m], o.y_rows[m], "-", color=INK2, lw=1, label="TE line (kept)")
@@ -364,7 +403,7 @@ class RudderViews:
         self.le_line, = ax.plot([], [], "-", color=BLUE, lw=2.0, label="LE")
         self.le_poly, = ax.plot([], [], "o--", color=BLUE, lw=0.8, ms=5, mfc="white")
         self.h_line = ax.axhline(0.0, color=RED, ls=":", lw=1)
-        ax.axhline(o.z_opt, color=INK2, ls="-.", lw=0.8)
+        self.bound_lines = [ax.axhline(0.0, color=INK2, ls="-.", lw=0.8) for _ in range(2)]   # h_min, h_max
         self.h_text = ax.text(0.99, 0.0, "H", transform=ax.get_yaxis_transform(), ha="right", va="bottom",
                               color=RED, fontsize=8)
         self.prob_text = ax.text(0.02, 0.98, "", transform=ax.transAxes, va="top", ha="left", color=RED, fontsize=8)
@@ -386,19 +425,6 @@ class RudderViews:
         self.c_h = ax.axhline(0.0, color=RED, ls=":", lw=1)
         ax.set_ylabel("y (mm)")
         ax.legend(loc="best", fontsize=7)
-
-        ax = self.ax_sec
-        self.s_new = [ax.plot([], [], "-", color=c, lw=1.6, label=lab)[0]
-                      for c, lab in zip((BLUE, ORANGE, AQUA), ("root", "H / 2", "H"))]
-        self.s_old = [ax.plot([], [], "--", color=c, lw=0.8)[0] for c in (BLUE, ORANGE, AQUA)]
-        self.s_poly = [ax.plot([], [], "o:", color=c, lw=0.8, ms=4, mfc="white")[0] for c in (BLUE, ORANGE, AQUA)]
-        self.s_pick, = ax.plot([], [], "o", color=RED, ms=11, mfc="none", mew=2)
-        self.s_labels = []
-        self.s_arrow = None
-        self.s_note = ax.text(0.01, 0.97, "", transform=ax.transAxes, va="top", ha="left", color=RED, fontsize=8)
-        ax.legend(loc="upper right", fontsize=7)
-        ax.set_xlabel("x (mm)")
-        ax.set_ylabel("z (mm)")
 
     def _points(self, d, curve):
         """The curve's control points split into free / held / pinned, as (y, value)."""
@@ -427,20 +453,23 @@ class RudderViews:
         self.h_line.set_ydata([d.H, d.H])
         self.h_text.set_position((0.99, d.H))
         self.h_text.set_text(f"H = {d.H:.1f}")
+        for ln, key in zip(self.bound_lines, ("h_min", "h_max")):
+            ln.set_ydata([a.settings[key]] * 2)
         self.prob_text.set_text("\n".join(p[:90] for p in pv["problems"][:4]))
         self.ax_plan.relim()
         self.ax_plan.autoscale_view()
         # the selected curve
         ax = self.ax_curve
+        top = a.settings["h_max"]                            # the curve plot shows heights up to h_max
         if curve == "LE":
-            keep = o.y_rows <= o.z_opt
+            keep = o.y_rows <= top
             self.c_data.set_data(o.x_le_rows[keep], o.y_rows[keep])
             self.c_orig.set_data([], [])
             ax.set_xlabel("x of the LE (mm)")
         else:
             yd, vd = o.data[curve]
-            self.c_data.set_data(vd, yd)
-            yz = np.linspace(0.0, o.z_opt, 160)
+            self.c_data.set_data(vd[yd <= top], yd[yd <= top])
+            yz = np.linspace(0.0, top, 160)
             self.c_orig.set_data(o.value(curve, yz), yz)
             ax.set_xlabel(f"{curve[-1]} of P{curve[1:-1]} (fraction of the sharp chord)")
         self.c_new.set_data(cv[curve], yy)
@@ -458,54 +487,117 @@ class RudderViews:
         shown = np.concatenate([ln.get_xdata() for ln in (self.c_data, self.c_orig, self.c_new, self.c_poly)
                                 if len(ln.get_xdata())])
         lo, hi = float(shown.min()), float(shown.max())
-        pad = 0.08 * (hi - lo) if hi - lo > 1e-6 * max(abs(hi), 1e-3) else 1e-3 * max(abs(hi), 1e-3)
+        pad = max(0.08 * (hi - lo), 0.5 if curve == "LE" else 0.005)    # a flat curve still gets a readable range
         ax.set_xlim(lo - pad, hi + pad)
-        ax.set_ylim(-0.03 * o.z_opt, 1.05 * o.z_opt)
+        ax.set_ylim(-0.03 * top, 1.05 * top)
         ax.ticklabel_format(axis="x", useOffset=False)
-        # sections, their control polygons, the selected coordinate
-        ax = self.ax_sec
-        for t in self.s_labels:
-            t.remove()
-        self.s_labels = []
-        if self.s_arrow is not None:
-            self.s_arrow.remove()
-            self.s_arrow = None
+        self._draw_sections(pv, curve)
+
+    def _draw_sections(self, pv, curve):
+        """The 3D panel: N_VIEW sections at their heights (dashed grey: the
+        original there), each with its control polygon; the track of every
+        control point along the span (grey), the one being edited in red with
+        its position on each section and a bar along the coordinate (x or z)
+        at the root."""
+        ax, a, d = self.ax_sec, self.a, pv["design"]
+        elev, azim, roll = ax.elev, ax.azim, ax.roll
+        ax.cla()
+        ax.view_init(elev=elev, azim=azim, roll=roll)
+        ax.tick_params(labelsize=8)
+        sel = 0 if curve == "LE" else int(curve[1:-1])
+        tracks = pv["tracks"]
+        from matplotlib.ticker import MaxNLocator
+        for i in range(tracks.shape[1]):
+            t = tracks[:, i]
+            ax.plot(t[:, 0], t[:, 1], t[:, 2], color=RED if i == sel else GREY, lw=2.2 if i == sel else 0.8)
+        pts = [tracks.reshape(-1, 3)]
         secs = pv["sections"]
         if isinstance(secs, str):
-            for ln in self.s_new + self.s_poly:
-                ln.set_data([], [])
-            self.s_pick.set_data([], [])
-            self.s_note.set_text(secs[:160])
+            ax.text2D(0.01, 0.97, secs[:150], transform=ax.transAxes, color=RED, fontsize=8, va="top")
         else:
-            self.s_note.set_text("")
-            for k, sec in enumerate(secs):
-                self.s_new[k].set_data(sec.x_le + sec.selig[:, 0], sec.selig[:, 1])
-                self.s_poly[k].set_data(sec.x_le + sec.ctrl[:, 0] * sec.cs, sec.ctrl[:, 1] * sec.cs)
+            for sec, col in zip(secs, SECTION_COLORS):
+                lp = sec.loop()                                   # working frame: x, y height, z
+                ax.plot(lp[:, 0], lp[:, 2], lp[:, 1], color=col, lw=1.5)
+                x_le_o, xy_o = RM.original_section_at(a.stack, sec.y)
+                orig_pts = np.column_stack((x_le_o + xy_o[:, 0], xy_o[:, 1], np.full(len(xy_o), sec.y)))
+                ax.plot(orig_pts[:, 0], orig_pts[:, 1], orig_pts[:, 2], "--", color=GREY, lw=0.7)
+                pts.append(orig_pts)
+                cp = np.column_stack((sec.x_le + sec.ctrl[:, 0] * sec.cs, sec.ctrl[:, 1] * sec.cs))
+                ax.plot(cp[:, 0], cp[:, 1], np.full(len(cp), sec.y), "o:", color=col, lw=0.9, ms=3.5, mfc="white")
+                ax.plot([cp[sel, 0]], [cp[sel, 1]], [sec.y], "o", color=RED, ms=6)
+                pts.append(np.column_stack((lp[:, 0], lp[:, 2], lp[:, 1])))
             root = secs[0]
             cp = np.column_stack((root.x_le + root.ctrl[:, 0] * root.cs, root.ctrl[:, 1] * root.cs))
             for i, (x, z) in enumerate(cp):
-                self.s_labels.append(ax.annotate(f"P{i}", (x, z), textcoords="offset points", xytext=(-4, 7),
-                                                 fontsize=9, color=BLUE, ha="right"))
-            if curve == "LE":
-                self.s_pick.set_data([cp[0, 0]], [cp[0, 1]])
-                self.s_arrow = ax.annotate("", xy=(cp[0, 0] - 8.0, 0.0), xytext=(cp[0, 0] + 8.0, 0.0),
-                                           arrowprops=dict(arrowstyle="<->", color=RED, lw=1.5))
+                ax.text(x, z + 1.5, root.y, f"P{i}", color=RED if i == sel else BLUE, fontsize=9)
+            x, z = cp[sel]
+            if curve == "LE" or curve.endswith("x"):
+                bar = np.array([[x - 10.0, z, root.y], [x + 10.0, z, root.y]])
             else:
-                i = int(curve[1:-1])
-                x, z = cp[i]
-                self.s_pick.set_data([x], [z])
-                dx, dz = (8.0, 0.0) if curve.endswith("x") else (0.0, 5.0)
-                self.s_arrow = ax.annotate("", xy=(x - dx, z - dz), xytext=(x + dx, z + dz),
-                                           arrowprops=dict(arrowstyle="<->", color=RED, lw=1.5))
-        for k, y in enumerate((0.0, 0.5 * d.H, d.H)):
-            x_le_o, xy_o = RM.original_section_at(a.stack, y)
-            self.s_old[k].set_data(x_le_o + xy_o[:, 0], xy_o[:, 1])
-        ax.set_title(f"sections at y = 0, {d.H / 2:.1f}, {d.H:.1f} mm (dashed: original), control points "
-                     f"P0 .. P{d.degree} of the root section labelled; red: the coordinate being edited",
-                     loc="left", fontsize=9)
-        ax.relim()
-        ax.autoscale_view()
-        ax.set_aspect("equal", adjustable="datalim")
+                bar = np.array([[x, z - 6.0, root.y], [x, z + 6.0, root.y]])
+            ax.plot(bar[:, 0], bar[:, 1], bar[:, 2], color=RED, lw=3)
+            pts.append(bar)
+        # 3D lines are not clipped: the limits take in everything drawn, and the box is fitted to the panel
+        p = np.vstack(pts)
+        lo, hi = p.min(axis=0), p.max(axis=0)
+        pad = 0.03 * (hi - lo)
+        lo, hi = lo - pad, hi + pad
+        ax.set_xlim(lo[0], hi[0])
+        ax.set_ylim(lo[1], hi[1])
+        ax.set_zlim(lo[2], hi[2])
+        self.box = np.maximum(hi - lo, 1e-9) * [1.0, Z_STRETCH, 1.0]
+        self._fit_box()
+        ax.yaxis.set_major_locator(MaxNLocator(4))
+        ax.set_xlabel("x (mm)")
+        ax.set_ylabel(f"z (mm, x{Z_STRETCH:g})")
+        ax.set_zlabel("y (mm)")
+        what = "LE x" if curve == "LE" else f"P{sel} {curve[-1]}"
+        ax.set_title(f"sections 0 .. H with control polygons P0 .. P{d.degree} (dashed: the original)\n"
+                     f"grey: each control point along the span, red: {what}; thickness x{Z_STRETCH:g}, drag to turn",
+                     fontsize=9)
+
+    def _fit_box(self):
+        """Fit the 3D box and its labels to the panel at the current angle: zoom
+        so that they fill it, and shift the view so that they sit in its middle.
+        mplot3d puts the tick and axis labels outside the box by a fraction of
+        its size (at the sides, and below the box when seen from above), so the
+        box grown by that fraction, plus room for the text, has to fit."""
+        if self.box is None:
+            return
+        from mpl_toolkits.mplot3d import proj3d
+        ax, dpi = self.ax_sec, self.fig.dpi
+        ax.apply_aspect()
+        panel, square, view = ax.get_position(original=True).transformed(self.fig.transFigure), ax.bbox, ax.viewLim
+        lims = np.array([ax.get_xlim(), ax.get_ylim(), ax.get_zlim()])
+        grow = 1.33 * dpi / (square.width + square.height) * np.diff(lims, axis=1) * [-1.0, 1.0]   # the labels' offset
+        boxes = [np.array(np.meshgrid(*b)).reshape(3, -1) for b in (lims, lims + 0.5 * grow, lims + grow)]
+        text, gap = 0.25 * dpi, 0.1 * dpi
+        top = min(panel.y1, square.y1)                            # the title is above the square
+        x0, x1, y0, y1 = panel.x0 + text, panel.x1 - text, panel.y0 + text, top - gap
+        if ax.elev < 0.0:                                         # seen from below, the labels are above the box
+            y0, y1 = panel.y0 + gap, top - text
+        px = square.width / view.width                            # px per unit of the projection, in x and y
+        zoom = 1.0
+        for _ in range(3):                                        # the perspective is not quite linear in the zoom
+            ax.set_box_aspect(self.box, zoom=zoom)
+            (u, v), (_, v_half), (u_out, _) = (proj3d.proj_transform(*b, ax.get_proj())[:2] for b in boxes)
+            lo, hi = (v_half.min(), v.max()) if ax.elev >= 0.0 else (v.min(), v_half.max())
+            fit = min((x1 - x0) / (np.ptp(u_out) * px), (y1 - y0) / ((hi - lo) * px))
+            zoom = float(np.clip(zoom * fit, 0.3, 3.0))
+        ax.set_box_aspect(self.box, zoom=zoom)
+        (u, v), (_, v_half), (u_out, _) = (proj3d.proj_transform(*b, ax.get_proj())[:2] for b in boxes)
+        lo, hi = (v_half.min(), v.max()) if ax.elev >= 0.0 else (v.min(), v_half.max())
+        mid_u, mid_v = 0.5 * (u_out.min() + u_out.max()), 0.5 * (lo + hi)
+        fx = (0.5 * (x0 + x1) - square.x0) / square.width        # where the middle goes, as a fraction of the square
+        fy = (0.5 * (y0 + y1) - square.y0) / square.height
+        w, h = view.width, view.height
+        view.intervalx = (mid_u - fx * w, mid_u + (1.0 - fx) * w)
+        view.intervaly = (mid_v - fy * h, mid_v + (1.0 - fy) * h)
+
+    def _on_turn(self, event):
+        """While the 3D panel is turned with the mouse, keep the box fitted."""
+        if self.ax_sec.button_pressed == 1:
+            self._fit_box()
 
 
 class SkeletonView:

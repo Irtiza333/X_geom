@@ -267,7 +267,7 @@ def test_original_and_designs(p):
           [np.abs(orig.value("P1x", yy)).max(), *(np.abs(orig.value(c, yy) - LAW_TRUE[t](yy)).max()
                                                  for c, t in SECTION.items())], 0.0, 1e-7)
     check("TE line from the rows", orig.x_te(yy), x_te_true(yy), 1e-10)
-    raises("a height above Z_opt raises", lambda: orig.value("P1z", [Z_OPT + 1.0]))
+    raises("a height above z_top raises", lambda: orig.value("P1z", [Z_OPT + 1.0]))
     raises("a degree below the table's quartics raises", lambda: orig.at_degree(3))
 
     base = RM.baseline_design(orig, Z_OPT)
@@ -318,15 +318,17 @@ def test_original_and_designs(p):
     bad = base.copy()
     bad.curves["LE"].v[-1] = 400.0
     raises("an LE behind the TE raises", lambda: RM.modified_sections(bad, orig, 10))
-    raises("H above Z_opt raises", lambda: RM.pin(RM.Design(Z_OPT + 5.0, base.curves), orig))
+    raises("H above z_top raises", lambda: RM.pin(RM.Design(Z_OPT + 5.0, base.curves), orig))
     bad = base.copy()
     bad.curves["P3z"].s = np.array([1.0, 0.2, 0.6, 0.0])
     raises("control heights rising towards the root raise", lambda: RM.pin(bad, orig))
 
     space = RM.DesignSpace(orig)
-    check("H bounds: [h_min, Z_opt], a quarter of Z_opt when h_min is not given",
-          [*RM.DesignSpace(orig, h_min=30.0).bounds[0], *space.bounds[0]], [30.0, Z_OPT, Z_OPT / 4, Z_OPT], 0.0)
-    raises("h_min above Z_opt raises", lambda: RM.DesignSpace(orig, h_min=Z_OPT + 1.0))
+    check("H bounds: [h_min, h_max], by default a quarter of z_top and z_top; h_max below z_top",
+          [*RM.DesignSpace(orig, h_min=30.0).bounds[0], *space.bounds[0], *RM.DesignSpace(orig, h_max=60.0).bounds[0]],
+          [30.0, Z_OPT, Z_OPT / 4, Z_OPT, 15.0, 60.0], 0.0)
+    raises("h_min above z_top raises", lambda: RM.DesignSpace(orig, h_min=Z_OPT + 1.0))
+    raises("h_max above z_top raises", lambda: RM.DesignSpace(orig, h_min=20.0, h_max=Z_OPT + 1.0))
     x0 = space.to_vector(base)
     check("design vector: 29 entries for order 3, G1 (H, then 4 per curve: LE and P1x .. P3z)",
           [len(space), space.bounds.shape[0]], [29, 29], 0)
@@ -415,6 +417,11 @@ def test_xcad_and_writers(p, orig, base, secs):
         low = RM.baseline_design(orig, 15.0)
         raises("write_case refuses an H below h_min",
                lambda: RM.write_case(tmp, "low", low, orig, p["xcad"], 10, 200, R_TE, plot=False, h_min=20.0))
+        raises("write_case refuses an H above h_max",
+               lambda: RM.write_case(tmp, "high", base, orig, p["xcad"], 10, 200, R_TE, plot=False, h_max=60.0))
+        k_top = RM.kept_loops(loops, 149.0, 5.0)
+        check("kept_loops: horizontal loops from H + gap up, the tilted cap loops from H up",
+              [len(k_top), all(np.ptp(loops[k][1][:, 2]) > 0 for k in k_top)], [2, 1], 0)
         out = RM.read_xcad(res["paths"]["xcad"])
         gap = Z_OPT / 49
         kept = [k for k, (_, pts) in enumerate(loops) if pts[:, 2].min() * 1e3 >= Z_OPT + gap - 1e-9]
@@ -509,6 +516,19 @@ def test_real():
         mine = (RM.xcad_loop(s.xy, s.x_le, s.y) @ RM.XCAD_FRAME.T) * 1e-3
         dev = max(dev, np.abs(mine - loops[k][1]).max())
     check("stack sections as XCAD loops = the extraction's loops (m)", dev, 0.0, 1.01e-8)
+    full = os.path.join(HERE, "outputs/thickness_params_y0_y200_info.dat")
+    if os.path.exists(full):
+        of = RM.fit_original(paths["corner"], full)
+        top_sec = max(s.y for s in stack if s.tilt_deg == 0.0)
+        sf = RM.modified_sections(RM.baseline_design(of, of.z_top), of, 60, 200, 0.75)
+        gf = max(RM.distance_to_original(s, stack).max() for s in sf)
+        with tempfile.TemporaryDirectory() as tmp:
+            xf = RM.write_modified_xcad(os.path.join(tmp, "x.dat"), sf, paths["xcad"], of.z_top)
+        print(f"       whole stack: H = z_top = {of.z_top:.4f} mm, largest distance {gf * 1e3:.1f} um")
+        check("whole-stack original: z_top the top horizontal section; H = z_top within 0.2 mm; tip and cap kept",
+              [of.z_top - top_sec, gf < 0.2, len(xf["kept"])], [0, 1, 11], 1e-6)   # the stack header has 6 decimals
+    else:
+        print("       (outputs/thickness_params_y0_y200_info.dat not here: whole-stack check skipped)")
     rows = RM.fit_section_table(paths["stack"], 0.5, verbose=False)
     check("fit_section_table: the root section as in the table",
           [rows[0][c] - table[c][0] for c in ("X1", "X2", "T1", "T2", "r")], 0.0, 1e-6)

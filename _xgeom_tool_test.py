@@ -116,8 +116,18 @@ def test_adapter():
         check("off the tangent frees the value of C1", "P2z.v1" in [r.name for r in ad.curve_rows("P2z") if r.kind == "var"],
               1, 0)
         ad.set("P2z.v5", 0.085)
-        ad.set_bounds("H", 40.0, 80.0)
+        ad.set_bounds("H", 40.0, 150.0)
+        ad.set("H", 150.0)
         sk = ad.skeleton()
+        tip = [lp for lp in sk["unchanged"] if np.ptp(lp[:, 1]) > 1e-9]
+        check("H bounds 40 .. 150: H = 150 builds; the 3D view keeps the tip section and the 10 cap loops",
+              [len(ad.preview()["problems"]), ad.get("H"), len(tip)], [0, 150.0, 11], 1e-9)
+        try:
+            ad.set_bounds("H", 40.0, 250.0)
+            refused = False
+        except ValueError:
+            refused = True
+        check("an H bound above the top horizontal section is refused", [refused, ad.bounds("H")[1]], [1, 150.0], 0)
         check("3D view: 49 modified sections + the cut at H, 70 .. 200 loops in all",
               [len(sk["modified"]), len(sk["cut"]), 70 <= sum(len(v) for v in sk.values()) <= 200], [49, 1, 1], 0)
         secs_before = RM.modified_sections(ad.design, ad.orig, 30)
@@ -144,9 +154,16 @@ def test_adapter():
             before = dict(ad.values)
             ad2 = XR.RudderAdapter()
             ad2.load_space(res["case"]["paths"]["space"])
-            check("the design space JSON read back: degree, values, free flags, H_min",
+            check("the design space JSON read back: degree, values, free flags, H bounds",
                   [ad2.degree, max(abs(ad2.values[k] - before[k]) for k in before), ad2.is_free("P3x.v2"),
-                   ad2.settings["h_min"], ad2.n_free()[0] == n_free], [5, 0, 0, 40.0, 1], 1e-12)
+                   ad2.settings["h_min"], ad2.settings["h_max"], ad2.n_free()[0] == n_free], [5, 0, 0, 40.0, 150.0, 1],
+                  1e-12)
+            setup = ad.save_space(os.path.join(tmp, "setup.json"))
+            space3, design3, _ = RM.load_design_space(setup)
+            check("Save set-up, then rudder_modify.load_design_space: the same free variables, values, bounds",
+                  [space3.names == ad.free_space().names,
+                   np.abs(space3.to_vector(design3) - ad.free_space().to_vector(ad.design)).max(),
+                   np.abs(space3.bounds - ad.free_space().bounds).max()], [1, 0, 0], 1e-12)
             space = ad2.free_space()
             check("the optimiser's space leaves the held slots out", ["P3x.v2" in space.names, len(space)],
                   [0, n_free], 0)

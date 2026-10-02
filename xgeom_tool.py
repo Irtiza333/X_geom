@@ -7,18 +7,19 @@ OCC viewer shows the solid.
 
     python xgeom_tool.py                    the rudder (the only geometry so far)
     python xgeom_tool.py rudder --space outputs/modified/gui_design_space.json
-                                            start from a design space an XCAD run wrote
+                                            start from a saved set-up
 
 Left panel
-    H         the height of the modified region; its low bound is H_min.
+    H         the height of the modified region, between its low and high
+              bounds (h_min, h_max); h_max can go up to the top horizontal section
+              of the stack (z_full - d, shown under 'where').
     Section control points
               the number of control points of the section's Bezier half-
               section, P0 .. Pn (P0 = (0, 0) the LE and Pn = (1, 0) the sharp TE
               stay put; adding one keeps the shape and adds that point's x and z
               curves). Pick the LE or the x or z of an inner point to edit the
-              spanwise curve it follows; the number in brackets is how many of
-              that curve's variables are free. P1 x is held at 0 by default
-              (a round LE).
+              spanwise curve it follows; "held" marks a curve with no free
+              variable. P1 x is held at 0 by default (a round LE).
     Curve     the picked curve's control points C0 .. Cm, from H (C0, pinned to
               the original) down to the root (Cm); how many there are; whether
               C1 sits on the original's tangent at H (slope matched).
@@ -29,12 +30,17 @@ Left panel
       dx      LE control point: x offset from the original LE, mm (negative forward)
       value   a section coordinate, fraction of the sharp chord
 Right panel
-    Design       planform, the picked curve against the original, and the
-                 sections at the root, H / 2 and H with their control points.
+    Design       planform, the picked curve against the original, and in 3D
+                 five sections from the root to H with their control polygons
+                 and each control point's track along the span (drag to turn).
     3D sections  the whole rudder as its sections: modified (blue), the cut at H
                  (red), unchanged (grey); drag to turn it.
+Save set-up writes the design space as it stands (every variable with its value,
+bounds and free flag, each curve's control points and order, the section degree,
+the H bounds, the settings and input files) to <output folder>/<case>_design_space.json;
+rudder_modify.load_design_space reads it for the optimiser, --space for the tool.
 XCAD writes the case to the output folder (XCAD file, section table, design and
-design-space JSON), lofts the XCAD file into a solid and writes it as STEP.
+the same set-up JSON), lofts the XCAD file into a solid and writes it as STEP.
 OCC viewer opens the last STEP (needs pythonocc-core).
 
 Other geometries plug in as adapters with the methods of
@@ -112,7 +118,6 @@ class VarRow:
                     e.insert(0, f"{x:.{self.digits}f}")
             self.info.configure(text=ad.row_info(self.name))
             self.label.configure(foreground="black" if self.free.get() else INK2)
-            self.hi.configure(state="disabled" if self.name == "H" else "normal")
         finally:
             self._busy = False
 
@@ -139,7 +144,8 @@ class VarRow:
 
     def on_free(self):
         self.app.ad.set_free(self.name, self.free.get())
-        self.app.after_change(views=False)
+        self.app.refresh_labels()
+        self.app.schedule_update()
 
 
 class App:
@@ -199,7 +205,7 @@ class App:
         case = self.case.get() if hasattr(self, "case") else "gui"
         for w in self.panel.winfo_children():
             w.destroy()
-        self.rows = []
+        self.rows, self.picks = [], {}
         ad = self.ad
         ttk.Label(self.panel, text=ad.title, font=("TkDefaultFont", 11, "bold")).pack(anchor="w", padx=6, pady=(6, 0))
         self.free_label = ttk.Label(self.panel, text="", foreground=INK2)
@@ -272,15 +278,16 @@ class App:
         self.case = ttk.Entry(row, width=16)
         self.case.insert(0, case)
         self.case.pack(side="left")
+        ttk.Button(row, text="Save set-up", command=self.on_save).pack(side="left", padx=(6, 0))
         self.xcad_btn = ttk.Button(row, text="XCAD", command=self.on_xcad, width=8)
         self.xcad_btn.pack(side="left", padx=6)
         ttk.Button(row, text="OCC viewer", command=self.open_occ_viewer).pack(side="left")
         self.refresh_labels()
 
     def _pick(self, parent, r, c, name, text):
-        n, m = self.ad.n_free(name)
-        ttk.Radiobutton(parent, text=f"{text} ({n})", value=name, variable=self.curve,
-                        command=self.on_curve).grid(row=r, column=c, sticky="w", padx=4)
+        rb = ttk.Radiobutton(parent, text=text, value=name, variable=self.curve, command=self.on_curve)
+        rb.grid(row=r, column=c, sticky="w", padx=4)
+        self.picks[name] = (rb, text)
 
     @staticmethod
     def _header(parent):
@@ -289,8 +296,11 @@ class App:
 
     def refresh_labels(self):
         n, m = self.ad.n_free()
-        self.free_label.configure(text=f"{n} of {m} variables free; H {self.ad.design.H:.2f} mm, sections of "
-                                       f"degree {self.ad.degree}")
+        st = self.ad.settings
+        self.free_label.configure(text=f"{n} of {m} variables free; H {self.ad.design.H:.2f} mm in [{st['h_min']:g}, "
+                                       f"{st['h_max']:g}]; sections of degree {self.ad.degree}")
+        for name, (rb, text) in self.picks.items():                 # "held": no free variable on that curve
+            rb.configure(text=text + ("  (held)" if self.ad.n_free(name)[0] == 0 else ""))
         texts = [s.text for s in self.ad.curve_rows(self.curve.get()) if s.kind == "pinned"]
         for lab, t in zip(self.pinned, texts):
             lab.configure(text=t)
@@ -421,6 +431,12 @@ class App:
             msg += (f", {os.path.basename(self.step)} (solid {'valid' if lr.valid else 'NOT valid'}, "
                     f"{lr.volume / 1e3:.2f} cm^3); OCC viewer shows it")
         self.say(msg + (f"; {res['cad_error']}" if res.get("cad_error") else ""), error=bool(res.get("cad_error")))
+
+    def on_save(self):
+        case = self.case.get().strip() or "gui"
+        path = self.guard(lambda: self.ad.save_space(os.path.join(self.ad.out_dir, f"{case}_design_space.json")))
+        if path:
+            self.say(f"set-up saved: {os.path.abspath(path)}")
 
     def open_occ_viewer(self):
         if not self.step:
