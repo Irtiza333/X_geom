@@ -47,7 +47,12 @@ AIRFOIL_DATA_PATH = ROOT / "airfoil_data_fixed.csv"
 
 # Geometry constants shared with para.py
 PROP_DIAMETER = 1.4          # d in para.py
-R_ROOT_DEFAULT = 0.17        # first radial station of the design
+# First radial station of the design. AUTHORITATIVE VALUE: x_blade_new's
+# R_VALUES[0], which both pipeline constructors now pass in explicitly as
+# r_root. This default only applies to ad-hoc BladeSurface(...) calls, and
+# it must be kept equal to R_VALUES[0]: when it was left at 0.17 after
+# R_VALUES moved to 0.18, the surface and hub silently stayed at 0.17.
+R_ROOT_DEFAULT = 0.18
 TE_STATION_END = 1.005       # para.py appends the closing TE point at X_c = 1.005
 TE_BLEND_START = 0.995       # station where the blunt TE cap begins
 # Chord (per diameter) at which the Sec. 6.2.1.4 fold begins. The fold turns
@@ -130,13 +135,15 @@ class CanonicalSectionFamily:
     """
 
     def __init__(self, max_camber, max_thickness,
-                 te_blend_start=TE_BLEND_START, te_station_end=TE_STATION_END):
+                 te_blend_start=TE_BLEND_START, te_station_end=TE_STATION_END,
+                 airfoil_path=None):
         self.max_camber = max_camber
         self.max_thickness = max_thickness
         self.s_end = float(te_station_end)
         self.s0 = float(te_blend_start)
 
-        table = pd.read_csv(AIRFOIL_DATA_PATH, skiprows=1, header=None).values
+        table = pd.read_csv(AIRFOIL_DATA_PATH if airfoil_path is None else airfoil_path,
+                            skiprows=1, header=None).values
         X_c = table[:, 0]           # stations, 0 (LE) .. 1.0
         y_c = table[:, 1]           # camber distribution (unnormalized)
         der_y = table[:, 2]         # camber-line slope
@@ -349,7 +356,7 @@ class BladeSurface:
                  root_extension=ROOT_EXTENSION,
                  tip_close_start=None, close_chord=CLOSE_CHORD,
                  chord_floor=CHORD_FLOOR, thick_floor=True,
-                 taper_start=TIP_TAPER_START):
+                 taper_start=TIP_TAPER_START, airfoil_path=None):
         self.d = float(d)
         # NOTE on the data end. The property curves used to be interpolators
         # over R_VALUES ending at 0.999, which CLAMPED beyond and kinked the
@@ -378,7 +385,8 @@ class BladeSurface:
 
         # the canonical family must see the SAME floored thickness, since the
         # b() evaluation and the tip closure both build on it
-        self.canon = CanonicalSectionFamily(max_camber, self.MaxThickness)
+        self.canon = CanonicalSectionFamily(max_camber, self.MaxThickness,
+                                            airfoil_path=airfoil_path)
 
 
         # Effective tip radius: if the (Bezier-modified) chord crosses the
@@ -613,7 +621,7 @@ def blade_surface_from_functions(Pitch, ChordLength, MaxCamber=None,
     """Build a BladeSurface using the fixed design polynomials from
     x_blade_new.py for any property not supplied."""
     from x_blade_new import (BASE_MAX_CAMBER, BASE_MAX_THICKNESS,
-                             BASE_SKEW_ANGLE, BASE_RAKE)
+                             BASE_SKEW_ANGLE, BASE_RAKE, R_VALUES)
     return BladeSurface(
         MaxCamber or BASE_MAX_CAMBER,
         Pitch,
@@ -621,4 +629,5 @@ def blade_surface_from_functions(Pitch, ChordLength, MaxCamber=None,
         MaxThickness or BASE_MAX_THICKNESS,
         SkewAngle or BASE_SKEW_ANGLE,
         Rake or BASE_RAKE,
+        r_root=float(R_VALUES[0]),     # root follows the design stations
     )

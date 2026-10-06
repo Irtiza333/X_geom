@@ -62,14 +62,19 @@ def main():
     all_ok &= check("normals finite", bool(np.all(np.isfinite(n))))
 
     # legacy agreement at a mid-blade station (away from TE cap / tip zone)
-    r_chk = 0.656
-    i_sec = int(round((r_chk - 0.17) / 0.018))
+    # Pick the design station nearest r/R 0.656 straight from R_VALUES, so
+    # the section index and its radius cannot disagree when the first
+    # station moves (a hardcoded 0.17 here picked the wrong section once
+    # R_VALUES started at 0.18).
+    from x_blade_new import R_VALUES
+    i_sec = int(np.argmin(np.abs(np.asarray(R_VALUES) - 0.656)))
+    r_chk = float(R_VALUES[i_sec])
     sec = points[i_sec * 53:(i_sec + 1) * 53]
     from scipy.spatial import cKDTree
     xi_d = np.linspace(0, 1, 4000)
     surf = blade.b(xi_d, np.full_like(xi_d, blade.eta_of_r(r_chk)))
     dmax = cKDTree(surf).query(sec)[0].max()
-    all_ok &= check("matches legacy section (r=0.656)", dmax < 5e-4,
+    all_ok &= check(f"matches legacy section (r={r_chk:.3f})", dmax < 5e-4,
                     f"max {dmax*1000:.3f} mm")
 
     print("== Stage 1b: five-surface grids ==")

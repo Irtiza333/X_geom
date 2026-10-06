@@ -16,8 +16,8 @@ import para_control_bez_updated as bezier_constraints
 import para
 from pipeline_config import infill_paths, initial_sampling_paths
 from pipeline_io import append_design_row, clear_file, load_table, save_table, split_case_ids
-from X_CAD import X_CAD
-from x_blade import X_blade
+from X_CAD_new import X_CAD_from_design
+from x_blade_new import X_blade
 
 
 ROOT = Path(__file__).resolve().parent
@@ -28,11 +28,12 @@ INFILL_PATHS = infill_paths()
 # - "existing": read design/control points from EXISTING_CONTROL_POINTS_PATH
 # - "lhs": generate N_GENERATED_BLADES control points with optimized Latin hypercube
 # - "infill": generate CAD for the current infill round's control points
-INPUT_MODE = "infill"
+# - "test": short LHS smoke test of the DRDC CAD path (x_blade_new / X_CAD_new)
+INPUT_MODE = "test"
 
-# In "infill" mode, case ids continue after the previous set so the new geometry
-# does not overwrite earlier geometry (infill5: 143..172 → infill6: 173..204).
-CASE_ID_START = 279
+# In "infill"/"test" mode, case ids start at CASE_ID_START so geometry does not
+# overwrite earlier cases (e.g. test: 1001, 1002, ...).
+CASE_ID_START = 10
 
 EXISTING_CONTROL_POINTS_PATH = PATHS["existing_input"]
 GENERATED_CONTROL_POINTS_PATH = PATHS["generated"]
@@ -41,7 +42,7 @@ INFILL_CONTROL_POINTS_PATH = INFILL_PATHS["control_points"]
 # Per-case CAD timeout (seconds). pythonOCC hangs on some degenerate geometries
 # and cannot be interrupted in-process, so each X_CAD runs in a subprocess that
 # is killed if it exceeds this budget. Set to None to disable the guard.
-CAD_TIMEOUT_S = 240
+CAD_TIMEOUT_S = 2000
 
 if INPUT_MODE == "infill":
     CONTROL_OUTPUT_PATH = INFILL_PATHS["cad_accepted"]
@@ -52,6 +53,14 @@ if INPUT_MODE == "infill":
     # Keep prior outputs so a killed/partial batch can be resumed (cases whose
     # IGES already exists are skipped below).
     RESET_OUTPUT_FILES_DEFAULT = False
+elif INPUT_MODE == "test":
+    CONTROL_OUTPUT_PATH = ROOT / "New_training" / "test_control_points.txt"
+    REJECTED_CONTROL_POINTS_PATH = ROOT / "New_training" / "test_rejected_control_points.txt"
+    PLOT_OUTPUT_PATH = ROOT / "New_training" / "test_pitch_chord_curves.png"
+    GEOMETRY_DIR = ROOT / "geometry" / "test_drdc"
+    GENERATED_CONTROL_POINTS_PATH = ROOT / "New_training" / "test_generated_control_points.txt"
+    CASE_ID_OFFSET = CASE_ID_START
+    RESET_OUTPUT_FILES_DEFAULT = True
 else:
     CONTROL_OUTPUT_PATH = PATHS["accepted"]
     REJECTED_CONTROL_POINTS_PATH = PATHS["rejected"]
@@ -69,8 +78,8 @@ BEZIER_PITCH_DIFF_MAX_NORM = 0.73
 WRITE_CASE_ID_TO_OUTPUT_FILES = True
 CONTROL_POINT_FORMAT = "%.6f"
 
-N_GENERATED_BLADES = 50
-LHS_SEED = 100
+N_GENERATED_BLADES = 3
+LHS_SEED = 62955
 LHS_OPTIMIZATION = "random-cd"
 WRITE_GENERATED_CONTROL_POINTS = True
 RESET_OUTPUT_FILES = RESET_OUTPUT_FILES_DEFAULT
@@ -93,7 +102,10 @@ chord_bounds = np.array([
     [0.05, 0.30],  # w56
 ])
 
-R_FINE = np.linspace(0.17, 0.998, 100)
+from x_blade_new import R_VALUES as _R_VALUES
+# Plot range starts at the first design station, so the curves never show
+# the clamped extrapolation below it as if it were design.
+R_FINE = np.linspace(float(_R_VALUES[0]), 0.998, 100)
 
 
 def load_or_generate_control_points(bounds, d_total):
@@ -118,7 +130,7 @@ def load_or_generate_control_points(bounds, d_total):
         )
         return case_ids, X_phys
 
-    if INPUT_MODE == "lhs":
+    if INPUT_MODE in ("lhs", "test"):
         sampler = qmc.LatinHypercube(
             d=d_total,
             seed=LHS_SEED,
@@ -131,39 +143,45 @@ def load_or_generate_control_points(bounds, d_total):
             save_table(GENERATED_CONTROL_POINTS_PATH, X_phys, fmt=CONTROL_POINT_FORMAT)
             print(f"Wrote generated control points to {GENERATED_CONTROL_POINTS_PATH.name}")
 
-        case_ids = np.arange(X_phys.shape[0], dtype=int)
+        case_ids = CASE_ID_OFFSET + np.arange(X_phys.shape[0], dtype=int)
+        mode_label = "test LHS" if INPUT_MODE == "test" else "optimized Latin hypercube"
         print(
-            f"Generated {X_phys.shape[0]} designs using optimized Latin hypercube "
-            f"({LHS_OPTIMIZATION}, seed={LHS_SEED})"
+            f"Generated {X_phys.shape[0]} designs using {mode_label} "
+            f"({LHS_OPTIMIZATION}, seed={LHS_SEED}); "
+            f"case ids {int(case_ids.min())}..{int(case_ids.max())}"
         )
         return case_ids, X_phys
 
-    raise ValueError("INPUT_MODE must be 'existing', 'lhs', or 'infill'")
+    raise ValueError("INPUT_MODE must be 'existing', 'lhs', 'infill', or 'test'")
 
 
 def initialize_output_files():
     if not RESET_OUTPUT_FILES:
         return
+    CONTROL_OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    REJECTED_CONTROL_POINTS_PATH.parent.mkdir(parents=True, exist_ok=True)
     clear_file(CONTROL_OUTPUT_PATH)
     clear_file(REJECTED_CONTROL_POINTS_PATH)
 
 
-def generate_cad(points, case_id, geometry_dir):
-    """Generate one blade CAD, guarded by a subprocess timeout if configured.
+def generate_cad(pitch_con, chord_con, case_id, geometry_dir):
+    """Generate one DRDC blade CAD, guarded by a subprocess timeout if configured.
 
     Returns True on success, False on timeout/failure so the caller can reject
     the case and continue with the rest of the batch.
     """
+    pitch_con = np.asarray(pitch_con, dtype=float).ravel()
+    chord_con = np.asarray(chord_con, dtype=float).ravel()
     if not CAD_TIMEOUT_S:
-        X_CAD(points, case_id, output_dir=geometry_dir)
+        X_CAD_from_design(pitch_con, chord_con, case_id, output_dir=geometry_dir, hub=True, hub_height=None, n_blades=5)
         return True
 
-    tmp_points = Path(tempfile.gettempdir()) / f"cad_points_{case_id}.npy"
-    np.save(tmp_points, np.asarray(points, dtype=float))
+    tmp_design = Path(tempfile.gettempdir()) / f"cad_design_{case_id}.npy"
+    np.save(tmp_design, np.concatenate([pitch_con, chord_con]))
     try:
         subprocess.run(
             [sys.executable, str(ROOT / "cad_worker.py"),
-             str(int(case_id)), str(geometry_dir), str(tmp_points)],
+             str(int(case_id)), str(geometry_dir), str(tmp_design)],
             check=True,
             timeout=CAD_TIMEOUT_S,
         )
@@ -176,7 +194,7 @@ def generate_cad(points, case_id, geometry_dir):
         return False
     finally:
         try:
-            tmp_points.unlink()
+            tmp_design.unlink()
         except FileNotFoundError:
             pass
 
@@ -291,7 +309,7 @@ def main():
         print(f"Case {case_id} accepted for CAD and data export")
 
         try:
-            cad_ok = generate_cad(points, blade_count, geometry_dir)
+            cad_ok = generate_cad(pitch_con, chord_con, blade_count, geometry_dir)
         except Exception as e:
             print(f"[WARN] X_CAD failed for case {case_id}: {e}")
             cad_ok = False
@@ -326,10 +344,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
 
 
       

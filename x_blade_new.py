@@ -51,7 +51,7 @@ BASE_RAKE = lambda x: 1*(-334.1390*x**12 + 1599.6222*x**11 + -2939.2891*x**10 + 
 # extend to the tip instead of freezing 0.1% short of it.
 R_TIP_BAND = 0.93        # start of the clustered tip band
 R_VALUES = np.concatenate([
-    np.arange(0.17, R_TIP_BAND - 1e-9, 0.018),
+    np.arange(0.18, R_TIP_BAND - 1e-9, 0.018),
     R_TIP_BAND + (1.0 - R_TIP_BAND) * np.sin(np.linspace(0.0, np.pi / 2, 14)),
 ])
 
@@ -140,8 +140,15 @@ def X_blade(
     if return_bezier_info:
         extra += (bezier_info,)
     if return_blade_surface:
+        # r_root MUST come from R_VALUES[0]. BladeSurface has its own
+        # R_ROOT_DEFAULT, and when it was left to that default, changing
+        # R_VALUES to start at 0.18 moved the design curves but not the
+        # surface: the blade (and the hub, which is sized from the
+        # surface's root) stayed at r/R 0.17, and the 0.17-0.18 band was a
+        # clamped copy of the 0.18 section rather than design geometry.
         blade_surface = BladeSurface(
-            MaxCamber, Pitch, ChordLength, MaxThickness, SkewAngle, Rake)
+            MaxCamber, Pitch, ChordLength, MaxThickness, SkewAngle, Rake,
+            r_root=float(R_VALUES[0]))
         extra += (blade_surface,)
 
     return (points, min_dis, constraint_violation, chord_con_points,

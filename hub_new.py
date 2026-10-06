@@ -77,7 +77,7 @@ DEFAULT_N_BLADES = 5
 # designs across the production bounds, the root ring stays within
 # x in [-0.19, +0.19] m, so 0.55 m about x = 0 clears every design by >20%;
 # the enclosure guard below still rejects any outlier loudly.)
-DEFAULT_HUB_HEIGHT = 1.0    # m
+DEFAULT_HUB_HEIGHT = 0.625    # m
 DEFAULT_HUB_CENTER = 0.0     # m (x of the hub midpoint); None = per-design
 # Sector sampling. The budget is deliberately shifted from s to x.
 #   s: the sector is a 72 deg circular arc at constant radius, which a
