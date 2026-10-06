@@ -1497,8 +1497,9 @@ def case_report(res, orig, stack=None):
 # --------------------------------------------------------------------------
 
 def plot_case(path, case, design, orig, sections, stack=None, every=7):
-    """Planform, every spanwise curve and three sections of a case, in one
-    PNG. Drawn on a bare Figure (no pyplot), so it also runs off a GUI thread."""
+    """Planform and every spanwise curve (the height on the x axis) and three
+    sections of a case, in one PNG. Drawn on a bare Figure (no pyplot), so it
+    also runs off a GUI thread."""
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
     d = pin(design, orig)
@@ -1515,17 +1516,17 @@ def plot_case(path, case, design, orig, sections, stack=None, every=7):
 
     ax = axs[0]
     m = orig.y_rows <= top
-    ax.plot(orig.x_le_rows[m], orig.y_rows[m], "k--", lw=1, label="original LE")
-    ax.plot(orig.x_te_rows[m], orig.y_rows[m], "k-", lw=1, label="TE line (kept)")
+    ax.plot(orig.y_rows[m], orig.x_le_rows[m], "k--", lw=1, label="original LE")
+    ax.plot(orig.y_rows[m], orig.x_te_rows[m], "k-", lw=1, label="TE line (kept)")
     le = d.curve("LE")
     pts = le.at(yy)
     for s in sections[::every] + [sections[-1]]:
-        ax.plot([s.x_le, s.x_te], [s.y, s.y], color="0.75", lw=0.6)
-    ax.plot(pts[:, 1], pts[:, 0], "b-", lw=2, label=f"new LE (order {le.order}, {d.curves['LE'].join})")
-    ax.plot(le.ctrl[:, 1], le.ctrl[:, 0], "o--", color="tab:blue", ms=5, lw=0.8, mfc="w", label="LE control points")
-    ax.axhline(H, color="r", ls=":", lw=1, label=f"H = {H:g} mm")
-    ax.set_xlabel("x (mm)")
-    ax.set_ylabel("y, height (mm)")
+        ax.plot([s.y, s.y], [s.x_le, s.x_te], color="0.75", lw=0.6)
+    ax.plot(pts[:, 0], pts[:, 1], "b-", lw=2, label=f"new LE (order {le.order}, {d.curves['LE'].join})")
+    ax.plot(le.ctrl[:, 0], le.ctrl[:, 1], "o--", color="tab:blue", ms=5, lw=0.8, mfc="w", label="LE control points")
+    ax.axvline(H, color="r", ls=":", lw=1, label=f"H = {H:g} mm")
+    ax.set_xlabel("y, height (mm)")
+    ax.set_ylabel("x (mm)")
     ax.set_title("planform (sections every %d shown)" % every, fontsize=9)
     ax.set_aspect("equal", adjustable="datalim")
     ax.legend(fontsize=6, loc="upper right")
@@ -1534,21 +1535,21 @@ def plot_case(path, case, design, orig, sections, stack=None, every=7):
         law = d.curve(c)
         yd, vd = orig.data[c]
         yd, vd = yd[yd <= top], vd[yd <= top]
-        ax.plot(vd, yd, "k.", ms=3, label="section fits (original)")
-        ax.plot(orig.value(c, yz), yz, "k-", lw=1, label=f"original (order {orig.curves[c].order})")
-        ax.plot(law.at(yy)[:, 1], yy, "b-", lw=2, label=f"design (order {law.order}, {d.curves[c].join})")
-        ax.plot(law.ctrl[:, 1], law.ctrl[:, 0], "o--", color="tab:blue", ms=5, lw=0.8, mfc="w",
+        ax.plot(yd, vd, "k.", ms=3, label="section fits (original)")
+        ax.plot(yz, orig.value(c, yz), "k-", lw=1, label=f"original (order {orig.curves[c].order})")
+        ax.plot(yy, law.at(yy)[:, 1], "b-", lw=2, label=f"design (order {law.order}, {d.curves[c].join})")
+        ax.plot(law.ctrl[:, 0], law.ctrl[:, 1], "o--", color="tab:blue", ms=5, lw=0.8, mfc="w",
                 label="control points")
-        ax.plot(law.ctrl[0, 1], law.ctrl[0, 0], "rs", ms=6, label="pinned at H")
-        ax.axhline(H, color="r", ls=":", lw=1)
+        ax.plot(law.ctrl[0, 0], law.ctrl[0, 1], "rs", ms=6, label="pinned at H")
+        ax.axvline(H, color="r", ls=":", lw=1)
         shown = np.concatenate((vd, law.ctrl[:, 1], orig.value(c, yz)))
         lo, hi = shown.min(), shown.max()
         pad = 0.08 * (hi - lo) if hi - lo > 1e-6 * max(abs(hi), 1e-3) else 1e-3 * max(abs(hi), 1e-3)
-        ax.set_xlim(lo - pad, hi + pad)                 # a constant curve gets a readable axis too
+        ax.set_ylim(lo - pad, hi + pad)                 # a constant curve gets a readable axis too
         ax.set_title(f"{c}: {'x' if c.endswith('x') else 'z'} of P{c[1:-1]} (fraction of the sharp chord)",
                      fontsize=9)
-        ax.set_ylabel("y (mm)")
-        ax.ticklabel_format(axis="x", useOffset=False)
+        ax.set_xlabel("y (mm)")
+        ax.ticklabel_format(axis="y", useOffset=False)
         ax.legend(fontsize=6)
 
     ax = axs[len(coords) + 1]

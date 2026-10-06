@@ -9,7 +9,8 @@ AIRFOIL_DATA_PATH = ROOT / 'airfoil_data_fixed.csv'
 GEOMETRY_OUTPUT_DIR = ROOT
 
 
-def para(MaxCamber, Pitch, ChordLength, MaxThickness, SkewAngle, Rake, R_values, x1, write_dat=True, section_scale=None):
+def para(MaxCamber, Pitch, ChordLength, MaxThickness, SkewAngle, Rake, R_values, x1, write_dat=True, section_scale=None,
+         d=1.4, airfoil_path=None):
     """
     Python equivalent of para.m function
 
@@ -19,9 +20,12 @@ def para(MaxCamber, Pitch, ChordLength, MaxThickness, SkewAngle, Rake, R_values,
         cross-section toward its reference point, which is used to taper the
         appended tip-closure sections into a faired, closed tip. Defaults to all
         ones (no scaling) for backward compatibility.
+    d : float
+        Propeller diameter (m); 1.4 for the MSc blade.
+    airfoil_path : path or None
+        Section table (camber, camber slope, thickness); None = airfoil_data_fixed.csv.
     """
-    # Scaling factor for the geometry (diameter of the propeller hub or blade)
-    d = 1.4
+    # d (an argument) is the scaling factor for the geometry: the propeller diameter
     
     # Evaluate the anonymous functions at R_values
     max_camber_at_R = MaxCamber(R_values)
@@ -38,7 +42,8 @@ def para(MaxCamber, Pitch, ChordLength, MaxThickness, SkewAngle, Rake, R_values,
     # ---- Airfoil Generation Using the Fitted Polynomials ----
     
     # Load airfoil data from external file
-    Airfoil = pd.read_csv(AIRFOIL_DATA_PATH, skiprows=1, header=None).values
+    Airfoil = pd.read_csv(AIRFOIL_DATA_PATH if airfoil_path is None else airfoil_path,
+                          skiprows=1, header=None).values
     X_c = np.append(Airfoil[:, 0], 1.005)  # Chord coordinates (normalized)
     y_c = np.append(Airfoil[:, 1], 0)      # Camber distribution
     der_y = np.append(Airfoil[:, 2], 0)    # Slope of camber

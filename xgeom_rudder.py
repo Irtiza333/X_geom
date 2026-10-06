@@ -13,15 +13,17 @@ raises n by one and adds that point's two curves. P1x is held at 0 by default
 (its slots unticked), which keeps the LE round.
 
 An adapter gives the tool:
-    title, names, degree                      what there is to edit
+    title, names, summary()                   what there is to edit, the line under the title
+    describe(curve), order(curve), joins      a curve's text, its order, whether it has a join switch
     get / bounds / is_free / set / set_bounds / set_free        one variable
-    set_order / set_tangent / set_degree      the shape of the space
-    curve_rows(curve)                         the rows of one curve (see Row)
+    set_order / set_tangent / set_degree      the shape of the space (the last two rudder only)
+    curve_rows(curve), row_info(name), n_free()   the rows of one curve (xgeom_common.Row)
     preview()                                 everything the live views draw
     views(fig) / skeleton_view(fig)           the drawings
-    xcad_task(case)                           the XCAD file, the case files and the solid
-    load_space(path)                          a design space written by an XCAD run
-Blades, wings and hulls get adapters of their own with the same methods.
+    build_label, build_task(case)             the build button: the case files and the CAD
+    save_space(path) / load_space(path)       the set-up
+The propeller blade (xgeom_blade.py) has the same methods; the tool's panel
+function for each geometry (xgeom_tool.PANELS) adds what is particular to it.
 """
 
 from __future__ import annotations
@@ -31,35 +33,22 @@ import json
 import os
 import re
 import time
-from dataclasses import dataclass
 
 import numpy as np
 
 import bezier_section as BS
 import rudder_modify as RM
-
-INK, INK2, GRID = "#0b0b0b", "#52514e", "#e4e3df"
-BLUE, ORANGE, AQUA, RED, GREY = "#2a78d6", "#eb6834", "#1baf7a", "#e34948", "#9a9994"
+from xgeom_common import BLUE, GREY, GRID, INK2, RED, SECTION_COLORS, Row, fit_box, keep_fitted
 MAX_DEGREE = 12
 MAX_ORDER = 12
 SKELETON_UNCHANGED = 90          # original loops drawn above H, at most (the tip and cap loops always)
 N_VIEW = 5                       # sections drawn in the Design tab's 3D view, from the root to H
 Z_STRETCH = 3.0                  # the 3D view stretches the thickness by this, so the polygons show
-SECTION_COLORS = ("#1f4e9a", "#2a78d6", "#3fa0c8", "#1baf7a", "#0f7a55", "#0b5e43", "#08452f")
-
-
-@dataclass
-class Row:
-    """One line of a curve's rows: a design variable (kind 'var') or a pinned
-    control-point value shown for information (kind 'pinned')."""
-    kind: str
-    label: str
-    name: str = ""                 # slot name for 'var'
-    digits: int = 4
-    text: str = ""                 # for 'pinned'
 
 
 class RudderAdapter:
+    joins = True                  # curves join the original at H: the tool offers the tangent switch
+    build_label = "XCAD"
 
     def __init__(self):
         import modify_control as MC
@@ -221,6 +210,19 @@ class RudderAdapter:
         names = [n for n in self.space.all_names if curve is None or n.startswith(curve + ".")]
         return sum(1 for n in names if self.meta[n]["free"]), len(names)
 
+    def summary(self):
+        """The line under the title."""
+        n, m = self.n_free()
+        st = self.settings
+        return (f"{n} of {m} variables free; H {self.design.H:.2f} mm in [{st['h_min']:g}, {st['h_max']:g}]; "
+                f"sections of degree {self.degree}")
+
+    def describe(self, curve):
+        return RM.describe(curve)
+
+    def order(self, curve):
+        return self.design.curves[curve].order
+
     # ---------------------------------------------------------------- preview
     def preview(self, skeleton=False):
         """What the live views draw: the pinned design, its problems, the
@@ -374,11 +376,30 @@ class RudderAdapter:
         """xcad_task(case, plot, cad)(), in one go."""
         return self.xcad_task(case, plot, cad)()
 
+    def build_task(self, case):
+        """xcad_task(case) for the tool's XCAD button: its result also carries
+        the status line ('message', 'error') and the file the viewer opens ('view')."""
+        run = self.xcad_task(case)
+
+        def task():
+            out = run()
+            msg = os.path.basename(out["case"]["paths"]["xcad"])
+            if out["loft"] is not None:
+                lr = out["loft"]
+                msg += (f", {os.path.basename(out['step'])} (solid {'valid' if lr.valid else 'NOT valid'}, "
+                        f"{lr.volume / 1e3:.2f} cm^3); OCC viewer shows it")
+            if out["cad_error"]:
+                msg += "; " + out["cad_error"]
+            out.update(message=msg, error=bool(out["cad_error"]), view=out["step"])
+            return out
+        return task
+
 
 class RudderViews:
-    """The Design tab: planform, the selected curve, and in 3D the sections
-    from the root to H with their control polygons (labelled P0 .. Pn) and the
-    track of each control point along the span."""
+    """The Design tab: planform, the selected curve (both with the height on
+    the x axis), and in 3D the sections from the root to H with their control
+    polygons (labelled P0 .. Pn) and the track of each control point along the
+    span."""
 
     def __init__(self, adapter, fig):
         self.a = adapter
@@ -390,27 +411,26 @@ class RudderViews:
         self.ax_sec = fig.add_subplot(gs[1, :], projection="3d")
         self.ax_sec.view_init(elev=28, azim=-58)
         self.box = None                                      # the 3D box's aspect, set when drawn
-        fig.canvas.mpl_connect("motion_notify_event", self._on_turn)
-        fig.canvas.mpl_connect("resize_event", lambda event: self._fit_box())
+        keep_fitted(fig, self.ax_sec, lambda: self.box)
         for ax in (self.ax_plan, self.ax_curve):
             ax.grid(True, color=GRID, lw=0.6)
         o = adapter.orig
         m = o.y_rows <= o.z_top + 1e-9
         ax = self.ax_plan
-        ax.plot(o.x_le_rows[m], o.y_rows[m], "--", color=INK2, lw=1, label="original LE")
-        ax.plot(o.x_te_rows[m], o.y_rows[m], "-", color=INK2, lw=1, label="TE line (kept)")
+        ax.plot(o.y_rows[m], o.x_le_rows[m], "--", color=INK2, lw=1, label="original LE")
+        ax.plot(o.y_rows[m], o.x_te_rows[m], "-", color=INK2, lw=1, label="TE line (kept)")
         self.sec_lines = [ax.plot([], [], "-", color=GRID, lw=0.8)[0] for _ in range(12)]
         self.le_line, = ax.plot([], [], "-", color=BLUE, lw=2.0, label="LE")
         self.le_poly, = ax.plot([], [], "o--", color=BLUE, lw=0.8, ms=5, mfc="white")
-        self.h_line = ax.axhline(0.0, color=RED, ls=":", lw=1)
-        self.bound_lines = [ax.axhline(0.0, color=INK2, ls="-.", lw=0.8) for _ in range(2)]   # h_min, h_max
-        self.h_text = ax.text(0.99, 0.0, "H", transform=ax.get_yaxis_transform(), ha="right", va="bottom",
+        self.h_line = ax.axvline(0.0, color=RED, ls=":", lw=1)
+        self.bound_lines = [ax.axvline(0.0, color=INK2, ls="-.", lw=0.8) for _ in range(2)]   # h_min, h_max
+        self.h_text = ax.text(0.0, 0.99, "H", transform=ax.get_xaxis_transform(), ha="right", va="top",
                               color=RED, fontsize=8)
         self.prob_text = ax.text(0.02, 0.98, "", transform=ax.transAxes, va="top", ha="left", color=RED, fontsize=8)
-        ax.set_xlabel("x (mm)")
-        ax.set_ylabel("y, height (mm)")
+        ax.set_xlabel("y, height (mm)")
+        ax.set_ylabel("x (mm)")
         ax.set_aspect("equal", adjustable="box")
-        ax.legend(loc="upper right", fontsize=7)
+        ax.legend(loc="best", fontsize=7)
         ax.set_title("planform", loc="left", fontsize=10)
 
         ax = self.ax_curve
@@ -422,8 +442,8 @@ class RudderViews:
         self.c_fixed, = ax.plot([], [], "o", color=BLUE, ms=6, mfc="white", label="held")
         self.c_pinned, = ax.plot([], [], "s", color=RED, ms=6, mfc="white", label="pinned at H")
         self.c_labels = []
-        self.c_h = ax.axhline(0.0, color=RED, ls=":", lw=1)
-        ax.set_ylabel("y (mm)")
+        self.c_h = ax.axvline(0.0, color=RED, ls=":", lw=1)
+        ax.set_xlabel("y, height (mm)")
         ax.legend(loc="best", fontsize=7)
 
     def _points(self, d, curve):
@@ -443,18 +463,18 @@ class RudderViews:
     def update(self, pv, curve):
         a, o, d = self.a, self.a.orig, pv["design"]
         yy, cv = pv["yy"], pv["curves"]
-        # planform
-        self.le_line.set_data(cv["LE"], yy)
+        # planform, the height along x
+        self.le_line.set_data(yy, cv["LE"])
         le = d.curve("LE")
-        self.le_poly.set_data(le.ctrl[:, 1], le.ctrl[:, 0])
+        self.le_poly.set_data(le.ctrl[:, 0], le.ctrl[:, 1])
         ys = np.linspace(0.0, d.H, len(self.sec_lines))
         for ln, y, xl in zip(self.sec_lines, ys, np.interp(ys, yy, cv["LE"])):
-            ln.set_data([xl, o.x_te([y])[0]], [y, y])
-        self.h_line.set_ydata([d.H, d.H])
-        self.h_text.set_position((0.99, d.H))
-        self.h_text.set_text(f"H = {d.H:.1f}")
+            ln.set_data([y, y], [xl, o.x_te([y])[0]])
+        self.h_line.set_xdata([d.H, d.H])
+        self.h_text.set_position((d.H, 0.99))
+        self.h_text.set_text(f"H = {d.H:.1f} ")
         for ln, key in zip(self.bound_lines, ("h_min", "h_max")):
-            ln.set_ydata([a.settings[key]] * 2)
+            ln.set_xdata([a.settings[key]] * 2)
         self.prob_text.set_text("\n".join(p[:90] for p in pv["problems"][:4]))
         self.ax_plan.relim()
         self.ax_plan.autoscale_view()
@@ -463,34 +483,39 @@ class RudderViews:
         top = a.settings["h_max"]                            # the curve plot shows heights up to h_max
         if curve == "LE":
             keep = o.y_rows <= top
-            self.c_data.set_data(o.x_le_rows[keep], o.y_rows[keep])
+            self.c_data.set_data(o.y_rows[keep], o.x_le_rows[keep])
             self.c_orig.set_data([], [])
-            ax.set_xlabel("x of the LE (mm)")
+            ax.set_ylabel("x of the LE (mm)")
         else:
             yd, vd = o.data[curve]
-            self.c_data.set_data(vd[yd <= top], yd[yd <= top])
+            self.c_data.set_data(yd[yd <= top], vd[yd <= top])
             yz = np.linspace(0.0, top, 160)
-            self.c_orig.set_data(o.value(curve, yz), yz)
-            ax.set_xlabel(f"{curve[-1]} of P{curve[1:-1]} (fraction of the sharp chord)")
-        self.c_new.set_data(cv[curve], yy)
+            self.c_orig.set_data(yz, o.value(curve, yz))
+            ax.set_ylabel(f"{curve[-1]} of P{curve[1:-1]} (fraction of the sharp chord)")
+        self.c_new.set_data(yy, cv[curve])
         pts, P = self._points(d, curve)
-        self.c_poly.set_data(pts[:, 1], pts[:, 0])
+        self.c_poly.set_data(pts[:, 0], pts[:, 1])
         for key, ln in (("free", self.c_free), ("fixed", self.c_fixed), ("pinned", self.c_pinned)):
-            ln.set_data(P[key][:, 1], P[key][:, 0])
+            ln.set_data(P[key][:, 0], P[key][:, 1])
         for t in self.c_labels:
             t.remove()
-        self.c_labels = [ax.annotate(f"C{k}", (v, y), textcoords="offset points", xytext=(6, 4), fontsize=8,
-                                     color=BLUE) for k, (y, v) in enumerate(pts)]
-        self.c_h.set_ydata([d.H, d.H])
+        x_hi = 1.05 * top
+        ax.set_xlim(-0.03 * top, x_hi)
+        self.c_h.set_xdata([d.H, d.H])
         ax.set_title(f"curve {curve}" + ("" if curve == "LE" else f": {curve[-1]} of P{curve[1:-1]}")
                      + " against the height", loc="left", fontsize=10)
-        shown = np.concatenate([ln.get_xdata() for ln in (self.c_data, self.c_orig, self.c_new, self.c_poly)
-                                if len(ln.get_xdata())])
+        shown = np.concatenate([ln.get_ydata() for ln in (self.c_data, self.c_orig, self.c_new, self.c_poly)
+                                if len(ln.get_ydata())])
         lo, hi = float(shown.min()), float(shown.max())
         pad = max(0.08 * (hi - lo), 0.5 if curve == "LE" else 0.005)    # a flat curve still gets a readable range
-        ax.set_xlim(lo - pad, hi + pad)
-        ax.set_ylim(-0.03 * top, 1.05 * top)
-        ax.ticklabel_format(axis="x", useOffset=False)
+        ax.set_ylim(lo - pad, hi + pad)
+        ax.ticklabel_format(axis="y", useOffset=False)
+        self.c_labels = []                   # near the right edge to the left, near the top below the point
+        for k, (y, v) in enumerate(pts):
+            right, high = y > 0.8 * x_hi, v > hi - 0.15 * (hi - lo + 2 * pad)
+            self.c_labels.append(ax.annotate(f"C{k}", (y, v), textcoords="offset points", fontsize=8, color=BLUE,
+                                             xytext=(-6 if right else 6, -6 if high else 4),
+                                             ha="right" if right else "left", va="top" if high else "bottom"))
         self._draw_sections(pv, curve)
 
     def _draw_sections(self, pv, curve):
@@ -546,7 +571,7 @@ class RudderViews:
         ax.set_ylim(lo[1], hi[1])
         ax.set_zlim(lo[2], hi[2])
         self.box = np.maximum(hi - lo, 1e-9) * [1.0, Z_STRETCH, 1.0]
-        self._fit_box()
+        fit_box(ax, self.fig, self.box)
         ax.yaxis.set_major_locator(MaxNLocator(4))
         ax.set_xlabel("x (mm)")
         ax.set_ylabel(f"z (mm, x{Z_STRETCH:g})")
@@ -555,49 +580,6 @@ class RudderViews:
         ax.set_title(f"sections 0 .. H with control polygons P0 .. P{d.degree} (dashed: the original)\n"
                      f"grey: each control point along the span, red: {what}; thickness x{Z_STRETCH:g}, drag to turn",
                      fontsize=9)
-
-    def _fit_box(self):
-        """Fit the 3D box and its labels to the panel at the current angle: zoom
-        so that they fill it, and shift the view so that they sit in its middle.
-        mplot3d puts the tick and axis labels outside the box by a fraction of
-        its size (at the sides, and below the box when seen from above), so the
-        box grown by that fraction, plus room for the text, has to fit."""
-        if self.box is None:
-            return
-        from mpl_toolkits.mplot3d import proj3d
-        ax, dpi = self.ax_sec, self.fig.dpi
-        ax.apply_aspect()
-        panel, square, view = ax.get_position(original=True).transformed(self.fig.transFigure), ax.bbox, ax.viewLim
-        lims = np.array([ax.get_xlim(), ax.get_ylim(), ax.get_zlim()])
-        grow = 1.33 * dpi / (square.width + square.height) * np.diff(lims, axis=1) * [-1.0, 1.0]   # the labels' offset
-        boxes = [np.array(np.meshgrid(*b)).reshape(3, -1) for b in (lims, lims + 0.5 * grow, lims + grow)]
-        text, gap = 0.25 * dpi, 0.1 * dpi
-        top = min(panel.y1, square.y1)                            # the title is above the square
-        x0, x1, y0, y1 = panel.x0 + text, panel.x1 - text, panel.y0 + text, top - gap
-        if ax.elev < 0.0:                                         # seen from below, the labels are above the box
-            y0, y1 = panel.y0 + gap, top - text
-        px = square.width / view.width                            # px per unit of the projection, in x and y
-        zoom = 1.0
-        for _ in range(3):                                        # the perspective is not quite linear in the zoom
-            ax.set_box_aspect(self.box, zoom=zoom)
-            (u, v), (_, v_half), (u_out, _) = (proj3d.proj_transform(*b, ax.get_proj())[:2] for b in boxes)
-            lo, hi = (v_half.min(), v.max()) if ax.elev >= 0.0 else (v.min(), v_half.max())
-            fit = min((x1 - x0) / (np.ptp(u_out) * px), (y1 - y0) / ((hi - lo) * px))
-            zoom = float(np.clip(zoom * fit, 0.3, 3.0))
-        ax.set_box_aspect(self.box, zoom=zoom)
-        (u, v), (_, v_half), (u_out, _) = (proj3d.proj_transform(*b, ax.get_proj())[:2] for b in boxes)
-        lo, hi = (v_half.min(), v.max()) if ax.elev >= 0.0 else (v.min(), v_half.max())
-        mid_u, mid_v = 0.5 * (u_out.min() + u_out.max()), 0.5 * (lo + hi)
-        fx = (0.5 * (x0 + x1) - square.x0) / square.width        # where the middle goes, as a fraction of the square
-        fy = (0.5 * (y0 + y1) - square.y0) / square.height
-        w, h = view.width, view.height
-        view.intervalx = (mid_u - fx * w, mid_u + (1.0 - fx) * w)
-        view.intervaly = (mid_v - fy * h, mid_v + (1.0 - fy) * h)
-
-    def _on_turn(self, event):
-        """While the 3D panel is turned with the mouse, keep the box fitted."""
-        if self.ax_sec.button_pressed == 1:
-            self._fit_box()
 
 
 class SkeletonView:
