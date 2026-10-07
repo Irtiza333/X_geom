@@ -88,6 +88,20 @@ def test_file(tmp):
             fh.write(text)
         out.append(refused(BM.read_params, bad))
     check("a file without the section table, or with 4 columns, is refused", out, [1, 1], 0)
+    q = BM.read_params(path)
+    q.section_table, q.airfoil = "", "NACA 2416"
+    pa = BM.write_params(os.path.join(tmp, "naca.dat"), q)
+    qa = BM.read_params(pa)
+    tab = np.loadtxt(qa.section_path(), delimiter=",", skiprows=1)
+    pts, _ = BM.blade_points(BM.fit_design(qa, segments=ONE)[0], qa)
+    out = []
+    for head in ("# section_table airfoil_data_fixed.csv\n# airfoil naca2412\n", "# airfoil nosuchfoil\n"):
+        with open(bad, "w") as fh:
+            fh.write("# diameter_m 1.4\n# blades 5\n" + head + open(pa).read().split("# r/R", 1)[1].split("\n", 1)[1])
+        out.append(refused(BM.read_params, bad))
+    check("an airfoil by name (NACA 2416): read back, its section table (26 rows), the blade; both keys or an "
+          "unknown airfoil refused", [qa.airfoil == "NACA 2416", qa.section_table == "", tab.shape[0],
+                                      np.all(np.isfinite(pts))] + out, [1, 1, 26, 1, 1, 1], 0)
 
 
 def test_curves(tmp):

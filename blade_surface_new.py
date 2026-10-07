@@ -149,7 +149,8 @@ class CanonicalSectionFamily:
         der_y = table[:, 2]         # camber-line slope
         th_d = table[:, 3]          # thickness distribution (per chord)
 
-        cam_d = y_c / np.max(y_c)   # same normalization as para.py
+        cam_d = (y_c / np.max(y_c) if np.max(y_c) > 0     # same normalization as para.py
+                 else np.zeros_like(y_c))                # (a symmetric section: no camber)
 
         # Extend camber/slope smoothly to the TE closing station (both -> 0
         # there, exactly as para.py appends (1.005, 0, 0, 0)).

@@ -30,9 +30,9 @@ Left panel (rudder)
 Left panel (blade)
     Parameter file
               the blade's parameter file (blade_modify.py: D, blades, root r/R,
-              hub height, section table and the radial table). Load reads another
-              one (the curves are fitted to it again); Save writes the design as
-              one.
+              hub height, section table or airfoil name, and the radial table).
+              Load reads another one (the curves are fitted to it again); Save
+              writes the design as one.
     Blade and hub
               the blade radius R, the hub radius and the hub height (m; the hub
               is centred at x = 0 and must cover the blade root). A change of
@@ -571,9 +571,13 @@ def blade_panel(app):
               wraplength=560).pack(anchor="w", padx=4)
     p = ad.params
     hub_h = f"not given ({BM.HUB_HEIGHT:g} m)" if p.hub_height is None else f"{p.hub_height:g} m"
+    if p.airfoil:
+        import airfoils
+        sections = "airfoil " + airfoils.describe(p.airfoil)
+    else:
+        sections = f"sections: {p.section_table}"
     ttk.Label(box, text=f"D {p.diameter:g} m, {p.blades} blades, root r/R {p.root_r:g}, hub height {hub_h}, "
-                        f"{len(p.r)} rows; sections: {p.section_table}", foreground=INK2,
-              wraplength=560).pack(anchor="w", padx=4)
+                        f"{len(p.r)} rows; {sections}", foreground=INK2, wraplength=560).pack(anchor="w", padx=4)
     row = ttk.Frame(box)
     row.pack(fill="x", pady=3)
     ttk.Button(row, text="Load ...", command=app.on_load_params).pack(side="left", padx=4)

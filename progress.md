@@ -24,14 +24,21 @@ XGeom: rudder parametrization and propeller blades. Updated 6 Oct 2026.
   its polynomials at 61 stations from `x_blade_new.R_VALUES[0]` (r/R 0.18), hub height 0.625 m (hub_new's).
   XCAD sections (53 points each): their number and how many lie in the tip band, closer together towards the tip
   (default 56, 14 from r/R 0.93, evenly spaced below); the clearance check keeps x_blade_new's stations.
+- **Airfoils** (`airfoils.py`, `airfoils/`): the UIUC Airfoil Coordinates Database offline (1,665 Selig-format
+  files, `airfoils/index.dat` lists them) and the NACA 4- and 5-digit equations for NACA names without a file. A
+  parameter file names its section by `# airfoil <name>` (for example naca2416, clarky) instead of
+  `# section_table`: the airfoil gives the camber-line and thickness shapes, the radial table's t/c and f/c scale
+  them. The section table (para.py's 26-row format) is written to `airfoils/sections/` when first used; camber
+  the mean of the two surfaces at the same x, half thickness their half difference. Own airfoils: `<name>.dat`
+  in `airfoils/`. `para.py` and `BladeSurface` take a symmetric section (camber columns 0).
 - **Design tool** (`xgeom_tool.py` with `xgeom_rudder.py` or `xgeom_blade.py`, `xgeom_common.py`, `xcad_loft.py`):
   sliders for every variable with bounds and free/held flags, the number of control points per curve, live 2D
   and 3D views, Save set-up for the optimiser, the CAD build, OCC viewer. Blade: Load and Save parameter files,
   blade and hub, the XCAD sections, 1 or 2 segments per curve. Status bar: green ok, amber while a build runs,
   red for a problem or an error. Every 2D plot, in the tool and in the case check plots, has the span (height,
   r, r/R) on the x axis.
-- **Checks**: `_rudder_modify_test.py`, `_xgeom_tool_test.py`, `_xgeom_blade_test.py`, `_section_fit_test.py`,
-  `_rudder_param_test.py` and `_tip_cap_test.py` pass.
+- **Checks**: `_rudder_modify_test.py`, `_xgeom_tool_test.py`, `_xgeom_blade_test.py`, `_airfoils_test.py`,
+  `_section_fit_test.py`, `_rudder_param_test.py` and `_tip_cap_test.py` pass.
 
 ## Current status
 
@@ -41,6 +48,13 @@ XGeom: rudder parametrization and propeller blades. Updated 6 Oct 2026.
   pitch, 2.9 % thickness, 7.6 % camber, 7.7 % rake (the forced zero slope at P4 does not suit their shapes);
   1 segment of 6 control points: 0.06 % to 0.9 %. The CAD build takes about 1.5 min (the DRDC grids).
 - Blade: the CAD build and the OCC viewer work on the user's machine (user, 5 Oct 2026).
+- Airfoils: 1,664 of the 1,665 files are read (naca1 is a cowl); 14 whose camber line is negative everywhere are
+  refused. A section table gives its airfoil back at the 26 stations (1e-7 c; a nearly symmetric airfoil loses a
+  camber below 0.1 % of its thickness). Between the stations a cubic spline in sqrt(x/c) follows the airfoil
+  within 3e-4 c for half of the database and 1.2e-3 c for 90 %, the largest differences at the nose
+  (x/c < 0.0125) and at cusped trailing edges; para.py fixes the 26 stations.
+- `UIUC-propDB/`, the UIUC propeller database (this copy: volume 1 only, 200 of its 1,114 data files), is kept as
+  a reference; the code does not read it (user, 6 Oct 2026).
 
 ## Next steps
 

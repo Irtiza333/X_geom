@@ -51,7 +51,7 @@ def para(MaxCamber, Pitch, ChordLength, MaxThickness, SkewAngle, Rake, R_values,
 
     # Normalized camber distribution for the reference airfoil
 
-    cam_d = y_c / np.max(y_c)
+    cam_d = y_c / np.max(y_c) if np.max(y_c) > 0 else np.zeros_like(y_c)   # a symmetric section: no camber
 
     # Number of sections (airfoils)
     n = len(R_values)

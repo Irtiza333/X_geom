@@ -16,7 +16,7 @@ Parameter file (.dat; '#' header, np.loadtxt reads the table):
     # blades         5
     # root_r         0.18
     # hub_height_m   0.625
-    # section_table  airfoil_data_fixed.csv
+    # section_table  airfoil_data_fixed.csv          (or:  # airfoil  naca2416)
     # r/R  P/D  c/D  t/c  f/c  skew_deg  rake/D
     0.18000000  1.24135133  0.24524880  0.21585422  0.03041617  0.27575388  0.00001628
     ...
@@ -31,6 +31,12 @@ Parameter file (.dat; '#' header, np.loadtxt reads the table):
     section_table  the section family: x/c, camber, camber slope and thickness
                    (para.py's airfoil_data_fixed.csv format), relative to the
                    parameter file's folder
+    airfoil        instead of a section table: an airfoil by name (airfoils.py:
+                   the UIUC database in airfoils/, else the NACA 4- and 5-digit
+                   equations), e.g. naca2416, clarky, e387. It gives the shapes
+                   of the camber line and the thickness; t/c and f/c below
+                   scale them at each radius (a symmetric airfoil: no camber, f/c
+                   has no effect)
     r/R            radius over the tip radius, rising to the tip (1)
     P/D            pitch ratio
     c/D            chord over the diameter
@@ -104,7 +110,7 @@ DESCRIPTIONS = {
     "skew": "skew angle, deg",
     "rake": "rake over the diameter, rake/D",
 }
-GLOBALS = ("diameter_m", "blades", "root_r", "hub_height_m", "section_table")
+GLOBALS = ("diameter_m", "blades", "root_r", "hub_height_m", "section_table", "airfoil")
 GLOBAL_SLOTS = ("radius", "hub_radius", "hub_height")      # the blade's own design variables, m
 DEFAULT_SEGMENTS = 2              # each curve 2 segments (para_control_bez_updated) unless set otherwise
 DEFAULT_ORDER = 5                 # 1 segment: 6 control points
@@ -132,11 +138,12 @@ class BladeParams:
     diameter: float               # m
     blades: int
     root_r: float
-    section_table: str            # as written in the file
+    section_table: str            # as written in the file ("" with an airfoil)
     r: np.ndarray                 # the table's r/R, rising
     values: dict                  # curve name -> column
     path: str = ""                # the file it was read from ("" when made here)
     hub_height: float = None      # m; None: not in the file (HUB_HEIGHT)
+    airfoil: str = None           # an airfoil by name instead of a section table
 
     def rows(self):
         """The table rows from the root to the tip; a root between two rows gets
@@ -154,7 +161,11 @@ class BladeParams:
         return r, out
 
     def section_path(self):
-        """The section table: relative to the parameter file's folder, else as written."""
+        """The section table: the airfoil's (airfoils.section_table), else the
+        file's, relative to the parameter file's folder, else as written."""
+        if self.airfoil:
+            import airfoils
+            return airfoils.section_table(self.airfoil)
         p = self.section_table
         if not os.path.isabs(p) and self.path:
             q = os.path.join(os.path.dirname(os.path.abspath(self.path)), p)
@@ -209,7 +220,9 @@ def read_params(path):
             parts = s[1:].split(None, 1)
             if len(parts) == 2 and parts[0] in GLOBALS:
                 head[parts[0]] = parts[1].strip()
-    missing = [k for k in ("diameter_m", "blades", "section_table") if k not in head]
+    missing = [k for k in ("diameter_m", "blades") if k not in head]
+    if ("section_table" in head) == ("airfoil" in head):
+        missing.append("section_table or airfoil (one of them)")
     if missing:
         raise ValueError(f"{path}: the header misses {', '.join(missing)}")
     tab = np.atleast_2d(np.loadtxt(path, comments="#"))
@@ -223,8 +236,15 @@ def read_params(path):
     if not r[0] - ROW_TOL <= root < r[-1] or np.sum(r > root + ROW_TOL) < 3:
         raise ValueError(f"{path}: root_r {root:g} must lie in the table, with 4 rows from it to the tip")
     hub_h = float(head["hub_height_m"]) if "hub_height_m" in head else None
-    return BladeParams(float(head["diameter_m"]), int(head["blades"]), root, head["section_table"], r,
-                       {c: tab[:, i + 1] for i, c in enumerate(CURVES)}, os.path.abspath(path), hub_h)
+    params = BladeParams(float(head["diameter_m"]), int(head["blades"]), root, head.get("section_table", ""), r,
+                         {c: tab[:, i + 1] for i, c in enumerate(CURVES)}, os.path.abspath(path), hub_h,
+                         head.get("airfoil"))
+    if params.airfoil:
+        try:
+            params.section_path()                    # the airfoil exists; its table is made
+        except ValueError as exc:
+            raise ValueError(f"{path}: {exc}") from None
+    return params
 
 
 def write_params(path, params, notes=()):
@@ -243,7 +263,7 @@ def write_params(path, params, notes=()):
               f"# root_r         {params.root_r:.10g}"]
     if params.hub_height is not None:
         lines.append(f"# hub_height_m   {params.hub_height:.10g}")
-    lines += [f"# section_table  {table}",
+    lines += [f"# airfoil        {params.airfoil}" if params.airfoil else f"# section_table  {table}",
               "# " + "  ".join(COLUMNS)]
     for i, r in enumerate(params.r):
         row = [r] + [params.values[c][i] for c in CURVES]
@@ -796,7 +816,8 @@ def space_record(space, design, params, settings=None):
     return {"geometry": "blade", "created": datetime.datetime.now().isoformat(timespec="seconds"),
             "params_file": params.path,
             "globals": {"diameter_m": params.diameter, "blades": params.blades, "root_r": params.root_r,
-                        "hub_height_m": params.hub_height, "section_table": params.section_table},
+                        "hub_height_m": params.hub_height, "section_table": params.section_table,
+                        "airfoil": params.airfoil},
             "settings": dict(settings or {}), "space": space.to_dict(design)}
 
 
@@ -926,13 +947,15 @@ def write_points(path, points, per_section=53):
 
 def design_params(design, params, n=101):
     """The design as a BladeParams (its curves at n cosine-clustered stations,
-    its radius, root and hub height; the section table by its absolute path when
-    it is found)."""
+    its radius, root and hub height; the airfoil, or the section table by its
+    absolute path when it is found)."""
     r = cosine_stations(design.r0, design.r1, n)
-    table = params.section_path()
-    table = os.path.abspath(table) if os.path.exists(table) else params.section_table
+    table = params.section_table
+    if not params.airfoil:
+        table = params.section_path()
+        table = os.path.abspath(table) if os.path.exists(table) else params.section_table
     return BladeParams(design.diameter, params.blades, design.r0, table, r, design.values(r),
-                       hub_height=design.hub_height)
+                       hub_height=design.hub_height, airfoil=params.airfoil)
 
 
 def design_record(design, params, space=None, problems=(), gap_mm=None, settings=None):
@@ -943,7 +966,7 @@ def design_record(design, params, space=None, problems=(), gap_mm=None, settings
     rec = {"created": datetime.datetime.now().isoformat(timespec="seconds"), "params_file": params.path,
            "globals": {"radius_m": design.radius, "diameter_m": design.diameter, "hub_radius_m": design.hub_radius,
                        "root_r": design.r0, "hub_height_m": design.hub_height, "blades": params.blades,
-                       "section_table": params.section_table},
+                       "section_table": params.section_table, "airfoil": params.airfoil},
            "curves": {c: {"segments": cu.segments, "variables": {k: cu.get(k) for k in cu.keys()},
                           "control_points": design.ctrl(c).tolist(), "weights": cu.weights().tolist(),
                           "max_diff_from_file": rep[c][0]} for c, cu in design.curves.items()},

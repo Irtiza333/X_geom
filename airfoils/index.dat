@@ -1,0 +1,1666 @@
+# name                   points  description
+2032c                       35  20-32C AIRFOIL
+30p30n                     664  # McDonnell Douglas (MDA) 30P-30N Coordinates
+30p30nflap                 242  30P-30N Flap (MDA)
+30p30nmain                 221  30P-30N Main Element (MDA)
+30p30nslat                 201  30P-30N Slat (MDA)
+a18                         41  A18 (original)
+a18sm                       79  A18 (smoothed)
+a63a108c                    99  NASA/AMES 63A108 MOD C AIRFOIL
+ag03                       180  AG03 (flat aft bottom)
+ag04                       180  AG04
+ag08                       180  AG08
+ag09                       180  AG09
+ag10                       180  AG10
+ag11                       183  AG11
+ag12                       160  AG12
+ag13                       160  AG13
+ag14                       160  AG14
+ag16                       160  AG16
+ag17                       160  AG17
+ag18                       160  AG18
+ag19                       160  AG19
+ag23                       160  AG23 XC Bubble Dancer Root Airfoil
+ag24                       160  AG24 Bubble Dancer DLG by Mark Drela | The AG2x airfoils are intended to be used on composite versions of the Bubble Dancer and the Allegro-Lite.
+ag25                       160  AG25 Bubble Dancer DLG by Mark Drela | The AG2x airfoils are intended to be used on composite versions of the Bubble Dancer and the Allegro-Lite.
+ag26                       160  AG26 Bubble Dancer DLG by Mark Drela | The AG2x airfoils are intended to be used on composite versions of the Bubble Dancer and the Allegro-Lite.
+ag27                       160  AG27 Bubble Dancer DLG by Mark Drela | The AG2x airfoils are intended to be used on composite versions of the Bubble Dancer and the Allegro-Lite.
+ag35                       180  AG35
+ag36                       180  AG36
+ag37                       180  AG37
+ag38                       180  AG38
+ag44ct02r                  170  AG44ct -02f
+ag455ct02r                 170  AG455ct -02f rot.
+ag45c03                    169  AG45c -03f
+ag45ct02r                  170  AG45ct -02f
+ag46c03                    172  AG46c -03f
+ag46ct02r                  171  AG46ct  -02f rot.
+ag47c03                    169  AG47c -03f
+ag47ct02r                  171  AG47ct  -02f rot.
+ag52                       161  AG52
+ag53                       161  AG53
+ag54                       164  AG54
+ag55                       165  AG55
+ah217                       61  AH21 7% version (Andrew Hollom)
+ah219                       61  AH21 9% version (Andrew Hollom)
+ah63k127                    97  AH 63-K-127/24
+ah6407                      31  AH-6-40-7 AIRFOIL
+ah7476                      31  AH-7-47-6 AIRFOIL
+ah79100a                    97  AH 79-100 A AIRFOIL
+ah79100b                    97  AH 79-100 B AIRFOIL
+ah79100c                    97  AH 79-100 C AIRFOIL
+ah79k132                    97  AH 79-K-132/20
+ah79k135                    97  AH 79-K-135/20 B
+ah79k143                    97  AH 79-K-143/18
+ah80129                     97  AH 80-129
+ah80136                     97  AH 80-136
+ah80140                     97  AH 80-140
+ah81131                     97  AH 81-131
+ah81k144                    97  AH 81-K-144/17
+ah81k144wfklappe            97  AH 81-K-144 W-F KLAPPE
+ah82150a                    97  AH 82-150 A
+ah82150f                    97  AH 82-150 F
+ah83150q                    97  AH 83-150 Q
+ah83159                     97  AH 83-159
+ah85l120                    97  AH 85-L-120/17
+ah88k130                    97  AH 88-K-130/20
+ah88k136                   120  AH 88-K-136/16
+ah93156                    120  AH 93-156
+ah93157                    120  AH 93-157
+ah93k130                   120  AH 93-K-130/15
+ah93k131                   120  AH 93-K-131/15
+ah93k132                   120  AH 93-K-132/15
+ah93w145                    97  AH 93-W-145
+ah93w174                    97  AH 93-W-174
+ah93w215                    97  AH 93-W-215
+ah93w257                    97  AH 93-W-257
+ah93w300                    97  AH 93-W-300
+ah93w480b                  113  AH 93-W-480B
+ah94145                    120  AH 94-145
+ah94156                    120  AH 94-156
+ah94w301                    97  AH 94-W-301
+ah95160                    120  AH 95-160
+ames01                      81  NASA/AMES A-01 AIRFOIL
+ames02                      99  NASA/AMES A-02 AIRFOIL
+ames03                      99  NASA/AMES A-03 AIRFOIL
+amsoil1                     75  RUTAN CANARD AIRFOIL
+amsoil2                     75  RUTAN WING AIRFOIL
+apex16                      35  Apex 16 (normalized using XFOIL date021206)
+apex16nasacr201062         140  APEX 16
+aquilasm                    69  AQUILA 9.3% smoothed
+arad10                      51  ARA-D 10% AIRFOIL
+arad13                      51  ARA-D 13% AIRFOIL
+arad20                      51  ARA-D 20% AIRFOIL
+arad6                       51  ARA-D 6% AIRFOIL
+as5045                      81  AS5045 (15%) | Ref: http://www.krnet.org/as504x/ [original link: http://amber.aae.uiuc.edu/~ashok/kr2/airfoils/tests/]
+as5046                      81  AS5046 (16%) | Ref: http://www.krnet.org/as504x/ [original link: http://amber.aae.uiuc.edu/~ashok/kr2/airfoils/tests/]
+as5048                      81  AS5048 (18%) | Ref: http://www.krnet.org/as504x/ [original link: http://amber.aae.uiuc.edu/~ashok/kr2/airfoils/tests/]
+as6091                      61  AS6091 | Ananda-Selig | AIAA Paper 2018-0310
+as6092                      61  AS6092 | Ananda-Selig | AIAA Paper 2018-0310
+as6093                      61  AS6093 | Ananda-Selig | AIAA Paper 2018-0310
+as6094                      61  AS6094 | Ananda-Selig | AIAA Paper 2018-0310
+as6095                      61  AS6095 | Ananda-Selig | AIAA Paper 2018-0310
+as6096                      61  AS6096 | Ananda-Selig | AIAA Paper 2018-0310
+as6097                      61  AS6097 | Ananda-Selig | AIAA Paper 2018-0310
+as6098                      61  AS6098 | Ananda-Selig | AIAA Paper 2018-0310
+as6099                      61  AS6099 | Ananda-Selig | AIAA Paper 2018-0310
+atr72sm                     79  Smoothed ATR airfoil coordinates obtained  using AFSMO (Harry Morgan's NASA smoothing program)
+august160                   97  AUGUST 160
+avistar                     79  AVISTAR
+b29root                     39  B-29 ROOT AIRFOIL
+b29tip                      39  B-29 TIP AIRFOIL
+b540ols                     95  BELL 540 AIRFOIL (MODIFIED NACA 0012)
+b707a                      121  BOEING 707 .08 SPAN AIRFOIL
+b707b                       31  BOEING 707 .19 SPAN AIRFOIL
+b707c                       33  BOEING 707 .40 SPAN AIRFOIL
+b707d                       37  BOEING 707 .54 SPAN AIRFOIL
+b707e                      121  BOEING 707 .99 SPAN AIRFOIL
+b737a                       45  BOEING 737 ROOT AIRFOIL
+b737b                       45  BOEING 737 MIDSPAN AIRFOIL
+b737c                       45  BOEING 737 MIDSPAN AIRFOIL
+b737d                       45  BOEING 737 OUTBOARD AIRFOIL
+bacj                       100  BOEING AIRFOIL J
+bacnlf                     138  BOEING HSNLF AIRFOIL
+bacxxx                      61  BOEING BACXXX AIRFOIL
+bambino6                    33  Bambino 6
+be50                        43  BE50 (original)
+be50sm                      79  BE50 (smoothed)
+boe103                      34  BOEING 103 AIRFOIL
+boe106                      33  BOEING 106 AIRFOIL
+bqm34                       89  RYAN BQM-34 FIREBEE WING AIRFOIL
+btefk                      159  BTE-FK
+bw050209                    47  BW 05 02 09
+bw3                         79  Bergey BW-3  (smoothed)
+c141a                       65  LOCKHEED C-141 BL0 AIRFOIL
+c141b                       65  LOCKHEED C-141 BL113.6 AIRFOIL
+c141c                       65  LOCKHEED C-141 BL426.57 AIRFOIL
+c141d                       65  LOCKHEED C-141 BL610.61 AIRFOIL
+c141e                       65  LOCKHEED C-141 BL761.11 AIRFOIL
+c141f                       65  LOCKHEED C-141 BL958.89 AIRFOIL
+c5a                         61  LOCKHEED C-5A BL0 AIRFOIL
+c5b                         61  LOCKHEED C-5A BL488.2 AIRFOIL
+c5c                         61  LOCKHEED C-5A BL576 AIRFOIL
+c5d                         61  LOCKHEED C-5A BL758.6 AIRFOIL
+c5e                         61  LOCKHEED C-5A BL1256 AIRFOIL
+cal1215j                    81  CAL1215j
+cal2263m                    81  CAL2263m
+cal4014l                    81  CAL4014l
+cap21c                      39  CAP 21   (TraCFoil)
+cast102                     57  CAST 10-2/DOA 2 AIRFOIL
+ch10sm                      79  CH10 (smoothed)
+chen                        98  CHEN AIRFOIL
+clarkk                      27  CLARK K AIRFOIL
+clarkv                      33  CLARK V AIRFOIL
+clarkw                      33  CLARK W AIRFOIL
+clarkx                      33  CLARK X AIRFOIL
+clarky                     121  CLARK Y AIRFOIL
+clarkyh                     31  CLARK YH AIRFOIL
+clarkys                     33  CLARK YS AIRFOIL
+clarkysm                    69  CLARK-Y 11.7% smoothed
+clarkz                      33  CLARK Z AIRFOIL
+clarym15                    33  CLARK YM-15 AIRFOIL
+clarym18                    33  CLARK YM-18 AIRFOIL
+coanda1                     33  Coanda 1
+coanda2                     33  Coanda 2
+coanda3                     33  Coanda 3
+cootie                      33  WACO COOTIE AIRFOIL
+cr001sm                     79  cr001sm
+cr1                        121  CURTISS CR-1 AIRFOIL
+curtisc72                   33  Curtis C-72
+dae11                       81  DAE-11 AIRFOIL
+dae21                       80  DAE-21 AIRFOIL
+dae31                       82  DAE-31 AIRFOIL
+dae41                       81  DAE 41
+dae51                       80  DAE-51 AIRFOIL
+dai1238                     81  DAI 1238
+dai1335                     81  DAI 1335
+dai1336                     81  DAI 1336
+davis                       33  Davis AIRFOIL
+daviscorrected              91  DAVIS BASIC B-24 WING AIRFOIL
+davissm                     79  davissm
+daytonwright6               33  Dayton-Wright 6
+daytonwrightt1              33  Dayton-Wright T-1
+dbln526                     45  SIKORSKY DBLN-526 AIRFOIL
+defcnd1                     79  DEFIANT CANARD BL20 AIRFOIL
+defcnd2                     79  DEFIANT CANARD BL110 AIRFOIL
+defcnd3                     79  DEFIANT CANARD BL145 AIRFOIL
+df101                       62  DF 101 AIRFOIL
+df102                       61  DF102
+dfvlrr4                    139  DFVLR R-4 AIRFOIL
+dga1138                     33  D.G.A. 1138
+dga1182                     33  D.G.A. 1182
+dh4009sm                    79  dh4009sm
+doa5                        97  DORNIER A-5 AIRFOIL
+dormoy                      33  Dormoy
+drgnfly                    140  DRAGONFLY CANARD
+ds19                       140  DS19 Joe Wurts
+ds21                       257  DS21 Joe Wurts
+dsma523a                   119  DSMA-523A AIRFOIL
+dsma523b                   119  DSMA-523B AIRFOIL
+du80141                    101  DU 80-141
+du80176v1                  101  DU 80-176 V1
+du84132v                    97  DELFT DU84-132V3 AIRFOIL (MEASURED)
+du8608418                  101  DU86-084/18 8.44%
+du861372                    40  DU 86-137/25 AIRFOIL
+e1098                       62  EPPLER 1098 AIRFOIL
+e1200                       62  EPPLER 1200 AIRFOIL
+e1210                       61  EPPLER 1210 AIRFOIL
+e1211                       60  EPPLER 1211 AIRFOIL
+e1212                       62  EPPLER E1212 AIRFOIL
+e1212mod                    53  EPPLER E1212MOD AIRFOIL
+e1213                       60  EPPLER 1213 AIRFOIL
+e1214                       61  EPPLER 1214 AIRFOIL
+e1230                       95  EPPLER 1230 AIRFOIL
+e1233                       97  EPPLER 1233 AIRFOIL
+e168                        61  E168  (12.45%)
+e169                        61  E169  (14.4%)
+e171                        61  (Dicke 12.28%)
+e174                        61  E174  (Dicke 8.92%)
+e176                        61  E176  (8.83%)
+e178                        61  E178  (8.69%)
+e180                        61  E180  (8.59%)
+e182                        61  E182 (8.47%)
+e184                        61  E184  (8.33%)
+e186                        61  E186  (10.27%)
+e193                        61  E193  (10.22%)
+e195                        61  E195  (11.82%)
+e197                        61  E197  (13.49%)
+e201                        61  E201  (11.88%)
+e203                        61  E203  (13.64%)
+e205                        61  E205  (10.48%)
+e207                        61  E207  (12.04%)
+e209                        61  E209  (13.72%)
+e210                        61  E210  (13.64%)
+e211                        61  E211  (10.96%)
+e212                        61  E212  (10.55%)
+e214                        61  E214  (11.1%)
+e216                        61  E216  (10.4%)
+e220                        61  E220  (11.48%)
+e221                        61  E221  (9.39%)
+e222                        61  E222  (10.17%)
+e224                        61  E224  (10.17%)
+e226                        61  E226  (10.19%)
+e228                        61  E10(08%)
+e230                        61  E230  (9.96%)
+e231                        65  E231
+e266                        61  EPPLER 266 AIRFOIL
+e297                        70  EPPLER 297 AIRFOIL
+e325                        72  EPPLER 325 AIRFOIL
+e326                        72  EPPLER 326 AIRFOIL
+e327                        72  EPPLER 327 AIRFOIL
+e328                        72  EPPLER 328 AIRFOIL
+e329                        72  EPPLER 329 AIRFOIL
+e330                        71  EPPLER 330 AIRFOIL
+e331                        71  EPPLER 331 AIRFOIL
+e332                        72  EPPLER 332 AIRFOIL
+e333                        71  EPPLER 333 AIRFOIL
+e334                        72  EPPLER 334 AIRFOIL
+e335                        72  EPPLER 335 AIRFOIL
+e336                        72  EPPLER 336 AIRFOIL
+e337                        73  EPPLER 337 AIRFOIL
+e338                        72  EPPLER 338 AIRFOIL
+e339                        72  EPPLER 339 AIRFOIL
+e340                        72  EPPLER 340 AIRFOIL
+e341                        72  EPPLER 341 AIRFOIL
+e342                        71  EPPLER 342 AIRFOIL
+e343                        72  EPPLER 343 AIRFOIL
+e344                        72  EPPLER 344 AIRFOIL
+e360                        72  EPPLER 360 AIRFOIL
+e361                        72  EPPLER 361 AIRFOIL
+e374                        61  E374
+e376                        61  EPPLER 376 AIRFOIL
+e377                        61  EPPLER 377 AIRFOIL
+e377m                       66  EPPLER 377 (MODIFIED) AIRFOIL
+e378                        61  EPPLER 378 AIRFOIL
+e379                        61  EPPLER 379 AIRFOIL
+e385                        61  E385  (8.41%)
+e387                        61  E387
+e392                        61  E392  (10.15%)
+e393                        62  EPPLER 393 AIRFOIL
+e395                        72  EPPLER 395 AIRFOIL
+e396                        72  EPPLER 396 AIRFOIL
+e397                        72  EPPLER 397 AIRFOIL
+e398                        72  EPPLER 398 AIRFOIL
+e399                        72  EPPLER 399 AIRFOIL
+e403                        61  EPPLER 403 AIRFOIL
+e407                        72  EPPLER 407 AIRFOIL
+e417                        61  EPPLER 417 AIRFOIL
+e420                        72  EPPLER 420 AIRFOIL
+e421                        72  EPPLER 421 AIRFOIL
+e422                        72  EPPLER 422 AIRFOIL
+e423                        72  E423
+e426                        40  EPPLER 426 AIRFOIL
+e428                        40  EPPLER 428 AIRFOIL
+e431                        72  EPPLER 431 AIRFOIL
+e432                        72  EPPLER 432 AIRFOIL
+e433                        72  EPPLER 433 AIRFOIL
+e434                        72  EPPLER 434 AIRFOIL
+e435                        72  EPPLER 435 AIRFOIL
+e471                        61  E471  (6.25%)
+e472                        61  EPPLER 472 AIRFOIL
+e473                        61  EPPLER 473 AIRFOIL
+e474                        61  E474  (14.09%)
+e475                        61  E475  (15.01%)
+e476                        71  E476
+e477                        71  E477
+e478                        71  E487
+e479                        61  EPPLER 479 AIRFOIL
+e485                        72  EPPLER 485 AIRFOIL
+e49                         24  EPPLER 49 AIRFOIL
+e502                        72  EPPLER 502 AIRFOIL
+e520                        70  EPPLER 520 AIRFOIL
+e521                        70  EPPLER 521 AIRFOIL
+e540                        72  EPPLER 540 AIRFOIL
+e541                        72  EPPLER 541 AIRFOIL
+e542                        72  EPPLER 542 AIRFOIL
+e543                        72  EPPLER 543 AIRFOIL
+e544                        72  EPPLER 544 AIRFOIL
+e545                        72  EPPLER 545 AIRFOIL
+e546                        72  EPPLER 546 AIRFOIL
+e547                        72  EPPLER 547 AIRFOIL
+e548                        72  EPPLER 548 AIRFOIL
+e549                        72  EPPLER 549 AIRFOIL
+e550                        72  EPPLER 550 AIRFOIL
+e551                        72  EPPLER 551 AIRFOIL
+e552                        71  EPPLER 552 AIRFOIL
+e553                        72  EPPLER 553 AIRFOIL
+e554                        72  EPPLER 554 AIRFOIL
+e555                        72  EPPLER 555 AIRFOIL
+e556                        72  EPPLER 556 AIRFOIL
+e557                        71  EPPLER 557 AIRFOIL
+e558                        61  EPPLER 558 AIRFOIL
+e559                        61  EPPLER 559 AIRFOIL
+e560                        61  EPPLER 560 AIRFOIL
+e561                        61  EPPLER 561 AIRFOIL
+e562                        61  EPPLER 562 AIRFOIL
+e58                         35  EPPLER 58 AIRFOIL
+e580                        61  EPPLER 580 AIRFOIL
+e582                        72  EPPLER 582 AIRFOIL
+e583                        72  EPPLER 583 AIRFOIL
+e584                        72  EPPLER 584 AIRFOIL
+e585                        72  EPPLER 585 AIRFOIL
+e587                        72  EPPLER 587 AIRFOIL
+e59                         35  EPPLER 59 AIRFOIL
+e591                        61  E591
+e593                        71  EPPLER 593 AIRFOIL
+e598                        71  EPPLER 598 AIRFOIL
+e603                        61  EPPLER 603 AIRFOIL
+e604                        70  EPPLER 604 AIRFOIL
+e61                         61  E61  (5.64%)
+e62                         61  E62  (5.62%)
+e625                        99  EPPLER 625 AIRFOIL
+e63                         61  E63  (4.25%)
+e635                        61  EPPLER 635 AIRFOIL
+e636                        61  EPPLER 636 AIRFOIL
+e637                        61  EPPLER 637 AIRFOIL
+e638                        61  EPPLER 638 AIRFOIL
+e639                        61  EPPLER 639 AIRFOIL
+e64                         61  E64  (8.45%)
+e642                        61  EPPLER 642 AIRFOIL
+e654                        72  EPPLER 654 AIRFOIL
+e655                        72  EPPLER 655 AIRFOIL
+e656                        72  EPPLER 656 AIRFOIL
+e657                        72  EPPLER 657 AIRFOIL
+e66                         61  EPPLER 66 AIRFOIL
+e662                        62  EPPLER E662 AIRFOIL
+e664                        61  EPPLER 664 AIRFOIL
+e664ex                      68  EPPLER 664 (EXTENDED) AIRFOIL
+e668                        72  EPPLER 668 AIRFOIL
+e67                         62  EPPLER 67 AIRFOIL
+e678                        61  EPPLER 678 AIRFOIL
+e68                         62  EPPLER 68 AIRFOIL
+e682                        61  EPPLER 682 AIRFOIL
+e694                        61  EPPLER 694 AIRFOIL
+e71                         61  E71  (5.15%)
+e715                        67  EPPLER 715 AIRFOIL
+e748                        61  EPPLER 748 AIRFOIL
+e793                        61  EPPLER 793 AIRFOIL
+e817                        68  EPPLER 817 HYDROFOIL AIRFOIL
+e818                        67  EPPLER 818 HYDROFOIL AIRFOIL
+e836                        61  EPPLER E836 HYDROFOIL AIRFOIL
+e837                        61  EPPLER E837 HYDROFOIL AIRFOIL
+e838                        61  EPPLER E838 HYDROFOIL AIRFOIL
+e850                        67  EPPLER E850 AIRFOIL
+e851                        67  EPPLER E851 AIRFOIL
+e852                        67  EPPLER E852 AIRFOIL
+e853                        66  EPPLER E853 AIRFOIL
+e854                        67  EPPLER E854 AIRFOIL
+e855                        66  EPPLER 855 AIRFOIL
+e856                        67  EPPLER 856 AIRFOIL
+e857                        66  EPPLER 857 AIRFOIL
+e858                        67  EPPLER 858 AIRFOIL
+e862                        61  EPPLER 862 STRUT AIRFOIL
+e863                        61  EPPLER 863 STRUT AIRFOIL
+e864                        61  EPPLER 864 STRUT AIRFOIL
+e874                       120  EPPLER 874 HYDROFOIL AIRFOIL
+e904                       109  EPPLER 904 AIRFOIL
+e908                       109  EPPLER 908 AIRFOIL
+ea61009                     27  EPPLER EA 6(-1)-009 AIRFOIL
+ea61012                     27  EPPLER EA 6(-1)-012 AIRFOIL
+ea81006                     27  EPPLER EA 8(-1)-006 AIRFOIL
+ebambino7                   33  E. Bambino
+ec863914                    31  EPPLER EC 86(-3)-914 AIRFOIL
+eh0009                     100  EH 0.0/9.0
+eh1070                     101  Eh 1.0/7.0
+eh1090                      99  EH 1.0/9.0
+eh1590                      99  EH 1.5/9.0
+eh2010                     101  EH 2.0/10
+eh2012                     101  EH 2.0/12
+eh2070                     101  EH 2.0/7.0
+eh2510                      99  EH 2.5/10
+eh3012                     101  EH 3.0/12
+eiffel10                    34  Eiffel 10 (Wright) - 1903 Wright Flyer airfoil
+eiffel371                   33  Eiffel 371 (Monge)
+eiffel385                   33  Eiffel 385 (S.T. Ae)
+eiffel428                   33  Eiffel 428 (Bleriot)
+eiffel430                   33  Eiffel 430 (Lachassgne)
+esa40                       79  ESA40
+falcon                      79  Falcon
+fauvel                      35  FAUVEL 14% AIRFOIL
+fg1                         33  Fage & Collins 1
+fg2                         33  Fage & Collins 2
+fg3                         33  Fage & Collins 3
+fg4                         33  Fage & Collins 4
+fx049915                    25  WORTMANN FX 049-915 AIRFOIL
+fx05188                     49  WORTMANN FX 05-188 AIRFOIL
+fx05191                     49  WORTMANN FX 05-191 AIRFOIL
+fx057816                    25  WORTMANN FX 057-816
+fx05h126                    49  WORTMANN FX 05-H-126 AIRFOIL
+fx082512                    25  WORTMANN FX 082-512 AIRFOIL
+fx08s176                    49  WORTMANN FX 08-S-176 AIRFOIL
+fx2                         47  WORTMANN FX 2 AIRFOIL
+fx3                         47  WORTMANN FX 3 AIRFOIL
+fx38153                     97  FX 38-153 AIRFOIL
+fx60100                     97  FX 60-100 AIRFOIL
+fx601001                    35  FX 60-100 (126) AIRFOIL
+fx60100sm                   69  FX60-100 10.0% smoothed
+fx60126                     97  WORTMANN FX 60-126 AIRFOIL
+fx601261                    97  FX 60-126/1 AIRFOIL
+fx60157                     97  FX 60-157 AIRFOIL
+fx60160                     37  FX 60-160 AIRFOIL
+fx60177                     97  FX 60-177 AIRFOIL
+fx61140                     97  FX 61-140 AIRFOIL
+fx61147                     97  FX 61-147 AIRFOIL
+fx61163                     97  FX 61-163 AIRFOIL
+fx61168                     97  FX 61-168 AIRFOIL
+fx61184                     97  FX 61-184 AIRFOIL
+fx62k131                    97  WORTMANN FX 62-K-131 AIRFOIL
+fx62k153                    97  FX 62-K-153/20 AIRFOIL
+fx63100                     33  FX 63-100 AIRFOIL
+fx63110                     33  FX 63-110 AIRFOIL
+fx63120                     35  FX 63-120 AIRFOIL
+fx63137                     97  WORTMANN FX 63-137 AIRFOIL
+fx63137sm                   69  FX 63-137 13.7% smoothed
+fx63143                     97  FX 63-143 AIRFOIL
+fx63145                     97  FX 63-145 AIRFOIL
+fx63147                     97  FX 63-147 AIRFOIL
+fx63158                     97  FX 63-158 AIRFOIL
+fx6617a2                    87  FX 66-17AII-182 AIRFOIL
+fx6617ai                    66  WORTMANN FX 66-17AII-182 AIRFOIL (AS TESTED AT NASA)
+fx66182                     87  FX 66-182 AIRFOIL
+fx66196v                    87  FX 66-S-196 V1 AIRFOIL
+fx66a175                    87  WORTMANN FX 66-17A-175 AIRFOIL
+fx66h60                     97  FX 66-H-60
+fx66h80                     97  FX 66-H-80
+fx66s161                    87  FX 66-S-161 AIRFOIL
+fx66s171                    87  FX 66-S-171 AIRFOIL
+fx66s196                    87  FX 66-S-196 AIRFOIL
+fx67k150                    87  FX 67-K-150/17 AIRFOIL
+fx67k170                    87  FX 67-K-170/17 AIRFOIL
+fx68h120                    97  FX 68-H-120
+fx69274                     97  FX 69-274
+fx69h083                    53  BELL/WORTMANN FX 69-H-083 AIRFOIL
+fx69h098                    45  BELL/WORTMANN FX 69-H-098 AIRFOIL
+fx69pr281                   97  FX 69-PR-281
+fx71089a                    85  WORTMANN FX 71-089A AIRFOIL
+fx71120                     85  WORTMANN FX 71-120 AIRFOIL
+fx711520                    87  FX 71-L-150/20 AIRFOIL
+fx711525                    87  FX 71-L-150/25 AIRFOIL
+fx711530                    87  FX 71-L-150/30 AIRFOIL
+fx71l150                    87  FX 71-L-150/30 AIRFOIL
+fx72150a                    87  WORTMANN FX 72-MS-150A AIRFOIL
+fx72150b                    87  WORTMANN FX 72-MS-150B AIRFOIL
+fx72ls160                   97  FX 72-LS-160
+fx73170                     97  FX 73-170
+fx73170a                    97  FX 73-170 A
+fx73cl1152                  97  FX 73-CL1-152
+fx73cl2152                  97  FX 73-CL2-152
+fx73cl3152                  97  FX 73-CL3-152
+fx73k170                    97  FX 73-K-170/22
+fx74080                     97  FX 74-080
+fx74130wp1                  97  FX 74-130 WP1
+fx74130wp2                  97  74-130 WP2
+fx74130wp2mod               97  74-130 WP2 MOD
+fx74cl5140                  87  FX74_CL5_140
+fx74cl6140                  97  FX 74-CL6-140
+fx74modsm                   79  FX 74-Cl5-140 MOD  (smoothed)
+fx75141                     97  FX 75-141
+fx75193                     97  FX 75-193
+fx75vg166                   97  FX 75-VG-166/22
+fx76100                     97  FX 76-100
+fx76120                     97  FX 76-120
+fx76mp120                   97  FX 76-MP-120
+fx76mp140                   97  FX 76-MP-140
+fx76mp160                   97  FX 76-MP-160
+fx77080                     97  FX 77-080
+fx77w121                    97  FX 77-W-121
+fx77w153                    95  WORTMANN FX 77-W-153 AIRFOIL
+fx77w258                    95  WORTMANN FX 77-W-258 AIRFOIL
+fx77w270                    97  FX 77-W-270
+fx77w270s                   97  FX 77-W-270S
+fx77w343                    95  WORTMANN FX 77-W-343 AIRFOIL
+fx78k140                    97  FX 78-K-140/20
+fx78k140a20                 97  FX 78-K-140 A/20
+fx78k150                    97  FX 78-K-150/20
+fx78k161                    97  FX 78-K-161
+fx78pk188                   97  FX 78-PK-188/20
+fx79k144                    97  WORTMANN FX 79-K-144/17 AIRFOIL
+fx79l100                    97  FX 79-L-100
+fx79l120                    97  FX 79-L-120
+fx79w151a                   97  FX 79-W-151 A
+fx79w470a                   97  FX 79-W-470A
+fx79w660a                   97  FX 79-W-660A
+fx80080                     97  FX 80-080
+fx83w108                    97  FX 83-W-108
+fx83w160                    97  FX 83-W-160
+fx83w227                    97  FX 83-W-227
+fx84w097                    97  FX 84-W-097
+fx84w127                    97  FX 84-W-127
+fx84w140                    97  FX 84-W-140
+fx84w150                    97  FX 84-W-150
+fx84w175                    97  FX 84-W-175
+fx84w218                    97  FX 84-W-218
+fxl142k                     97  FX LIII-142 K 25 AIRFOIL
+fxlv152                     97  WORTMANN FX L V-152 AIRFOIL
+fxm2                        97  WORTMANN FX M2 AIRFOIL
+fxs02196                    97  FX S 02-196 AIRFOIL
+fxs03182                    97  FX S 03-182 AIRFOIL
+fxs21158                    97  FX S 02/1-158 AIRFOIL
+geminism                    79  GEMINI (smoothed)
+giiia                       51  GIII BL0 AIRFOIL
+giiib                       51  GIII BL45 AIRFOIL
+giiic                       51  GIII BL75 AIRFOIL
+giiid                       51  GIII BL86 AIRFOIL
+giiie                       51  GIII BL126 AIRFOIL
+giiif                       51  GIII BL145 AIRFOIL
+giiig                       51  GIII BL167 AIRFOIL
+giiih                       51  GIII BL207 AIRFOIL
+giiii                       51  GIII BL288 AIRFOIL
+giiij                       51  GIII BL332 AIRFOIL
+giiik                       51  GIII BL369 AIRFOIL
+giiil                       51  GIII BL387 AIRFOIL
+giiim                       51  GIII BL430 AIRFOIL
+giiin                       51  GIII BL450 AIRFOIL
+glennmartin2                33  Glenn Martin 2
+glennmartin3                33  Glenn Martin 3
+glennmartin4                33  Glenn Martin 4
+gm15sm                      79  GM15 (smoothed)
+goe05k                      31  GOE 5K AIRFOIL
+goe06k                      31  GOE 6K AIRFOIL
+goe07k                      31  GOE 7K AIRFOIL
+goe08k                      31  GOE 8K AIRFOIL
+goe09k                      29  GOE 9K AIRFOIL
+goe100                      33  GOE 100 (SOPWITH) AIRFOIL
+goe101                      31  GOE 101 AIRFOIL
+goe10k                      29  GOE 10K AIRFOIL
+goe113                      31  GOE 113 AIRFOIL
+goe114                      33  GOE 114 (MVA MK.1) AIRFOIL
+goe115                      33  GOE 115 (MVA MK.2) AIRFOIL
+goe116                      33  GOE 116 (MVA MK.3) AIRFOIL
+goe117                      33  GOE 117 (MVA MK.4) AIRFOIL
+goe118                      33  GOE 118 (MVA MK.7) AIRFOIL
+goe11k                      29  GOE 11K AIRFOIL
+goe121                      33  GOE 121 (MVA H.1) AIRFOIL
+goe122                      33  GOE 122 (MVA H.2) AIRFOIL
+goe123                      33  GOE 123 AIRFOIL
+goe124                      33  GOE 124 (MVA H.4) AIRFOIL
+goe12k                      29  GOE 12K AIRFOIL
+goe133                      33  GOE 133 (MVA H.11) AIRFOIL
+goe134                      33  GOE 134 (MVA H.12) AIRFOIL
+goe137                      33  GOE 137 (MVA H.15) AIRFOIL
+goe13k                      29  GOE 13K AIRFOIL
+goe14                       33  GOE 14 AIRFOIL
+goe140                      33  GOE 140 (MVA H.17) AIRFOIL
+goe142                      99  GOE 142 (MVA H.19) AIRFOIL
+goe143                      33  GOE 143 (MVA H.20) AIRFOIL
+goe144                      33  GOE 144 (MVA H.21) AIRFOIL
+goe147                      33  GOE 147 (MVA H.6) AIRFOIL
+goe14k                      29  GOE 14K AIRFOIL
+goe15                       33  GOE 15 AIRFOIL
+goe155                      33  GOE 155 (SSW D.1) AIRFOIL
+goe15k                      29  GOE 15K AIRFOIL
+goe164                      33  GOE 164 (MVA MK.10) AIRFOIL
+goe165                      33  GOE 165 (MVA MK.11) AIRFOIL
+goe167                      33  GOE 167 (V.KARMAN PROP.2) AIRFOIL
+goe16k                      29  GOE 16K AIRFOIL
+goe173                      33  GOE 173 (ALBATROS 6020) AIRFOIL
+goe174                      33  GOE 174 (ALBATROS 5020) AIRFOIL
+goe176                      33  GOE 176 (ALBATROS 7020) AIRFOIL
+goe177                      33  GOE 177 AIRFOIL
+goe178                      33  GOE 178 AIRFOIL
+goe180                      33  GOE 180 (MVA H.26) AIRFOIL
+goe182                      33  GOE 182 (MVA H.27) AIRFOIL
+goe184                      33  GOE 184 (MVA H.29) AIRFOIL
+goe187                      33  GOE 187 (SCHUETTE-LANZ 2U10) AIRFOIL
+goe188                      33  GOE 188 (SCHUETTE-LANZ 3U10) AIRFOIL
+goe190                      33  GOE 190 (MVA MK.18) AIRFOIL
+goe195                      33  GOE 195 AIRFOIL
+goe198                      33  GOE 198 (L.F.G. 5294) AIRFOIL
+goe199                      33  GOE 199 (L.F.G. 5406) AIRFOIL
+goe207                      33  GOE 207 (AVIATIK V8) AIRFOIL
+goe210                      33  GOE 210 (DAIMLER) AIRFOIL
+goe217                      33  GOE 217 (MVA MK.12) AIRFOIL
+goe222                      33  GOE 222 (MVA H.33) AIRFOIL
+goe223                      33  GOE 223 (MVA H.34) AIRFOIL
+goe225                      33  GOE 225 (MVA H.35) AIRFOIL
+goe226                      33  GOE 226 (MVA H.36) AIRFOIL
+goe227                      33  GOE 227 (MVA H.37) AIRFOIL
+goe228                      33  GOE 228 (MVA H.38) AIRFOIL
+goe229                      33  GOE 229 (MVA H.39) AIRFOIL
+goe233                      33  GOE 233 (MVA CA4) AIRFOIL
+goe234                      33  GOE 234 (MVA CA5) AIRFOIL
+goe235                      33  GOE 235 (SCHUETTE-LANZ) AIRFOIL
+goe238                      33  GOE 238 (HANSA-BRANDENBURG) AIRFOIL
+goe239                      33  GOE 239 (MVA H.31) AIRFOIL
+goe240                      33  GOE 240 (KOLLER) AIRFOIL
+goe241                      33  GOE 241 (MVA PR.1) AIRFOIL
+goe242                      33  GOE 242 (MVA PR.2) AIRFOIL
+goe243                      33  GOE 243 (MVA PR.3) AIRFOIL
+goe244                      33  GOE 244 (MVA PR.4) AIRFOIL
+goe255                      33  GOE 255 (MVA CA.6) AIRFOIL
+goe256                      33  GOE 256 (JUNKERS E) AIRFOIL
+goe257                      33  GOE 257 AIRFOIL
+goe264                      33  GOE 264 AIRFOIL
+goe265                      33  GOE 265 AIRFOIL
+goe269                      33  GOE 269 AIRFOIL
+goe274                      33  GOE 274 (DAIMLER V) AIRFOIL
+goe275                      33  GOE 275 (DAIMLER VI) AIRFOIL
+goe276                      33  GOE 276 (DAIMLER VII) AIRFOIL
+goe277                      33  GOE 277 (DAIMLER VIII) AIRFOIL
+goe278                      33  GOE 278 (DAIMLER IX) AIRFOIL
+goe279                      33  GOE 279 (DAIMLER X) AIRFOIL
+goe280                      33  GOE 280 (DAIMLER XI) AIRFOIL
+goe281                      33  GOE 281 (DAIMLER XII) AIRFOIL
+goe282                      33  GOE 282 (DAIMLER XIII) AIRFOIL
+goe284                      33  GOE 284 AIRFOIL
+goe285                      35  GOE 285 AIRFOIL
+goe286                      33  GOE 286 AIRFOIL
+goe287                      33  GOE 287 AIRFOIL
+goe288                      33  GOE 288 AIRFOIL
+goe289                      33  GOE 289 (MVA 289) AIRFOIL
+goe290                      33  GOE 290 (MVA 290) AIRFOIL
+goe298                      33  GOE 298 AIRFOIL
+goe29b                      33  GOE 29B AIRFOIL
+goe300                      27  GOE 300 (FRIEDRICHSHAFEN G20) AIRFOIL
+goe301                      33  GOE 301 (FRIEDRICHSHAFEN G 13) AIRFOIL
+goe303                      33  GOE 303 (FRIEDRICHSHAFEN G03) AIRFOIL
+goe304                      33  GOE 304 (FRIEDRICHSHAFEN G02) AIRFOIL
+goe308                      33  GOE 308 (MVA H.40) AIRFOIL
+goe309                      33  GOE 309 (MVA H.41) AIRFOIL
+goe310                      33  GOE 310 (MVA H.42) AIRFOIL
+goe311                      33  GOE 311 (MVA H.43) AIRFOIL
+goe314                      33  GOE 314 (HANSA-BRANDENBURG) AIRFOIL
+goe315                      33  GOE 315 (HANSA-BRANDENBURG III.5) AIRFOIL
+goe316                      33  GOE 316 (HANSA-BRANDENBURG IV.5) AIRFOIL
+goe318                      33  GOE 318 (HANSA-BRANDENBURG VI.5) AIRFOIL
+goe319                      33  GOE 319 (HANSA-BRANDENBURG II) AIRFOIL
+goe320                      33  GOE 320 (HANSA-BRANDENBURG II.1) AIRFOIL
+goe321                      33  GOE 321 (HANSA-BRANDENBURG III.1) AIRFOIL
+goe322                      33  GOE 322 (HANSA-BRANDENBURG IV.1) AIRFOIL
+goe323                      33  GOE 323 (HANSA-BRANDENBURG V.1) AIRFOIL
+goe324                      33  GOE 324 (HANSA-BRANDENBURG) AIRFOIL
+goe325                      33  GOE 325 (PFALZ 54) AIRFOIL
+goe326                      33  GOE 326 (PFALZ 55) AIRFOIL
+goe328                      33  GOE 328 AIRFOIL
+goe329                      33  GOE 329 (PFALZ 58) AIRFOIL
+goe330                      33  GOE 330 (PFALZ 59) AIRFOIL
+goe331                      33  GOE 331 (PFALZ 60) AIRFOIL
+goe332                      33  GOE 332 (PFALZ 61) AIRFOIL
+goe335                      33  GOE 335 (D.F.W.) AIRFOIL
+goe336                      33  GOE 336 (MVA H.44) AIRFOIL
+goe342                      31  GOE 342 AIRFOIL
+goe344                      33  GOE 344 (PFALZ 71) AIRFOIL
+goe346                      33  GOE 346 (FRIEDRICHSHAFEN-STAAKEN) AIRFOIL
+goe358                      27  GOE 358 AIRFOIL
+goe359                      33  GOE 359 AIRFOIL
+goe360                      33  GOE 360 AIRFOIL
+goe361                      33  GOE 361 AIRFOIL
+goe362                      33  GOE 362 AIRFOIL
+goe363                      33  GOE 363 AIRFOIL
+goe364                      33  GOE 364 AIRFOIL
+goe365                      33  GOE 365 AIRFOIL
+goe366                      33  GOE 366 AIRFOIL
+goe367                      33  GOE 367 AIRFOIL
+goe368                      33  GOE 368 AIRFOIL
+goe369                      33  GOE 369 AIRFOIL
+goe370                      33  GOE 370 AIRFOIL
+goe371                      33  GOE 371 AIRFOIL
+goe372                      33  GOE 372 AIRFOIL
+goe373                      33  GOE 373 AIRFOIL
+goe374                      33  GOE 374 AIRFOIL
+goe375                      33  GOE 375 AIRFOIL
+goe376                      33  GOE 376 AIRFOIL
+goe377                      33  GOE 377 AIRFOIL
+goe379                      33  GOE 379 AIRFOIL
+goe380                      33  GOE 380 AIRFOIL
+goe381                      33  GOE 381 AIRFOIL
+goe382                      33  GOE 382 AIRFOIL
+goe383                      33  GOE 383 AIRFOIL
+goe384                      33  GOE 384 AIRFOIL
+goe385                      33  GOE 385 AIRFOIL
+goe386                      33  GOE 386 AIRFOIL
+goe387                      33  GOE 387 AIRFOIL
+goe388                      33  GOE 388 AIRFOIL
+goe389                      33  GOE 389 AIRFOIL
+goe390                      33  GOE 390 AIRFOIL
+goe391                      33  GOE 391 AIRFOIL
+goe392                      33  GOE 392 AIRFOIL
+goe393                      33  GOE 393 AIRFOIL
+goe394                      33  GOE 394 AIRFOIL
+goe395                      33  GOE 395 AIRFOIL
+goe396                      33  GOE 396 AIRFOIL
+goe397                      33  GOE 397 AIRFOIL
+goe398                      33  GOE 398 AIRFOIL
+goe399                      33  GOE 399 AIRFOIL
+goe400                      33  GOE 400 AIRFOIL
+goe401                      33  GOE 401 AIRFOIL
+goe402                      33  GOE 402 AIRFOIL
+goe403                      33  GOE 403 AIRFOIL
+goe404                      33  GOE 404 AIRFOIL
+goe405                      29  GOE 405 AIRFOIL
+goe406                      33  GOE 406 AIRFOIL
+goe407                      33  GOE 407 AIRFOIL
+goe408                      33  GOE 408 AIRFOIL
+goe409                      33  GOE 409 AIRFOIL
+goe410                      33  GOE 410 AIRFOIL
+goe411                      31  GOE 411 AIRFOIL
+goe412                      33  GOE 412 AIRFOIL
+goe413                      33  GOE 413 AIRFOIL
+goe414                      33  GOE 414 AIRFOIL
+goe415                      33  GOE 415 AIRFOIL
+goe416a                     33  GOE 416A AIRFOIL
+goe417                      33  GOE 417 AIRFOIL
+goe417a                     31  GOE 417A (GEW. PLATTE) AIRFOIL
+goe418                      33  GOE 418 AIRFOIL
+goe419                      33  GOE 419 AIRFOIL
+goe420                      33  GOE 420 AIRFOIL
+goe421                      33  GOE 421 AIRFOIL
+goe422                      33  GOE 422 AIRFOIL
+goe423                      33  GOE 423 AIRFOIL
+goe424                      33  GOE 424 AIRFOIL
+goe425                      33  GOE 425 AIRFOIL
+goe426                      33  GOE 426 AIRFOIL
+goe427                      33  GOE 427 AIRFOIL
+goe428                      33  GOE 428 AIRFOIL
+goe429                      33  GOE 429 AIRFOIL
+goe430                      33  GOE 430 AIRFOIL
+goe431                      33  GOE 431 AIRFOIL
+goe432                      33  GOE 432 AIRFOIL
+goe433                      33  GOE 433 AIRFOIL
+goe434                      33  GOE 434 AIRFOIL
+goe435                      33  GOE 435 AIRFOIL
+goe436                      33  GOE 436 AIRFOIL
+goe437                      33  GOE 437 AIRFOIL
+goe438                      33  GOE 438 AIRFOIL
+goe439                      29  GOE 439 AIRFOIL
+goe440                      33  GOE 440 AIRFOIL
+goe441                      33  GOE 441 AIRFOIL
+goe442                      33  GOE 442 AIRFOIL
+goe443                      29  GOE 443 AIRFOIL
+goe444                      33  GOE 444 AIRFOIL
+goe445                      33  GOE 445 AIRFOIL
+goe446                      33  GOE 446 AIRFOIL
+goe447                      33  GOE 447 AIRFOIL
+goe448                      33  GOE 448 AIRFOIL
+goe449                      33  GOE 449 AIRFOIL
+goe450                      33  GOE 450 AIRFOIL
+goe451                      33  GOE 451 AIRFOIL
+goe456                      33  GOE 456 AIRFOIL
+goe457                      33  GOE 457 AIRFOIL
+goe458                      33  GOE 458 AIRFOIL
+goe459                      33  GOE 459 AIRFOIL
+goe460                      33  GOE 460 AIRFOIL
+goe462                      33  GOE 462 AIRFOIL
+goe464                      33  GOE 464 AIRFOIL
+goe474                      33  GOE 474 AIRFOIL
+goe476                      33  GOE 476 AIRFOIL
+goe477                      25  GOE 477 AIRFOIL
+goe478                      33  GOE 478 AIRFOIL
+goe479                      33  GOE 479 AIRFOIL
+goe480                      25  GOE 480 AIRFOIL
+goe481                      33  GOE 481 AIRFOIL
+goe481a                     33  GOE 481A AIRFOIL
+goe482                      33  GOE 482 AIRFOIL
+goe483                      33  GOE 483 AIRFOIL
+goe484                      31  GOE 484 AIRFOIL
+goe488                      31  GOE 488 AIRFOIL
+goe490                      33  GOE 490 AIRFOIL
+goe491                      33  GOE 491 AIRFOIL
+goe492                      33  GOE 492 AIRFOIL
+goe493                      33  GOE 493 AIRFOIL
+goe494                      33  GOE 494 AIRFOIL
+goe495                      33  GOE 495 AIRFOIL
+goe496                      29  GOE 496 AIRFOIL
+goe497                      33  GOE 497 AIRFOIL
+goe498                      33  GOE 498 AIRFOIL
+goe499                      33  GOE 499 AIRFOIL
+goe500                      33  GOE 500 AIRFOIL
+goe501                      33  GOE 501 AIRFOIL
+goe502                      33  GOE 502 AIRFOIL
+goe503                      33  GOE 503 AIRFOIL
+goe504                      33  GOE 504 AIRFOIL
+goe505                      33  GOE 505 AIRFOIL
+goe506                      33  GOE 506 AIRFOIL
+goe507                      25  GOE 507 AIRFOIL
+goe508                      33  GOE 508 AIRFOIL
+goe509                      33  GOE 509 AIRFOIL
+goe510                      33  GOE 510 AIRFOIL
+goe511                      33  GOE 511 AIRFOIL
+goe512                      33  GOE 512 AIRFOIL
+goe513                      33  GOE 513 AIRFOIL
+goe514                      33  GOE 514 AIRFOIL
+goe515                      33  GOE 515 AIRFOIL
+goe517                      25  GOE 517 AIRFOIL
+goe518                      33  GOE 518 AIRFOIL
+goe522                      33  GOE 522 AIRFOIL
+goe523                      33  GOE 523 AIRFOIL
+goe525                      33  GOE 525 AIRFOIL
+goe526                      33  GOE 526 AIRFOIL
+goe527                      33  GOE 527 AIRFOIL
+goe528                      33  GOE 528 AIRFOIL
+goe529                      33  GOE 529 AIRFOIL
+goe530                      33  GOE 530 AIRFOIL
+goe531                      33  GOE 531 AIRFOIL
+goe532                      33  GOE 532 AIRFOIL
+goe533                      31  GOE 533 AIRFOIL
+goe534                      33  GOE 534 AIRFOIL
+goe535                      33  GOE 535 AIRFOIL
+goe54                       33  GOE 54 AIRFOIL
+goe546                      33  GOE 546 AIRFOIL
+goe547                      33  GOE 547 AIRFOIL
+goe548                      33  GOE 548 AIRFOIL
+goe549                      41  GOE 549 AIRFOIL
+goe55                       33  GOE 55 AIRFOIL
+goe550                      33  GOE 550 AIRFOIL
+goe553                      33  GOE 553 AIRFOIL
+goe559                      33  GOE 559 AIRFOIL
+goe561                      33  GOE 561 AIRFOIL
+goe562                      33  GOE 562 AIRFOIL
+goe563                      33  GOE 563 AIRFOIL
+goe564                      33  GOE 564 AIRFOIL
+goe565                      31  GOE 565 AIRFOIL
+goe566                      33  GOE 566 AIRFOIL
+goe567                      33  GOE 567 AIRFOIL
+goe57                       33  GOE 57 AIRFOIL
+goe570                      33  GOE 570 AIRFOIL
+goe571                      33  GOE 571 AIRFOIL
+goe572                      33  GOE 572 AIRFOIL
+goe573                      33  GOE 573 AIRFOIL
+goe574                      33  GOE 574 AIRFOIL
+goe575                      33  GOE 575 AIRFOIL
+goe584                      25  GOE 584 AIRFOIL
+goe585                      33  GOE 585 AIRFOIL
+goe587                      33  GOE 587 AIRFOIL
+goe590                      33  GOE 590 AIRFOIL
+goe591                      33  GOE 591 AIRFOIL
+goe592                      33  GOE 592 AIRFOIL
+goe593                      33  GOE 593 AIRFOIL
+goe595                      33  GOE 595 AIRFOIL
+goe596                      33  GOE 596 AIRFOIL
+goe598                      33  GOE 598 AIRFOIL
+goe599                      33  GOE 599 AIRFOIL
+goe600                      33  GOE 600 AIRFOIL
+goe601                      33  GOE 601 AIRFOIL
+goe602                      33  GOE 602 AIRFOIL
+goe602m                     33  GOE 602 MOD. AIRFOIL
+goe604                      33  GOE 604 AIRFOIL
+goe610b                     31  GOE 610 B AIRFOIL
+goe610bm                    29  GOE 610-B MOD. AIRFOIL
+goe611                      31  GOE 611 AIRFOIL
+goe612                      33  GOE 612 AIRFOIL
+goe613                      33  GOE 613 AIRFOIL
+goe614                      33  GOE 614 AIRFOIL
+goe615                      33  GOE 615 AIRFOIL
+goe617                      33  GOE 617 AIRFOIL
+goe619                      33  GOE 619 AIRFOIL
+goe620                      33  GOE 620 AIRFOIL
+goe621                      33  GOE 621 AIRFOIL
+goe622                      33  GOE 622 AIRFOIL
+goe623                      33  GOE 623 AIRFOIL
+goe624                      33  GOE 624 AIRFOIL
+goe625                      33  GOE 625 AIRFOIL
+goe626                      33  GOE 626 AIRFOIL
+goe627                      33  GOE 627 AIRFOIL
+goe628                      33  GOE 628 AIRFOIL
+goe629                      33  GOE 629 AIRFOIL
+goe63                       33  GOE 63 AIRFOIL
+goe630                      33  GOE 630 AIRFOIL
+goe632                      33  GOE 632 AIRFOIL
+goe633                      33  GOE 633 AIRFOIL
+goe645                      33  GOE 645 AIRFOIL
+goe646                      33  GOE 646 AIRFOIL
+goe647                      33  GOE 647 AIRFOIL
+goe648                      34  GOE 648 AIRFOIL
+goe650                      33  GOE 650 AIRFOIL
+goe652                      33  GOE 652 AIRFOIL
+goe654                      33  GOE 654 AIRFOIL
+goe655                      33  GOE 655 AIRFOIL
+goe670                      29  GOE 670 AIRFOIL
+goe673                      33  GOE 673 AIRFOIL
+goe675                      33  GOE 675 AIRFOIL
+goe676                      33  GOE 676 (= M 12) AIRFOIL
+goe677                      33  GOE 677 (= M 6) AIRFOIL
+goe679                      33  GOE 679 AIRFOIL
+goe681                      33  GOE 681 AIRFOIL
+goe682                      29  GOE 682 AIRFOIL
+goe683                      33  GOE 683 AIRFOIL
+goe685                      33  GOE 685 AIRFOIL
+goe692                      33  GOE 692 AIRFOIL
+goe693                      33  GOE 693 AIRFOIL
+goe701                      33  GOE 701 AIRFOIL
+goe702                      33  GOE 702 AIRFOIL
+goe703                      33  GOE 703 AIRFOIL
+goe704                      33  GOE 704 AIRFOIL
+goe711                      31  GOE 711 AIRFOIL
+goe723                      33  GOE 723 AIRFOIL
+goe735                      33  GOE 735 AIRFOIL
+goe738                      33  GOE 738 AIRFOIL
+goe741                      33  GOE 741 AIRFOIL
+goe744                      33  GOE 744 AIRFOIL
+goe746                      33  GOE 746 AIRFOIL
+goe758                      33  GOE 758 AIRFOIL
+goe765                     211  Gottingen 765 airfoil (recovered). Thick: .144 LE radius: 0.02062 LE slope: 0.17300
+goe766                      33  GOE 766 AIRFOIL
+goe767                      33  GOE 767 AIRFOIL
+goe769                      33  GOE 769 AIRFOIL
+goe770                      31  GOE 770 AIRFOIL
+goe775                      33  GOE 775 AIRFOIL
+goe776                      33  GOE 776 AIRFOIL
+goe777                      33  GOE 777 AIRFOIL
+goe780                      33  GOE 780 AIRFOIL
+goe79                       33  GOE 79 (PFALZ 11) AIRFOIL
+goe795                      97  GOE 795 AIRFOIL
+goe795sm                    69  GOE 795 smoothed
+goe796                      41  GOE 796 AIRFOIL
+goe797                      27  GOE 797 AIRFOIL
+goe798                      31  GOE 798 AIRFOIL
+goe801                      33  GOE 801 (MVA 301) AIRFOIL
+goe802                      33  GOE 802 AIRFOIL
+goe802a                     41  GOE 802 A AIRFOIL
+goe802b                     46  GOE 802 B AIRFOIL
+goe803h                     39  GOE 803 (HACKLINGER) AIRFOIL
+goe804                      31  GOE 804 (EA 8) AIRFOIL
+goe81                       33  GOE 81 AIRFOIL
+goe92                       33  GOE 92 AIRFOIL
+griffith30symsuction        73  Griffith 30% Suction Airfoil
+gs1                         31  SIKORSKY GS-1 AIRFOIL
+gu255118                    47  UNIVERSITY OF GLASGOW GU25-5(11)8 AIRFOIL
+gw19                       200  GW 19
+gw25                       200  GW 25
+gw27                       200  GW 27
+gw30                       200  GW 30
+gw31                       200  GW 31
+hh02                        79  HUGHES HELICOPTERS HH-02 AIRFOIL
+hobie                       35  HOBIE
+hobiesm                     63  HOBIESMO1.DAT
+hor04                      110  ONERA HOR04 AIRFOIL
+hor07                      100  ONERA HOR07 AIRFOIL
+hor12                      121  ONERA HOR12 AIRFOIL
+hor20                      117  ONERA HOR20 AIRFOIL
+hq010                       97  HQ 0/10 AIRFOIL
+hq07                        97  HQ 0/7 AIRFOIL
+hq09                        97  HQ 0/9 AIRFOIL
+hq1010                      77  HQ 1.0/10 AIRFOIL
+hq1012                      77  HQ 1.0/12 AIRFOIL
+hq108                       77  HQ 1.0/8 AIRFOIL
+hq109                       77  HQ 1.0/9 AIRFOIL
+hq1510                      77  HQ 1.5/10 AIRFOIL
+hq1511                      97  HQ 1.5/11 AIRFOIL
+hq1512                      77  HQ 1.5/12 AIRFOIL
+hq158                       77  HQ 1.5/8 AIRFOIL
+hq1585                      39  HQ 1.5/8.5 AIRFOIL
+hq159                       77  HQ 1.5/9 AIRFOIL
+hq159b                      49  HQ 1.5/9 B AIRFOIL
+hq17                        95  HORSTMANN AND QUAST HQ-17/14.38 AIRFOIL (MEASURED)
+hq2010                      77  HQ 2.0/10 AIRFOIL
+hq2012                      77  HQ 2.0/12 AIRFOIL
+hq208                       77  HQ 2.0/8 AIRFOIL
+hq209                       77  HQ 2.0/9 AIRFOIL
+hq2090sm                    39  HQ-2.0/9  9.0%   smoothed
+hq2195                      53  HQ 2.1/9.5 AIRFOIL
+hq2510                      77  HQ 2.5/10 AIRFOIL
+hq2511                      97  HQ 2.5/11 AIRFOIL
+hq2512                      77  HQ 2.5/12 AIRFOIL
+hq258                       77  HQ 2.5/8 AIRFOIL
+hq259                       77  HQ 2.5/9 AIRFOIL
+hq2590sm                    53  HQ 2.5/9.0 smoothed by Eppler
+hq259b                      53  HQ 2.5/9 B AIRFOIL
+hq300gd2                    80  HORSTMANN AND QUAST HQ-300 GD(MOD 2) AIRFOIL
+hq3010                      77  HQ 3.0/10 AIRFOIL
+hq3011                      77  HQ 3.0/11 AIRFOIL
+hq3012                      77  HQ 3.0/12 AIRFOIL
+hq3013                      77  HQ 3.0/13 AIRFOIL
+hq3014                      77  HQ 3.0/14 AIRFOIL
+hq3015                      77  HQ 3.0/15 AIRFOIL
+hq308                       77  HQ 3.0/8 AIRFOIL
+hq309                       77  HQ 3.0/9 AIRFOIL
+hq3510                      77  HQ 3.5/10 AIRFOIL
+hq3512                      77  HQ 3.5/12 AIRFOIL
+hq3513                      77  HQ 3.5/13 AIRFOIL
+hq3514                      39  HQ 3.5/14 AIRFOIL
+hq3518                      39  HQ 3.5/18 AIRFOIL
+hq358                       77  HQ 3.5/8 AIRFOIL
+hq359                       77  HQ 3.5/9 AIRFOIL
+hs1404                     124  HAM-STD HS1-404 AIRFOIL
+hs1430                     122  HAM-STD HS1-430 AIRFOIL
+hs1606                     123  HAM-STD HS1-606 AIRFOIL
+hs1620                     123  HAM-STD HS1-620 AIRFOIL
+hs1708                     123  HAM-STD HS1-708 AIRFOIL
+hs1712                     124  HAM-STD HS1-712 AIRFOIL
+hsnlf213                   119  HSNLF(1)-0213 AIRFOIL
+ht05                       179  HT05
+ht08                       160  HT08
+ht12                       141  HT12
+ht13                       140  HT 13
+ht14                       140  HT 14
+ht21                       140  HT21
+ht22                       143  HT22
+ht23                       143  HT23
+ht33                       240  HT33
+ht34                       240  HT34
+ht35                       240  HT35
+isa571                      33  I.S.A. 571
+isa960                      33  I.S.A. 960
+isa961                      33  I.S.A. 961
+isa962                      33  I.S.A. 962
+istmt112                   201  IST-MT1-12
+istmt115                   161  IST-MT1-15
+istmt118                   201  IST-MT1-18
+istmt121                   201  IST-MT1-21
+istmt124                   201  IST-MT1-24
+j5012                       61  J5012   12%
+jn153                      120  JN-153 AIRFOIL
+joukowsk                    91  12% JOUKOWSKI AIRFOIL
+jxgs04                     201  JX-GS-04
+jxgs06                     201  JX-GS-06
+jxgs10                     201  JX-GS-10
+jxgs15                     201  JX-GS-15
+k1                         169  NYU/GRUMMAN K-1 AIRFOIL
+k2                         178  GRUMMAN K-2 AIRFOIL
+k3                         183  GRUMMAN K-3 AIRFOIL
+k3311                       49  K3311  (original)
+k3311sm                     79  K3311 (smoothed)
+kc135a                      51  KC-135 BL52.44 AIRFOIL
+kc135b                      51  KC-135 BL124.32 AIRFOIL
+kc135c                      51  KC-135 BL200.76 AIRFOIL
+kc135d                      51  KC-135 BL351.6 AIRFOIL
+kc135winglet                75  KC-135 Winglet (supercritical Whitcomb)
+kenmar                     101  KENNEDY AND MARSDEN AIRFOIL
+l1003                       49  LIEBECK L1003 AIRFOIL
+l188root                    91  LOCKHEED L-188 ROOT AIRFOIL
+l188tip                     91  LOCKHEED L-188 TIP AIRFOIL
+l7769                       33  LISSAMAN 7769 AIRFOIL
+la203a                     101  DOUGLAS LA203A AIRFOIL
+la2573a                    101  LA2573A
+la5055                      49  LIEBECK LA5055 AIRFOIL
+lds2                        57  LDS-2 AIRFOIL
+legionair140sm             198  Legionair 140 (digitized and smoothed by MSelig)
+lg10sc                      89  LOCKHEED-GEORGIA SUPERCRITICAL AIRFOIL
+lnv109a                    101  LNV109A
+lrn1007                     59  lrn1007
+lrn1015                     79  NASA LRN 1015 (NASA TM 102840)
+ls013                       57  NASA/LANGLEY LS(1)-0013 AIRFOIL
+ls413                       89  NASA/LANGLEY LS(1)-0413 (GA(W)-2) AIRFOIL
+ls413mod                    88  NASA/LANGLEY LS(1)-0413MOD AIRFOIL
+ls417                       75  NASA/LANGLEY LS(1)-0417 (GA(W)-1) AIRFOIL
+ls417mod                    92  NASA/LANGLEY LS(1)-0417MOD AIRFOIL
+ls421                       75  NASA/LANGLEY LS(1)-0421 AIRFOIL
+ls421mod                    89  NASA/LANGLEY LS(1)-0421MOD AIRFOIL
+lwk79100                    97  LWK 79-100
+lwk80080                    97  LWK 80-080
+lwk80100                    97  LWK 80-100
+lwk80120k25                 97  LWK 80-120/K25
+lwk80150k25                 97  LWK 80-150/K25
+m1                          33  NACA-M1 AIRFOIL
+m10                         33  NACA M10 AIRFOIL
+m11                         33  NACA M11 AIRFOIL
+m12                         33  NACA M12 AIRFOIL
+m13                         33  NACA M13 AIRFOIL
+m14                         33  NACA M14 AIRFOIL
+m15                         33  NACA M15 AIRFOIL
+m16                         33  NACA M16 AIRFOIL
+m17                         33  NACA M17 AIRFOIL
+m18                         33  NACA M18 AIRFOIL
+m19                         33  NACA M19 AIRFOIL
+m2                          33  NACA M2 AIRFOIL
+m20                         33  NACA M20 AIRFOIL
+m21                         33  NACA M21 AIRFOIL
+m22                         33  NACA M22 AIRFOIL
+m23                         33  NACA M23 AIRFOIL
+m24                         33  NACA M24 AIRFOIL
+m25                         33  NACA M25 AIRFOIL
+m26                         33  NACA M26 AIRFOIL
+m27                         33  NACA M27 AIRFOIL
+m3                          33  NACA M3 AIRFOIL
+m4                          33  NACA M4 AIRFOIL
+m5                          33  NACA M5 AIRFOIL
+m6                          33  NACA M6 AIRFOIL
+m665                        43  M6 (65%)
+m685                        43  M6 (85%)
+m7                          31  NACA M7 AIRFOIL
+m8                          33  NACA M8 AIRFOIL
+m9                          33  NACA M9 AIRFOIL
+ma409                       41  MA409 (original)
+ma409sm                     79  MA409 (smoothed)
+marsden                    101  Marsden
+marske1                     33  MARSKE XM-1D AIRFOIL (F14-3.0)
+marske2                     33  MARSKE PIONEER IA AIRFOIL (NACA 23112/43012A HYBRID)
+marske3                     33  MARSKE PIONEER IID ROOT AIRFOIL (NACA 431012A/24112 HYBRID)
+marske4                     33  MARSKE PIONEER IID TIP AIRFOIL (NACA 431012A*.833 HYBRID)
+marske5                     33  MARSKE MONARCH AIRFOIL (NACA 43012A)
+marske7                     71  RONCZ LOW DRAG FLYING WING AIRFOIL
+mb253515sm                  67  MB253515 15.0% smoothed
+mh102                       68  MH 102  16.99%
+mh104                       67  MH 104  15.28%
+mh106                       68  MH 106  13.07%
+mh108                       68  MH 108  11.98%
+mh110                       68  MH 110  10.01%
+mh112                       68  MH 112  16.2%
+mh113                       61  MH 113  14.62%
+mh114                       68  MH 114  13.02%
+mh115                       68  MH 115  11.06%
+mh116                       67  MH 116  9.84%
+mh117                       68  MH 117  9.8%
+mh120                       61  MH 120  8.0%
+mh121                       68  MH 121  8.76%
+mh122                       68  MH 122  9.32%
+mh126                       61  MH 126 25.0%
+mh150                       61  MH 150  23.89%
+mh18                        67  MH 18  11.16%
+mh20                        68  MH 20  9.01%
+mh200                       68  MH 200  12.97%
+mh201                       67  MH 201  13.08%
+mh22                        68  MH 22  7.2%
+mh23                        68  MH 23  8%
+mh24                        68  MH 24  9.01%
+mh25                        67  MH 25  9.98%
+mh26                        67  MH 26  10.99%
+mh27                        68  MH 27  11.99%
+mh30                        67  MH 30  7.84%
+mh32                        68  MH 32  8.7%
+mh33                        65  MH 33
+mh38                        68  MH 38  9.68%
+mh42                        67  MH 42  8.94%
+mh43                        68  MH 43  8.5%
+mh44                        68  MH 44  9.66%
+mh45                        67  MH 45  9.85%
+mh46                        61  MH 46  11.39%
+mh49                        61  MH 49
+mh60                        68  MH 60  10.08%
+mh61                        68  MH 61  10.26%
+mh62                        68  MH 62  9.3%
+mh64                        68  MH 64  8.59%
+mh70                        68  MH 70  11.08%
+mh78                        67  MH 78  14.47%
+mh80                        68  MH 80  12.72%
+mh81                        67  MH 81  13%
+mh82                        68  MH 82  13.31%
+mh83                        61  MH 83  13.29%
+mh84                        67  MH 84  13.69%
+mh91                        68  MH 91  14.98%
+mh92                        68  MH 92  15.49%
+mh93                        68  MH 93  15.98%
+mh94                        68  MH 94  16.03%
+mh95                        61  MH 95  15.86%
+miley                       64  MILEY M06-13-128
+mistrut1                   399  MI-STRUT1
+mivawt1                    260  MI-VAWT1
+mrc12                      120  MRC12
+mrc15                      120  MRC15
+mrc16                      120  MRC-16
+mrc1685                    120  MRC16-85
+mrc1695                    120  MRC16-95
+mrc20                      120  MRC-20
+mrc20700                   120  MRC20-700
+mrc20846                   120  MRC20-846
+ms313                       89  NASA/LANGLEY MS(1)-0313 AIRFOIL
+ms317                       89  NASA/LANGLEY MS(1)-0317 AIRFOIL
+mue139                      97  MUE 139
+n0009sm                     69  NACA-0009 9.0% smoothed
+n0011sc                     73  NACA/LANGLEY SYMMETRICAL, SUPERCRITICAL AIRFOIL
+n0012                      131  NACA 0012 AIRFOILS
+n10                         33  N-10
+n11                         33  N-11
+n11h9                       37  NACA 11-H-09 AIRFOIL
+n12                         33  N-12
+n13                         33  N-13
+n14                         33  N-14
+n1h15                       35  NACA 1-H-15 AIRFOIL
+n22                         33  N-22
+n24                         33  N-24
+n2414                       61  NACA 2414
+n2415                       61  NACA 2415
+n2h15                       35  NACA 2-H-15 AIRFOIL
+n5h10                       35  NACA 5-H-10 AIRFOIL
+n5h15                       35  NACA 5-H-15 AIRFOIL
+n5h20                       35  NACA 5-H-20 AIRFOIL
+n63010a                     51  NACA 63A010 AIRFOIL
+n63012a                     51  NACA 63012A AIRFOIL
+n63015a                     51  NACA 63-015A AIRFOIL
+n63210                      51  NACA 63-210 AIRFOIL
+n63212                      51  NACA 63-212 AIRFOIL
+n63215                      51  NACA 63-215 AIRFOIL
+n63215b                    119  NACA 63(2)-215 MOD B
+n63412                      51  NACA 63-412 AIRFOIL
+n63415                      51  NACA 63-415 AIRFOIL
+n64008a                     51  NACA 64-008A AIRFOIL
+n64012                      51  NASA/LANGLEY 64-012 AIRFOIL
+n64012a                     51  NACA 64-012A AIRFOIL
+n64015                      51  NACA 642-015 AIRFOIL
+n64015a                     51  NACA 642-015A AIRFOIL
+n6409                       61  NACA6409 9%
+n64108                      51  NACA 64-108 AIRFOIL
+n64110                      51  NACA 64-110 AIRFOIL
+n64212                      51  NACA 64(1)-212
+n64212ma                    57  NACA 64(1)-212 MOD A
+n64212mb                    51  NACA 64(1)-212 MOD B
+n64215                      51  NACA 64-215 AIRFOIL
+n642415                     51  NACA 64(2)-415 [NACA 6a series from Theory of Wing Sections]
+n66021                      51  NACA 66-021 AIRFOIL
+n6h10                       35  NACA 6-H-10 AIRFOIL
+n6h15                       35  NACA 6-H-15 AIRFOIL
+n6h20                       35  NACA 6-H-20 AIRFOIL
+n8h12                       36  NACA 8-H-12 AIRFOIL
+n9                          33  N-9
+naca0006                    35  NACA 0006
+naca0008                    35  NACA 0008
+naca000834                  33  NACA 0008-34
+naca0010                    35  NACA 0010
+naca001034                  33  NACA 0010-34
+naca001034a08cli0.2         35  NACA 0010-34 a=0.8 c(li)=0.2
+naca001035                  33  NACA 0010-35
+naca001064                  33  NACA 0010-64
+naca001065                  33  NACA 0010-65
+naca001066                  33  NACA 0010-66
+naca001234                  33  NACA 0012-34
+naca001264                  33  NACA 0012-64
+naca001264a08cli0.2         33  NACA 0012-64 a=0.8 c(li)=0.2
+naca0015                    35  NACA 0015
+naca0018                    35  NACA 0018
+naca0021                    35  NACA 0021
+naca0024                    35  NACA 0024
+naca1                       84  NACA-1 COWL
+naca1408                    35  NACA 1408
+naca1410                    35  NACA 1410
+naca1412                    35  NACA 1412
+naca16006                   33  NACA 16-006
+naca16009                   97  NACA 16009
+naca16012                   33  NACA 16-012
+naca16015                   33  NACA 16-015
+naca16018                   33  NACA 16-018
+naca16021                   33  NACA 16-021
+naca23012                   61  NACA 23012  12%
+naca23015                   35  NACA 23015
+naca23018                   35  NACA 23018
+naca23021                   35  NACA 23021
+naca23024                   35  NACA 23024
+naca2408                    35  NACA 2408
+naca2410                    35  NACA 2410
+naca2411                    61  NACA 2.5411
+naca2412                    35  NACA 2412
+naca2415                    35  NACA 2415
+naca2418                    35  NACA 2418
+naca2421                    35  NACA 2421
+naca2424                    35  NACA 2424
+naca4412                    35  NACA 4412
+naca4415                    97  NACA 4415
+naca4418                    35  NACA 4418
+naca4421                    35  NACA 4421
+naca4424                    35  NACA 4424
+naca63206                   51  NACA 63-206
+naca63209                   51  NACA 63-209
+naca632615                  51  NACA 63(2)-615
+naca632a015                 97  NACA 63(2)A-015
+naca633018                  97  NACA 63(3)-018
+naca633218                  51  NACA 63(3)-218
+naca633418                  97  NACA 63,3-418
+naca633618                  51  NACA 63(3)-618
+naca634221                  51  NACA 63(4)-221
+naca634421                  51  NACA 63(4)-421
+naca63a210                  52  NACA 63A210
+naca641112                  51  NACA 64(1)-112
+naca6412                    62  NACA 6412
+naca64206                   51  NACA 64-206
+naca64208                   51  NACA 64-208
+naca64209                   51  NACA 64-209
+naca64210                   51  NACA 64-210
+naca642215                  51  NACA 64(2)-215
+naca642415                  51  NACA 64(2)-415
+naca643218                  51  NACA 64(3)-218
+naca643418                  50  NACA 64(3)-418
+naca643618                  51  NACA 64(3)-618
+naca644221                  51  NACA 64(4)-221
+naca644421                  51  NACA 64(4)-421
+naca64a010                 111  NACA 64A-010 10.0%
+naca64a210                  51  NACA 64A210
+naca64a410                  51  NACA 64A410
+naca651212                  51  NACA 65(1)-212
+naca651212a06               51  NACA 65(1)-212 a=0.6
+naca651412                  51  NACA 65(1)-412
+naca65206                   51  NACA 65-206
+naca65209                   51  NACA 65-209
+naca65210                   51  NACA 65-210
+naca652215                  51  NACA 65(2)-215
+naca652415                  51  NACA 65(2)-415
+naca652415a05               51  NACA 65(2)-415 a=0.5
+naca653218                  51  NACA 65(3)-218
+naca653618                  51  NACA 65(3)-618
+naca65410                   51  NACA 65-410
+naca654221                  51  NACA 65(4)-221
+naca654421                  51  NACA 65(4)-421
+naca654421a05               51  NACA 65(4)-421 a=0.5
+naca66018                   59  NACA 66-018
+naca661212                  51  NACA 66(1)-212
+naca66206                   51  NACA 66-206
+naca66209                   51  NACA 66-209
+naca66210                   51  NACA 66-210
+naca662215                  51  NACA 66(2)-215
+naca662415                  51  NACA 66(2)-415
+naca663218                  51  NACA 66(3)-218
+naca663418                  51  NACA 66(3)-418
+naca664221                  51  NACA 66(4)-221
+naca671215                  51  NACA 67,1-215
+naca747a315                 51  NACA 747A315
+naca747a415                 51  NACA 747A415
+nacacyh                     33  NACA CYH
+nacam12                     33  NACA M12
+nacam18                     33  NACA M18
+nacam2                      33  NACA M2
+nacam3                      33  NACA M3
+nacam6                      35  NACA M6
+nasasc20714                 97  SC(2)-0714 | Supercritical airfoil (coordinates from Raymer w/ one correction). These coordinates are actual model coordinates, not coordinates as designed. Ref: NASA TP-2890
+ncambre                     79  ONERA NACA CAMBRE AIRFOIL
+nl722343                   136  NLR-7223-43 AIRFOIL
+nl722362                   132  NLR-7223-62 AIRFOIL
+nlf0115                     61  NASA NLF(1)-0115
+nlf0215f                    61  NASA NLF(1)-0215F
+nlf1015                     61  NASA NLF(1)-1015
+nlf414f                     82  NASA NLF(1)-0414F
+nlf415                     131  NASA/DLR NLF(2)-0415
+nlf416                      61  NASA NLF(1)-0416
+nlr1t                       65  NLR-1T AIRFOIL
+nlr7301                     79  NLR-7301 AIRFOIL
+nn7mk20                     97  NN7 MK20
+npl9510                    101  NPL 9510 AIRFOIL
+npl9615                    105  NPL 9615 AIRFOIL
+npl9626                     83  NPL 9626 AIRFOIL
+npl9627                     83  NPL 9627 AIRFOIL
+npl9660                    113  NPL 9660 AIRFOIL
+nplx                        67  NPL AIRFOIL FROM ARC CP 1372
+oa206                      113  ONERA OA206 AIRFOIL
+oa209                      113  ONERA OA209 AIRFOIL
+oa212                      113  ONERA OA212 AIRFOIL
+oa213                      113  ONERA OA213 AIRFOIL
+oaf095                     101  OAF095 AIRFOIL
+oaf102                     101  OAF102 AIRFOIL
+oaf117                     101  OAF117 AIRFOIL
+oaf128                     101  OAF128 AIRFOIL
+oaf139                     101  OAF139 AIRFOIL
+p51droot                    41  P-51D ROOT (BL17.5) AIRFOIL
+p51dtip                     41  P-51D TIP (BL215) AIRFOIL
+p51hroot                    97  NACA 66,2-(1.8)15.5 A=.6 P-51 ROOT AIRFOIL
+p51htip                     97  NACA 66,2-(1.8)12 A=.6 P-51 TIP AIRFOIL
+pfcm                        51  PROPFAN CRUISE MISSILE WING AIRFOIL
+pmc19sm                     79  PMC19 Smoothed
+prandtldcenterline          79  Prandtl-D Centerline NASA TP-2016-219072
+prandtldwingtip            119  Prandtl-D Wingtip NASA TP-2016-219072
+psu90125wl                  61  PSU-90-125WL
+psu94097                    65  PSU 94-097 (AIAA 2001-2478)
+pt40                        79  PT40
+r1046                      119  RONCZ 1046 VOYAGER CANARD AIRFOIL
+r1080                      119  RONCZ 1080 VOYAGER INNER AFT WING AIRFOIL
+r1082                      119  RONCZ 1082 VOYAGER ROOT OUTER AFT WING AIRFOIL
+r1082t                     119  RONCZ 1082T VOYAGER TIP OUTER AFT WING AIRFOIL
+r1145ms                    175  RONCZ R1145MS AIRFOIL
+r1145msf                    95  RONCZ R1145MS FLAP ELEMENT (LONG EZ PIVOT X=0.6874131, Z=-.0138996)
+r1145msm                   147  RONCZ R1145MS MAIN ELEMENT
+r140                        93  R140 (original)
+r140sm                      93  R140  12.04% (smoothed)
+rae100                     171  RAE 100 AIRFOIL
+rae101                     171  RAE 101 AIRFOIL
+rae102                     171  RAE 102 AIRFOIL
+rae103                     171  RAE 103 AIRFOIL
+rae104                     171  RAE 104 AIRFOIL
+rae2822                    129  RAE 2822 AIRFOIL
+rae5212                     83  RAE(NPL) 5212 AIRFOIL
+rae5213                     83  RAE(NPL) 5213 AIRFOIL
+rae5214                     83  RAE 5214 AIRFOIL
+rae5215                     83  RAE 5215 AIRFOIL
+rae69ck                    129  RAE6-9CK AIRFOIL
+raf15                       31  RAF 15 AIRFOIL
+raf19                       33  RAF 19 AIRFOIL
+raf25                       33  RAF 25 AIRFOIL
+raf26                       33  RAF 26 AIRFOIL
+raf27                       33  RAF 27 AIRFOIL
+raf28                       33  RAF 28 AIRFOIL
+raf30                       31  RAF 30 AIRFOIL
+raf30md                     29  RAF 30 MOD AIRFOIL
+raf31                       35  RAF 31 AIRFOIL
+raf32                       25  RAF 32 AIRFOIL
+raf32md                     29  RAF 32 MOD AIRFOIL
+raf33                       33  RAF 33 AIRFOIL
+raf34                       33  RAF 34 AIRFOIL
+raf38                       25  RAF 38 AIRFOIL
+raf48                       33  RAF-48 AIRFOIL
+raf6                        25  RAF 6 AIRFOIL
+raf69                       25  RAF 69 AIRFOIL
+raf6propsm                  75  RAF 6 AIRFOIL, 12%, LE rad. 0.012, TE rad. 0.0092, NACA TR259 smoothed
+raf89                       25  RAF 89 AIRFOIL
+rc0864c                     69  NASA/LANGLEY RC08-64C AIRFOIL
+rc08b3                      65  NASA/LANGLEY RC-08(B)3 AIRFOIL
+rc08n1                      83  NASA/LANGLEY RC-08(N)1 AIRFOIL
+rc1064c                     65  NASA/LANGLEY RC10-64C AIRFOIL
+rc10b3                      65  NASA/LANGLEY RC-10(B)3 AIRFOIL
+rc10n1                      83  NASA/LANGLEY RC-10(N)1 AIRFOIL
+rc1264c                     53  NASA/LANGLEY RC12-64C AIRFOIL
+rc12b3                      65  NASA/LANGLEY RC-12(B)3 AIRFOIL
+rc12n1                      83  NASA/LANGLEY RC-12(N)1 AIRFOIL
+rc410                       83  NASA RC(4)-10 AIRFOIL
+rc510                       83  NASA RC(5)-10 AIRFOIL
+rcsc2                       72  NASA/LANGLEY RC-SC2 AIRFOIL
+rg12                        62  RG-12
+rg12a                       63  AIRFOIL PROFILE12A 9.00%
+rg12a189                    63  RG 12A-1.8/9.0 AIRFOIL
+rg14                        62  RG 14 AIRFOIL
+rg1410                      59  RG 14 10% AIRFOIL
+rg149                       59  RG 14 9% AIRFOIL
+rg1495                      59  RG 14 9.5% AIRFOIL
+rg14a147                    63  RG 14A-1.4/7.0 AIRFOIL
+rg15                        62  RG-15 8.9%
+rg15a111                    63  RG 15A-1.8/11.0 AIRFOIL
+rg15a213                    63  RG 15A 2.5/13.0 AIRFOIL
+rg8                         61  RG 8 AIRFOIL
+rhodesg30                   33  Rhode St. Genese 30
+rhodesg32                   33  Rhode St. Genese 32
+rhodesg34                   33  Rhode St. Genese 34
+rhodesg36                   33  Rhode St. Genese 36
+s1010                       61  S1010 HPV airfoil
+s1012                       61  S1012
+s1014                       61  S1014
+s1016                       61  S1016
+s1020                       61  S1020 Ornithopter airfoil
+s102b                       65  SOMERS S102 AIRFOIL (BLUNT)
+s102s                       65  SOMERS S102 AIRFOIL (SHARP)
+s1046                       61  S1046 17% (Danny Howell)
+s1048                       61  S1048 14% (Danny Howell)
+s1091                       81  S1091
+s1210                       81  S1210 12%
+s1221                       72  S1221  w/o flap
+s12214degflap               80  S1221  w/ 4 deg flap
+s1223                       81  S1223
+s1223rtl                   100  S1223 RTL
+s2027                       62  S2027
+s2046                       62  S2046
+s2048                       61  S2048
+s2050                       61  S2050 8.93%
+s2055                       61  S2055
+s2060                       61  S2060 8%
+s2062                       61  S2062 8%
+s2091                       61  S2091-101-83
+s3                          37  REPUBLIC S-3 AIRFOIL
+s3002                       61  SELIG 3002-099-83
+s3010                       61  S3010-103-84
+s3014                       61  S3014-095-85
+s3016                       61  S3016-095-87
+s3021                       61  S3021-095-84
+s3024                       61  S3024 9.84%
+s3025                       61  S3025 9.38%
+s4022                       62  S4022
+s4053                       62  S4053
+s4061                       61  S4061-096-84
+s4062                       61  S4062-095-87
+s4083                       81  S4083 (8%)
+s4094                       61  S4094 (root airfoil designed for and used on the E-flite UMX ASK-21 scale RC sailplane)
+s4095                       61  S4095 (designed for the E-flite UMX ASK-21 scale RC sailplane)
+s4096                       61  S4096 (designed for the E-flite UMX ASK-21 scale RC sailplane)
+s4110                       62  S4110
+s4158                       62  S4158
+s4180                       61  S4180-098-84
+s4233                       61  S4233-136-84
+s4310                       62  S4310
+s4320                       62  S4320
+s5010                       61  S5010
+s5020                       61  S5020
+s6061                       61  S6061 9%
+s6062                       61  S6062 8%
+s6063                       61  S6063 7.05%
+s7012                       81  S7012 8.75%
+s7055                       81  S7055 (10.5%) Flat-Bottomed
+s7075                       81  S7075 (9%)
+s8021                       61  S8021 (7.6%)
+s8023                       61  S8023 (7.6%)
+s8025                      121  S8025 (8%)
+s8035                      121  S8035 for RC aerobatic  14% thick
+s8036                       81  S8036 (16%)
+s8037                       81  S8037 (16%)
+s8038                       81  S8038 (13%)
+s8052                       81  S8052 (11.88%)
+s8055                       81  S8055 (12%)
+s8064                       81  S8064
+s8065                       81  S8065 (11% version of S8064)
+s8066                       81  S8066 (10% version of S8065 w/ lower surface aerodynamically similar)
+s9000                      121  S9000 (9%)
+s9026                      121  S9026 (9.5%)
+s9027                      121  S9027 (8%)
+s9032                      121  S9032 (9%)
+s9033                      121  S9033 (7.5%)
+s9037                      121  S9037 (9%)
+s9104                       81  S9104
+s9104bte                    73  S9104BTE
+sa7024                      81  SA7024
+sa7025                      81  SA7025
+sa7026                      81  SA7026
+sa7035                      81  SA7035
+sa7036                      81  SA7036
+sa7038                      81  SA7038
+saratov                     29  SARATOV AIRFOIL
+sc1012r8                   145  SIKORSKY SC1012R8 AIRFOIL
+sc1094r8                   145  SIKORSKY SC1094 R8 AIRFOIL
+sc1095                     141  SIKORSKY SC1095 AIRFOIL
+sc1095r8                   145  SIKORSKY SC1095R8 AIRFOIL
+sc20010                    205  NASA SC(2)-0010 AIRFOIL
+sc20012                    205  NASA SC(2)-0012 AIRFOIL
+sc20402                    205  NASA SC(2)-0402 AIRFOIL
+sc20403                    205  NASA SC(2)-0403 AIRFOIL
+sc20404                    205  NASA SC(2)-0404 AIRFOIL
+sc20406                    205  NASA SC(2)-0406 AIRFOIL
+sc20410                    205  NASA SC(2)-0410 AIRFOIL
+sc20412                    205  NASA SC(2)-0412 AIRFOIL
+sc20414                    205  NASA SC(2)-0414 AIRFOIL
+sc20503                    205  NASA SC(2)-0503 AIRFOIL
+sc20518                    205  NASA SC(2)-0518 AIRFOIL
+sc20606                    205  NASA SC(2)-0606 AIRFOIL
+sc20610                    205  NASA SC(2)-0610 AIRFOIL
+sc20612                    205  NASA SC(2)-0612 AIRFOIL
+sc20614                    205  NASA SC(2)-0614 AIRFOIL
+sc20706                    205  NASA SC(2)-0706 AIRFOIL
+sc20710                    205  NASA SC(2)-0710 AIRFOIL
+sc20712                    205  NASA SC(2)-0712 AIRFOIL
+sc20714                    205  NASA SC(2)-0714 AIRFOIL
+sc21006                    205  NASA SC(2)-1006 AIRFOIL
+sc21010                    205  NASA SC(2)-1010 AIRFOIL
+sc2110                      87  SIKORSKY SC2110 AIRFOIL
+sd2030                      61  SD2030-086-88
+sd2083                      61  SD2083 (9.0%)
+sd5060                      61  SD5060 (9.5%)
+sd6060                      61  SD6060-104-88
+sd6080                      61  SD6080 (9.2%)
+sd7003                      61  SD7003-085-88
+sd7032                      61  SD7032-099-88
+sd7034                      61  SD7034
+sd7037                      61  SD7037-092-88
+sd7043                      61  SD7043 (9.1%)
+sd7062                      61  SD7062 (14%)
+sd7080                      61  SD7080 (9.2%)
+sd7084                      61  SD7084 (9.6%)
+sd7090                      61  SD7090 (10%)
+sd8000                      61  SD8000-089-88
+sd8020                      61  SD8020-010-88
+sd8040                      61  SD8040 (10%)
+sg6040                      81  SG6040
+sg6041                      81  SG6041
+sg6042                      81  SG6042
+sg6043                      81  SG6043
+sg6050                      81  SG6050
+sg6051                      81  SG6051
+sm701                       61  SM701
+sokolov                     35  SOKOLOV AIRFOIL
+sp4621hp                   160  SP4621HP
+sp4721bs                   120  SP4721BS
+sp4721la                   120  SP4721LA
+spicasm                     49  SPICA  11.73% smoothed
+ssca07                     131  SIKORSKY SSC-A07 AIRFOIL
+ssca09                     131  SIKORSKY SSC-A09  AIRFOIL
+stcyr171                    33  St. CYR 171 (Royer)
+stcyr172                    33  St. CYR 172 (Royer)
+stcyr234                    33  St. CYR 234 (Bartel 17-IC)
+stcyr24                     33  St. CYR 24 (Bartel 35-IIIC)
+ste87151                    60  EPPLER STE 871-514 AIRFOIL
+ste87391                    60  EPPLER STE 87(-3)-914 AIRFOIL
+stf86361                    60  EPPLER STF 863-615 AIRFOIL
+strand                      39  STRAND AIRFOIL
+supermarine371i             49  Supermarine 371-I (root)
+supermarine371ii            49  Supermarine 371-II (tip)
+t16                        122  Drela T16
+tempest1                   120  HAWKER TEMPEST 37.5% SEMISPAN AIRFOIL
+tempest2                   120  HAWKER TEMPEST 61% SEMISPAN AIRFOIL
+tempest3                   120  HAWKER TEMPEST 96.77% SEMISPAN AIRFOIL
+th25816                     61  TH 25816 HALE AIRFOIL
+trainer60                   79  TRAINER60
+tsagi12                     33  TsAGI 12% AIRFOIL
+tsagi8                      33  TsAGI 8% AIRFOIL
+tsagir3a                   250  TsAGI R-3a (12%)
+ua2180                      58  UA(2)-180 (University of Alberta/Marsden)
+ua2180sm                    58  UA(2)-180 smoothed, original ycoord oscillate +-0.0003
+ua79sf18                    74  UNIVERSITY OF ALBERTA UA 79-SF-187 AIRFOIL
+ua79sff                     39  UNIVERSITY OF ALBERTA UA 79-SF-187 AIRFOIL MAIN ELEMENT
+ua79sfm                     50  UNIVERSITY OF ALBERTA UA 79-SF-187 AIRFOIL MAIN ELEMENT
+uag8814320                  97  UAG 88-143/20
+ui1720                      91  UNIVERSITY OF ILLINOIS UI-1720 AIRFOIL
+ultimate                    79  ULTIMATE
+us1000root                  79  US1000ROOT
+usa22                       33  USA 22 AIRFOIL
+usa25                       33  USA 25 AIRFOIL
+usa26                       33  USA 26 AIRFOIL
+usa27                       33  USA 27 AIRFOIL
+usa27m2                     33  USA 27 mod. AIRFOIL
+usa28                       33  USA 28 AIRFOIL
+usa29                       33  USA 29 AIRFOIL
+usa31                       33  USA 31 AIRFOIL
+usa32                       33  USA 32 AIRFOIL
+usa33                       33  USA 33 AIRFOIL
+usa34                       33  USA 34 AIRFOIL
+usa35                       33  USA 35 AIRFOIL
+usa35a                      33  USA 35 A AIRFOIL
+usa35b                      33  USA-35B AIRFOIL
+usa40                       33  USA 40 AIRFOIL
+usa40b                      33  USA 40 B AIRFOIL
+usa41                       33  USA 41 AIRFOIL
+usa45                       33  USA 45 AIRFOIL
+usa45m                      33  USA 45 M AIRFOIL
+usa46                       33  USA 46 AIRFOIL
+usa48                       33  USA 48 AIRFOIL
+usa49                       33  USA 49 AIRFOIL
+usa5                        33  USA 5 AIRFOIL
+usa50                       33  USA 50 AIRFOIL
+usa51                       33  USA 51 AIRFOIL
+usa98                       25  USA 98 AIRFOIL
+usnps4                      79  USNPS4 (smoothed)
+v13006                      41  BOEING VERTOL V13006-.7 AIRFOIL
+v13009                      39  BOEING VERTOL V(1.95)3009-1.25 AIRFOIL
+v23010                      51  BOEING-VERTOL V23010-1.58 AIRFOIL
+v43012                      73  BOEING VERTOL V43012-1.58 AIRFOIL
+v43015                      41  BOEING VERTOL V43015-2.48 AIRFOIL
+vr1                         49  BOEING-VERTOL VR-1 AIRFOIL
+vr11x                       67  BOEING-VERTOL VR-11X AIRFOIL
+vr12                        83  BOEING-VERTOL VR-12 AIRFOIL
+vr13                        83  BOEING-VERTOL VR-13 AIRFOIL
+vr14                        83  BOEING-VERTOL VR-14 AIRFOIL
+vr15                        83  BOEING-VERTOL VR-15 AIRFOIL
+vr5                         55  BOEING-VERTOL VR-5 AIRFOIL
+vr7                         77  BOEING-VERTOL VR-7 AIRFOIL
+vr7b                        75  BOEING-VERTOL VR-7 AIRFOIL WITH TAB
+vr8                         61  BOEING-VERTOL VR-8 AIRFOIL
+vr8b                        59  BOEING-VERTOL VR-8 AIRFOIL WITH TAB
+vr9                         61  BOEING-VERTOL VR-9 AIRFOIL
+w1011                      240  W1011
+w1015                      240  W1015
+waspsm                      79  WASP (smoothed)
+wb13535sm                   55  WB-135/35  13.5%  smoothed
+wb140                       55  WB-140/35/FB 14%
+whitcomb                    73  WHITCOMB INTEGRAL SUPERCRITICAL AIRFOIL
+ys900                      121  YS-900
+ys915                      121  YS-915
+ys920                      121  YS-920
+ys930                      121  YS-930
+zv1535                     208  Zv(15-35)16
