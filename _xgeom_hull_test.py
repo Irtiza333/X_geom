@@ -5,8 +5,11 @@ Self-check for the hull in the design tool (xgeom_hull.py) and the vehicle (xgeo
 variables, orders, elliptical sections, set-up and parameter files and build; the placement of the propeller
 and the rudder on the hull; with --gui the window in vehicle mode and the hull alone (xgeom_tool.py).
 
-    python _xgeom_hull_test.py          adapter and placement
+    python _xgeom_hull_test.py          adapter and placement; with OCC the vehicle's CAD (hull and rudders)
     python _xgeom_hull_test.py --gui    also open the tool for a moment
+    python _xgeom_hull_test.py --vehicle-cad
+                                        also the whole vehicle's CAD with the propeller (pythonocc-core, a few
+                                        minutes)
 """
 
 import os
@@ -299,6 +302,105 @@ def test_parts(hull):
           f"clear of the blades")
 
 
+def synthetic_blade_cad(r_hub=20.0, r_mid=50.0, r_tip=80.0, n=41):
+    """A propeller "CAD" as blade_modify.write_cad gives it (mm): a compound of the blade's shell, open at its
+    root ring on the hub cylinder (radius r_hub about x), and the hub's shell."""
+    import vehicle_cad as VC
+    t = np.linspace(0.0, 2.0 * np.pi, n)
+
+    def loop(chord, thick, r, on_cylinder):
+        s, w = -0.5 * chord * np.cos(t), 0.5 * thick * np.sin(t)          # LE first, TE at t = pi
+        if on_cylinder:
+            return np.column_stack((s, r * np.sin(w / r), r * np.cos(w / r)))
+        return np.column_stack((s, w, np.full_like(s, r)))
+    loops = [loop(40.0, 8.0, r_hub, True), loop(30.0, 5.0, r_mid, False), loop(16.0, 2.0, r_tip, False)]
+    fitter = XL._SectionFitter(n, 12)
+    wires = [fitter.wire(lp)[0] for lp in loops]
+    faces = VC._shapes(XL._thru(wires, False, False), "FACE") + [XL._planar_face(wires[-1])]
+    Sewing = XL._occ("BRepBuilderAPI", "BRepBuilderAPI_Sewing")
+    sew = Sewing(1e-3)
+    for f in faces:
+        sew.Add(f)
+    sew.Perform()
+    gp_Pnt, gp_Dir, gp_Ax2 = XL._occ("gp", "gp_Pnt", "gp_Dir", "gp_Ax2")
+    MakeCylinder = XL._occ("BRepPrimAPI", "BRepPrimAPI_MakeCylinder")
+    hub = MakeCylinder(gp_Ax2(gp_Pnt(-30.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0)), r_hub, 60.0).Shape()
+    return VC.compound([VC._shapes(sew.SewedShape(), "SHELL")[0], VC._shapes(hub, "SHELL")[0]])
+
+
+def test_vehicle_cad(hull, full=False):
+    print("\nthe vehicle's CAD (vehicle_cad.py)")
+    if not XL.occ_available():
+        print("       skipped: no pythonocc-core or cadquery-ocp here")
+        return
+    import vehicle_cad as VC
+    r_hub, h_hub = 20.0, 60.0
+    blade = VC.blade_solid(synthetic_blade_cad(r_hub), r_hub)
+    n_b, ok_b, v_b = VC.solid_report(blade)
+    prop = VC.propeller_solid(blade, 3, r_hub, h_hub)
+    n_p, ok_p, v_p = VC.solid_report(prop)
+    v_hub = np.pi * r_hub ** 2 * h_hub
+    check("a blade shell open at its root ring on the hub cylinder, closed by the cylinder inside the ring: one "
+          "valid solid; 3 of them and the hub fused: one valid solid of their volumes (the root on the hub)",
+          [n_b, ok_b, v_b > 0, n_p, ok_p, v_p / (v_hub + 3.0 * v_b) - 1.0], [1, 1, 1, 1, 1, 0], 1e-5)
+    t = np.linspace(0.0, 2.0 * np.pi, 41)
+    wing = XL.loft_loops([np.column_stack((50.0 - 50.0 * np.cos(t), -6.0 * np.sin(t), np.full_like(t, z)))
+                          for z in (0.0, 60.0, 120.0)], n_poles=12).shape    # a plate-like wing, flat root at z 0
+    root_area = XL.mass_properties(VC._root_face(wing))[1]
+    ext = VC.extended_rudder(wing, 7.0)
+    n_e, ok_e, v_e = VC.solid_report(ext)
+    check("a rudder's root extrusion sewn on (no boolean): one valid solid of the rudder's volume and the root "
+          "face's area times the depth", [n_e, ok_e, v_e / (VC.volume(wing) + 7.0 * root_area) - 1.0, VC._bbox(ext)[0, 2]],
+          [1, 1, 0, -7.0], 1e-6)
+    need = ["outputs/corner_points.dat", "outputs/thickness_params_y0_y200_info.dat",
+            "outputs/sections_xcad_with_cap_y0_y200_m.dat", "outputs/sections_stack_y0_y200_raw_mm.dat"]
+    missing = [p for p in need if not os.path.exists(os.path.join(HERE, p))]
+    if missing:
+        print("       vehicle skipped, not here: " + ", ".join(missing))
+        return
+    import xgeom_rudder as XR
+    rudder = XR.RudderAdapter()
+    kinds = ("hull", "rudder", "blade") if full else ("hull", "rudder")
+    ads = {"hull": hull, "rudder": rudder}
+    if full:
+        import xgeom_blade as XB
+        ads["blade"] = XB.BladeAdapter()
+    with tempfile.TemporaryDirectory() as tmp:
+        for k in kinds:
+            ads[k].out_dir = os.path.join(tmp, k)
+            ads[k].settings["plot"] = False
+        parts = {k: XV.PARTS[k](ads[k]) for k in kinds}
+        pl = XV.default_placement(parts)
+        segs, info = XV.assemble(parts, pl)
+        tasks = {k: ads[k].build_task("v") for k in kinds}
+        said = []
+        res = VC.run_vehicle(os.path.join(tmp, "vehicle"), "v", tasks, parts, info, pl, said.append)
+        rec = res["record"]
+        names = ["hull", "rudder 1", "rudder 2", "rudder 3", "rudder 4"] + (["propeller"] if full else [])
+        files = [os.path.join(tmp, "vehicle", f"v_vehicle{x}") for x in (".step", "_parts.step", ".json",
+                                                                          "_setup.json")]
+        shape = XL.read_step(rec["files"]["vehicle"])
+        box = VC._bbox(shape)
+        lines = np.vstack([1000.0 * q for k in ("hull", "rudders") for q in segs[k]])
+        lo, hi = lines.min(axis=0), lines.max(axis=0)
+        rudder_v = 1e3 * rec["rudder"]["scale"] ** 3 * 583.67                     # mm^3, the loft ~ 583.67 cm^3
+        check(f"the {', '.join(kinds)} built (each in its own folder), placed, fused in a process of its own: "
+              f"the files, the parts as the Vehicle tab has them, one valid solid, the rudders' pitch",
+              [all(os.path.exists(f) for f in files), rec["parts"] == names, rec["solids"], rec["valid"],
+               said[-1].startswith("the fuse"), rec["rudder"]["pitch"][0] - info["rudder_pitch"][0]],
+              [1, 1, 1, 1, 1, 0], 1e-9)
+        check("the vehicle's box (mm): " + ("around the Vehicle tab's hull and rudder lines (the propeller reaches "
+                                            "further)" if full else "the Vehicle tab's hull and rudder lines'"),
+              np.r_[box[0] - lo, box[1] - hi] if not full else np.r_[np.maximum(box[0] - lo, 0.0),
+                                                                     np.maximum(hi - box[1], 0.0)], 0.0, 0.5)
+        v_hull = HM.hydrostatics(hull.design)["volume"] * 1e9
+        print(f"       vehicle V {rec['volume_mm3'] / 1e9:.6f} m^3 (hull {v_hull / 1e9:.6f}), "
+              f"{rec['fuse_seconds']:.1f} s to fuse")
+        check("the vehicle's volume: the hull's and the rudders' (outside the hull), and less than with their "
+              "whole root extrusions", [rec["volume_mm3"] > v_hull + 3.9 * rudder_v,
+                                       rec["volume_mm3"] < v_hull + 4 * rudder_v * 1.2 + (full and 1e6 or 0)], [1, 1], 0)
+
+
 def test_gui():
     print("\nthe window (xgeom_tool.py: the vehicle, the hull alone)")
     try:
@@ -334,6 +436,49 @@ def test_gui():
         check("the Vehicle tab: hull, blades and hub, 4 rudders with their root extrusions; the status ok",
               [n["hull"] > 40, n["blades"] > 20, n["hub"], n["rudders"] == 4 * per, 10 <= per <= XV.LOOPS,
                n["roots"], app.status.cget("background") == XT.STATUS["ok"][0]], [1, 1, 14, 1, 1, 4 * 17, 1], 0)
+        import time
+        XT.LOG = os.path.join(tempfile.mkdtemp(), "log.txt")
+
+        def wait():
+            t0 = time.time()
+            while app._job is not None and time.time() - t0 < 300:
+                root.update()
+                time.sleep(0.05)
+        calls, labels, said = [], {}, {}
+        for kind in ("rudder", "hull", "blade"):                    # each panel's button builds its own component
+            app.switch(kind)
+            ad = app.adapters[kind]
+            real = ad.build_task
+            ad.build_task = lambda case, k=kind: (lambda: calls.append((k, case)) or
+                                                  {"report": [], "message": f"{k} built", "error": False, "view": None})
+            labels[kind] = app.build_btn.cget("text")
+            app.build_btn.invoke()
+            wait()
+            said[kind] = app.status.cget("text")
+            ad.build_task = real
+        check("each component's build button names it and builds that component (hull, propeller, rudder)",
+              [labels == {"rudder": "XCAD rudder", "hull": "CAD hull", "blade": "CAD propeller"},
+               calls == [("rudder", "gui"), ("hull", "gui"), ("blade", "gui")],
+               all(said[k].startswith(f"{labels[k]} done") and f"{k} built" in said[k] for k in said)], [1, 1, 1], 0)
+        stubs = {k: app.adapters[k].build_task for k in app.adapters}
+        for k in app.adapters:
+            app.adapters[k].build_task = lambda case, k=k: (lambda: {"report": [], "message": f"{k}: no CAD here",
+                                                                     "error": True, "view": None})
+        app.vbuild_btn.invoke()
+        busy = (str(app.vbuild_btn.cget("state")), str(app.build_btn.cget("state")))
+        wait()
+        for k, f in stubs.items():
+            app.adapters[k].build_task = f
+        log = open(XT.LOG).read()
+        check("Vehicle CAD: both buttons off while it runs; a component without its CAD stops it (red), the "
+              "buttons back, the error in the log", [busy == ("disabled", "disabled"),
+                                                     app.status.cget("background") == XT.STATUS["error"][0],
+                                                     "Vehicle CAD failed" in app.status.cget("text"),
+                                                     str(app.vbuild_btn.cget("state")) == "normal",
+                                                     app.vbuild_btn.cget("text") == "Vehicle CAD",
+                                                     "Traceback" in log and "the hull: hull: no CAD here" in log],
+              [1, 1, 1, 1, 1, 1], 0)
+        app.switch("hull")
         h0 = rudder_height(app, per)
         app.switch("rudder")
         span0 = app.ad.span
@@ -431,6 +576,7 @@ def main():
             hull = test_adapter(tmp)
             test_vehicle(hull)
             test_parts(hull)
+            test_vehicle_cad(XH.HullAdapter(), full="--vehicle-cad" in sys.argv)
     finally:
         os.chdir(cwd)
     if "--gui" in sys.argv:

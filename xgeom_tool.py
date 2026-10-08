@@ -48,6 +48,16 @@ Vehicle
                             orange) closes the gaps the flat root leaves on the curved
                             hull.
                  show       the whole vehicle or its stern (from the start of the tail).
+                 Vehicle CAD  every component's own case and CAD (as its own button
+                            writes them, the case named in the left panel), then the
+                            parts made solid, placed as the tab shows them and fused
+                            (vehicle_cad.py): outputs/vehicle/<case>_vehicle.step (one
+                            solid, mm, the hull's frame), <case>_vehicle_parts.step (the
+                            parts placed, not fused) and <case>_vehicle.json (the
+                            placement). Each rudder is its lofted XCAD solid with the
+                            root extrusion; the propeller its blades, closed at the root
+                            on the hub cylinder, and the hub. A few minutes (the
+                            propeller's CAD takes most); needs pythonocc-core.
 Left panel (rudder)
     H         the height of the modified region, between its low and high
               bounds (h_min, h_max); h_max can go up to the top horizontal section
@@ -129,8 +139,10 @@ Right panel
                  expanded outline, the picked curve against the parameter file,
                  and in 3D the blade as the CAD builds it. Hull: the half-profiles
                  of the whole hull, the picked curve's part against the parameter
-                 file, and the hull in 3D. The 2D plots have the span or the length
-                 on the x axis (height, r, r/R, x). Drag the 3D view to turn it.
+                 file, and the hull in 3D. The blade's and the hull's 2D plots
+                 have r/R and x across; the rudder's are drawn as it stands (x, or
+                 the curve's value, across and the height up). Drag the 3D view to
+                 turn it.
     3D sections  the whole rudder as its sections: modified (blue), the cut at H
                  (red), unchanged (grey); all blades of the propeller; the hull's
                  sections by part.
@@ -139,13 +151,15 @@ bounds and free flag, each curve's control points and order, the settings and
 input files) to <output folder>/<case>_design_space.json; rudder_modify.
 load_design_space, blade_modify.load_blade_space or hull_modify.load_hull_space
 reads it for the optimiser, --space for the tool.
-XCAD (rudder) writes the case to the output folder (XCAD file, section table,
-design and the same set-up JSON), lofts the XCAD file into a solid and writes it
-as STEP. CAD (blade) writes the case (parameter file, XCAD points, design and
-set-up JSON) and the DRDC five-surface blade with the hub sector as IGES and
-STEP. CAD (hull) writes the case (parameter file, design and set-up JSON,
-stations, hydrostatics, section points, check plot) and the STEP. OCC viewer
-opens the last STEP (needs pythonocc-core).
+The build button builds the component of its panel (in the vehicle its text
+names it): XCAD (rudder) writes the case to the output folder (XCAD file, section
+table, design and the same set-up JSON), lofts the XCAD file into a solid and
+writes it as STEP. CAD (blade) writes the case (parameter file, XCAD points,
+design and set-up JSON) and the DRDC five-surface blade with the hub sector as
+IGES and STEP. CAD (hull) writes the case (parameter file, design and set-up
+JSON, stations, hydrostatics, section points, check plot) and the STEP. OCC
+viewer opens the last STEP (needs pythonocc-core). Every build's outcome (and
+the error of a failed one) is added to outputs/xgeom_tool_log.txt.
 The bar at the bottom: green ok, amber a build running (the build button counts
 the seconds), orange a warning (e.g. blades closer than the clearance; the
 build still runs), red a problem or an error; a design with a problem (e.g. a
@@ -191,6 +205,8 @@ INK2, RED = "#52514e", "#e34948"
 STATUS = {"ok": ("#dfeedd", "black"), "busy": ("#f6d58e", "black"), "warn": ("#f0a35e", "black"),
           "error": ("#c62f2e", "white")}                                                     # bar colours
 VEHICLE_TAB = 2                                    # the notebook's tabs: Design, 3D sections, Vehicle
+VEHICLE_DIR = os.path.join("outputs", "vehicle")   # the Vehicle CAD's files (relative to this folder)
+LOG = os.path.join(HERE, "outputs", "xgeom_tool_log.txt")   # every build's outcome
 
 
 def load_adapter(name, params=None):
@@ -404,6 +420,8 @@ class App:
                 ttk.Radiobutton(bar, text=NAMES[k], value=k, variable=self.comp,
                                 command=lambda: self.switch(self.comp.get())).pack(side="left", padx=4)
             ttk.Separator(left, orient="horizontal").pack(fill="x", side="top", pady=(2, 0))
+        self.outbar = ttk.Frame(left)                              # the Output box, under the panel: always in view
+        self.outbar.pack(fill="x", side="bottom")
         canvas = tk.Canvas(left, width=610, highlightthickness=0)
         sb = ttk.Scrollbar(left, orient="vertical", command=canvas.yview)
         self.panel = ttk.Frame(canvas)
@@ -455,6 +473,15 @@ class App:
                 for i, (val, text) in enumerate((("vehicle", "the vehicle"), ("stern", "the stern"))):
                     ttk.Radiobutton(bar, text=text, value=val, variable=self.vshow,
                                     command=self.on_vehicle).grid(row=r, column=c + 1 + i, sticky="w", padx=2)
+        row = ttk.Frame(bar)
+        row.grid(row=len(rows), column=0, columnspan=12, sticky="w", pady=(4, 0))
+        ttk.Label(row, text="CAD", font=("TkDefaultFont", 10, "bold")).pack(side="left")
+        self.vbuild_btn = ttk.Button(row, text="Vehicle CAD", command=self.on_vehicle_build)
+        self.vbuild_btn.pack(side="left", padx=(12, 6))
+        ttk.Button(row, text="OCC viewer", command=self.open_occ_viewer).pack(side="left")
+        ttk.Label(row, text=f"each component's CAD (its own folder, the case named in the left panel), placed as "
+                            f"shown and fused: {VEHICLE_DIR}/<case>_vehicle.step (mm)", foreground=INK2,
+                  wraplength=620, justify="left").pack(side="left", padx=10)
         self.figv = Figure(figsize=(10, 7), dpi=100)
         self.canvasv = FigureCanvasTkAgg(self.figv, master=tab)
         self.canvasv.get_tk_widget().pack(fill="both", expand=True)
@@ -516,7 +543,9 @@ class App:
                 lab.grid(row=r, column=2, columnspan=5, sticky="w")
                 self.pinned.append(lab)
 
-        box = ttk.LabelFrame(self.panel, text="Output")
+        for w in self.outbar.winfo_children():
+            w.destroy()
+        box = ttk.LabelFrame(self.outbar, text="Output")
         box.pack(fill="x", padx=6, pady=4)
         row = ttk.Frame(box)
         row.pack(fill="x", pady=3)
@@ -525,9 +554,10 @@ class App:
         self.case.insert(0, case)
         self.case.pack(side="left")
         ttk.Button(row, text="Save set-up", command=self.on_save).pack(side="left", padx=(6, 0))
-        self.build_btn = ttk.Button(row, text=ad.build_label, command=self.on_build, width=8,
-                                    state="disabled" if self._job is not None else "normal")
+        self.build_btn = ttk.Button(row, text=self.build_label(self.kind),
+                                    command=lambda k=self.kind: self.on_build(k))
         self.build_btn.pack(side="left", padx=6)
+        self._buttons()
         ttk.Button(row, text="OCC viewer", command=self.open_occ_viewer).pack(side="left")
         self.refresh_labels()
 
@@ -799,48 +829,136 @@ class App:
             self.say(f"vehicle ok ({(time.time() - t0) * 1e3:.0f} ms)")
 
     # ------------------------------------------------------------ build
-    def on_build(self):
+    def build_label(self, kind):
+        """The build button's text: the component's (in the vehicle with its name)."""
+        ad = self.adapters[kind]
+        return f"{ad.build_label} {NAMES[kind].lower()}" if self.vehicle else ad.build_label
+
+    def on_build(self, kind=None):
+        """The left panel's build button, made for one component (kind): that component writes its case and
+        its CAD (its adapter's build_task, run off the GUI thread)."""
+        kind = kind or self.kind
+        ad = self.adapters.get(kind)
+        if self._job is not None or ad is None:
+            return
+        label = self.build_label(kind)
+        try:
+            problems = ad.preview()["problems"]
+            if problems:
+                self.say(f"{label}: the design cannot be built: " + problems[0], error=True)
+                return
+            case = self.case.get().strip() or "gui"
+            task = ad.build_task(case)                                  # the design as it is now
+        except Exception as exc:
+            self._log(label, "-", 0.0, traceback.format_exc())
+            self.say(f"{label} failed: {type(exc).__name__}: {exc}", error=True)
+            return
+        self._start(kind, label, case, lambda job: task(), f"{label} running: writing {case} and building the CAD")
+
+    def on_vehicle_build(self):
+        """The Vehicle tab's Vehicle CAD: each component's own case and CAD, then the parts placed as the tab
+        shows them and fused into one solid (vehicle_cad.run_vehicle)."""
+        import dataclasses
+        import xgeom_vehicle as XV
         if self._job is not None:
             return
-        problems = self.ad.preview()["problems"]
-        label = self.ad.build_label
-        if problems:
-            self.say(f"{label}: the design cannot be built: " + problems[0], error=True)
+        label = "Vehicle CAD"
+        try:
+            for k in self.kinds:
+                if k not in self.adapters and k not in self.errors:
+                    self._adapter(k)
+            if "hull" not in self.adapters:
+                raise RuntimeError("the vehicle needs the hull: " + self.errors.get("hull", "not loaded"))
+            parts = {k: self._vehicle_part(k) for k in self.kinds if k in self.adapters}
+            problems = [f"{NAMES[k].lower()}: {q}" for k, part in parts.items() for q in part["problems"]]
+            if problems:
+                self.say(f"{label}: the vehicle cannot be built: " + problems[0], error=True)
+                return
+            if self.placement is None:
+                self.placement = XV.default_placement(parts)
+            placement = dataclasses.replace(self.placement)
+            info = XV.assemble(parts, placement)[1]
+            case = self.case.get().strip() or "gui"
+            tasks = {k: self.adapters[k].build_task(case) for k in parts}   # the designs as they are now
+        except Exception as exc:
+            self._log(label, "-", 0.0, traceback.format_exc())
+            self.say(f"{label} failed: {type(exc).__name__}: {exc}", error=True)
             return
-        case = self.case.get().strip() or "gui"
-        self.build_btn.configure(state="disabled")
-        job = self._job = {"done": False, "result": None, "error": None, "t0": time.time(), "label": label,
-                           "message": f"{label} running: writing {case} and building the CAD ..."}
+
+        def run(job):
+            import vehicle_cad as VC
+
+            def progress(text):
+                job["message"] = f"{label} running: {text} ..."
+            return VC.run_vehicle(VEHICLE_DIR, case, tasks, parts, info, placement, progress)
+        self._start("vehicle", label, case, run, f"{label} running: the components' CAD, then the vehicle")
+
+    def _start(self, kind, label, case, run, message):
+        """Run a build off the GUI thread: run(job) returns the result dict (report, message, error, view)."""
+        job = self._job = {"kind": kind, "label": label, "case": case, "done": False, "result": None,
+                           "error": None, "t0": time.time(), "message": message + " ..."}
+        self._buttons()
         self.say(job["message"], busy=True)
-        task = self.ad.build_task(case)                                 # the design as it is now
 
         def work():
             try:
-                job["result"] = task()
+                job["result"] = run(job)
             except Exception:
                 job["error"] = traceback.format_exc()
             job["done"] = True
         threading.Thread(target=work, daemon=True).start()
         self.root.after(200, self._poll)
 
+    def _buttons(self):
+        """The build buttons: disabled while a build runs, the running one counting its seconds."""
+        job = self._job
+        btns = [(getattr(self, "build_btn", None), self.kind), (getattr(self, "vbuild_btn", None), "vehicle")]
+        for btn, kind in btns:
+            if btn is None or not btn.winfo_exists():
+                continue
+            if job is None:
+                btn.configure(state="normal", text="Vehicle CAD" if kind == "vehicle" else self.build_label(kind))
+            else:
+                btn.configure(state="disabled")
+                if job["kind"] == kind:
+                    btn.configure(text=f"{time.time() - job['t0']:.0f} s")     # the build's time so far
+
     def _poll(self):
         job = self._job
-        label = job["label"]
         if not job["done"]:
-            self.build_btn.configure(text=f"{time.time() - job['t0']:.0f} s")     # the build's time so far
+            self._buttons()
+            if self.status.cget("text") != job["message"]:
+                self.say(job["message"], busy=True)
             self.root.after(200, self._poll)
             return
         self._job = None
-        self.build_btn.configure(state="normal", text=self.ad.build_label)
+        self._buttons()
+        label, secs = job["label"], time.time() - job["t0"]
         if job["error"]:
             print(job["error"])
+            self._log(label, job["case"], secs, job["error"])
             self.say(f"{label} failed: " + job["error"].strip().splitlines()[-1], error=True)
             return
         res = job["result"]
-        print("\n".join(res["report"]))
+        try:
+            print("\n".join(res["report"]))
+        except Exception:                                           # a console that cannot show the report
+            pass
         if res.get("view"):
             self.step = res["view"]
-        self.say(f"{label} done in {time.time() - job['t0']:.1f} s: {res['message']}", error=res["error"])
+        self._log(label, job["case"], secs, res["message"])
+        self.say(f"{label} done in {secs:.1f} s: {res['message']}", error=res["error"], warn=res.get("warn", False))
+
+    @staticmethod
+    def _log(label, case, seconds, text):
+        """One line per build (and the traceback of a failure) in LOG, to look at afterwards."""
+        try:
+            os.makedirs(os.path.dirname(LOG), exist_ok=True)
+            with open(LOG, "a", encoding="utf-8") as fh:
+                fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {label}  case {case}  {seconds:.1f} s\n"
+                         + "".join(f"    {line}\n" for line in str(text).strip().splitlines()))
+        except OSError:
+            pass
 
     def on_save(self):
         case = self.case.get().strip() or "gui"
@@ -868,7 +986,7 @@ class App:
 
     def open_occ_viewer(self):
         if not self.step:
-            self.say(f"press {self.ad.build_label} first: the viewer shows the CAD it writes", error=True)
+            self.say(f"press {self.build_label(self.kind)} first: the viewer shows the CAD it writes", error=True)
             return
         subprocess.Popen([sys.executable, os.path.join(HERE, "xcad_loft.py"), "--view-step", self.step], cwd=HERE)
         self.say(f"OCC viewer: {os.path.basename(self.step)} (its own window, a few seconds)")
