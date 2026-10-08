@@ -5,14 +5,42 @@ XGeom design tool: set up a geometry's design space with sliders and see the
 shape change live. The build button writes the case and its CAD; OCC viewer
 shows the solid.
 
-    python xgeom_tool.py                    the rudder
+    python xgeom_tool.py                    the vehicle: hull, propeller and rudder in one
+                                            window (the rudder alone where xgeom_hull.py is
+                                            not there, as in the Rudder folder)
+    python xgeom_tool.py rudder             the rudder alone
     python xgeom_tool.py rudder --space outputs/modified/gui_design_space.json
                                             start from a saved set-up
     python xgeom_tool.py blade              the propeller blade of blade_control.PARAMS
     python xgeom_tool.py blade --params my_blade.dat
                                             the blade of another parameter file
     python xgeom_tool.py blade --space outputs/blade/gui_design_space.json
+    python xgeom_tool.py hull               the hull of suboff_hull_params.dat
+    python xgeom_tool.py hull --params my_hull.dat
+    python xgeom_tool.py vehicle --params my_hull.dat --space outputs/blade/gui_design_space.json
+                                            the vehicle: --params (a hull's or a blade's) and
+                                            --space as often as needed, each goes to its
+                                            component
 
+Vehicle
+    Component    the hull, the propeller or the rudder: its left panel and its
+                 Design and 3D sections tabs, as when it is alone; each keeps its
+                 state while another is shown.
+    Vehicle tab  the hull with the propeller and the rudder mounted at its stern
+                 (xgeom_vehicle.py) as their designs stand; the component being
+                 edited is drawn thicker. Placement:
+                 propeller  plane at x - L: the middle of the hub on the axis, from
+                            the end of the hull (m, negative forward; default 0);
+                            D: its diameter in the vehicle, the design scaled to it
+                            (default half the hull's depth or breadth, the larger)
+                 rudder     root TE at x - L: the root's trailing edge from the end of
+                            the hull (default the start of the cap, a quarter of the
+                            propeller's D clear of the blades); angle around the axis
+                            from the top towards starboard (180 under the stern); 1, 2
+                            (opposite) or 4 (cruciform) rudders; scale (1: its own size,
+                            mm to m). The root sits on the hull: at the hull's distance
+                            from the axis in its direction, the smallest along the root.
+                 show       the whole vehicle or its stern (from the start of the tail).
 Left panel (rudder)
     H         the height of the modified region, between its low and high
               bounds (h_min, h_max); h_max can go up to the top horizontal section
@@ -51,6 +79,20 @@ Left panel (blade)
               are variables). Switching, or a new number of control points,
               refits the curve: to the parameter file while none of its
               variables has changed, else to its present shape.
+Left panel (hull)
+    Parameter file
+              the hull's station table (hull_modify.py: the nose, middle-body,
+              tail and cap lengths, the half-height r and with elliptical sections
+              the half-width r' at stations). Load reads another one (the curves
+              are fitted to it again); Save writes the design as one.
+    Body      the four lengths, the largest radius r* and the tail end's re (m);
+              elliptical sections: the half-width r' (XY view) gets radii and
+              curves of its own, r is then the half-height (XZ view).
+    Curves    nose r and tail r (and nose r', tail r'), each a CST curve: its
+              exponent (N1 the nose's bluntness, N2 the shape of the tail end)
+              and its control values; the two control points at the middle body
+              are pinned (r* with zero slope there). A new number of control
+              points refits the curve as for the blade.
 Each variable:  free | name | low | slider | high | value | where
     free      ticked: a design variable within low .. high; unticked: held
     d         the position of a control point, as the fraction d of the span
@@ -58,26 +100,33 @@ Each variable:  free | name | low | slider | high | value | where
               blade, 2 segments: d1 from P4 to the root, d2 from P4 to the tip)
     dx        rudder LE control point: x offset from the original LE, mm (negative forward)
     value     rudder: a section coordinate, fraction of the sharp chord;
-              blade: the distribution's value (P/D, c/D, t/c, f/c, deg, rake/D)
+              blade: the distribution's value (P/D, c/D, t/c, f/c, deg, rake/D);
+              hull: a lengths or a radius (m), an exponent or a CST coefficient
+    where     rudder: the height; blade: r/R; hull: the x it sits at (m)
 Right panel
     Design       rudder: planform, the picked curve against the original, and in
                  3D five sections from the root to H with their control polygons
                  and each control point's track along the span. Blade: the
                  expanded outline, the picked curve against the parameter file,
-                 and in 3D the blade as the CAD builds it. The 2D plots have the
-                 span on the x axis (height, r, r/R). Drag the 3D view to turn it.
+                 and in 3D the blade as the CAD builds it. Hull: the half-profiles
+                 of the whole hull, the picked curve's part against the parameter
+                 file, and the hull in 3D. The 2D plots have the span or the length
+                 on the x axis (height, r, r/R, x). Drag the 3D view to turn it.
     3D sections  the whole rudder as its sections: modified (blue), the cut at H
-                 (red), unchanged (grey); or all blades of the propeller.
+                 (red), unchanged (grey); all blades of the propeller; the hull's
+                 sections by part.
 Save set-up writes the design space as it stands (every variable with its value,
 bounds and free flag, each curve's control points and order, the settings and
 input files) to <output folder>/<case>_design_space.json; rudder_modify.
-load_design_space or blade_modify.load_blade_space reads it for the optimiser,
---space for the tool.
+load_design_space, blade_modify.load_blade_space or hull_modify.load_hull_space
+reads it for the optimiser, --space for the tool.
 XCAD (rudder) writes the case to the output folder (XCAD file, section table,
 design and the same set-up JSON), lofts the XCAD file into a solid and writes it
 as STEP. CAD (blade) writes the case (parameter file, XCAD points, design and
 set-up JSON) and the DRDC five-surface blade with the hub sector as IGES and
-STEP. OCC viewer opens the last STEP (needs pythonocc-core).
+STEP. CAD (hull) writes the case (parameter file, design and set-up JSON,
+stations, hydrostatics, section points, check plot) and the STEP. OCC viewer
+opens the last STEP (needs pythonocc-core).
 The bar at the bottom: green ok, amber a build running (the build button counts
 the seconds), red a problem or an error; a design with a problem (e.g. blades
 closer than the clearance) is not built until it is solved.
@@ -91,6 +140,8 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -112,14 +163,33 @@ from matplotlib.figure import Figure                                 # noqa: E40
 
 from xgeom_common import Row                                         # noqa: E402
 
-ADAPTERS = {"rudder": ("xgeom_rudder", "RudderAdapter"), "blade": ("xgeom_blade", "BladeAdapter")}
+ADAPTERS = {"rudder": ("xgeom_rudder", "RudderAdapter"), "blade": ("xgeom_blade", "BladeAdapter"),
+            "hull": ("xgeom_hull", "HullAdapter")}
+VEHICLE = ("hull", "blade", "rudder")              # the vehicle's components, in the switcher's order
+NAMES = {"hull": "Hull", "blade": "Propeller", "rudder": "Rudder"}
 INK2, RED = "#52514e", "#e34948"
 STATUS = {"ok": ("#dfeedd", "black"), "busy": ("#f6d58e", "black"), "error": ("#c62f2e", "white")}  # bar colours
+VEHICLE_TAB = 2                                    # the notebook's tabs: Design, 3D sections, Vehicle
 
 
 def load_adapter(name, params=None):
     module, cls = ADAPTERS[name]
     return getattr(importlib.import_module(module), cls)(**({"params": params} if params else {}))
+
+
+def available(name):
+    """Is the geometry's adapter in this folder (the Rudder folder has the rudder's only)?"""
+    return importlib.util.find_spec(ADAPTERS[name][0]) is not None
+
+
+def file_kind(path):
+    """The geometry a set-up JSON ('geometry') or a parameter file (its first line) is for."""
+    if path.lower().endswith(".json"):
+        with open(path) as fh:
+            return json.load(fh).get("geometry")
+    with open(path) as fh:
+        first = fh.readline().lower()
+    return "hull" if "hull" in first else "blade" if "blade" in first else None
 
 
 class VarRow:
@@ -192,22 +262,106 @@ class VarRow:
 
 
 class App:
+    """The tool's window for one geometry, or for the vehicle (geometry 'vehicle'): its components (VEHICLE,
+    those whose adapter is here) one at a time in the left panel and the Design and 3D sections tabs, and
+    all of them in the Vehicle tab. space and params: a path, or for the vehicle a list of them (each goes to
+    the component it is for)."""
+
     def __init__(self, root, adapter_name="rudder", space=None, params=None):
         self.root = root
-        self.kind = adapter_name
-        self.ad = load_adapter(adapter_name, params)
-        if space:
-            self.ad.load_space(space)
-        root.title(f"XGeom design tool: {self.ad.title}")
-        self.curve = tk.StringVar(value=self.ad.names[0])
+        self.vehicle = adapter_name == "vehicle"
+        self.kinds = [k for k in VEHICLE if available(k)] if self.vehicle else [adapter_name]
+        if self.vehicle and "hull" not in self.kinds:
+            raise RuntimeError("the vehicle needs xgeom_hull.py (the X_geom folder)")
+        self.start = {k: {"params": None, "space": None} for k in self.kinds}
+        for key, paths in (("params", params), ("space", space)):
+            for path in ([paths] if isinstance(paths, str) else list(paths or [])):
+                kind = file_kind(path) if self.vehicle else adapter_name
+                if kind not in self.start:
+                    raise ValueError(f"{path}: not a set-up or parameter file of " + ", ".join(self.kinds))
+                self.start[kind][key] = path
+        self.adapters, self.errors, self.frames, self.picked, self._vcache = {}, {}, {}, {}, {}
+        self.kind, self.ad, self.placement = None, None, None
+        self.curve = tk.StringVar()
         self.rows = []
         self._pending = False
         self._job = None
         self._note = None                                   # a message the next view update shows instead of ok
         self.step = None
         self._build_layout()
+        self.switch(self.kinds[0])
+
+    # ------------------------------------------------------------ components
+    def _adapter(self, kind):
+        """The component's adapter, made when first needed with its parameter file and set-up; for the
+        vehicle None if it cannot be made (the error is kept in self.errors)."""
+        if kind in self.adapters:
+            return self.adapters[kind]
+        if kind in self.errors:
+            return None
+        st = self.start[kind]
+        try:
+            ad = load_adapter(kind, st["params"])
+            if st["space"]:
+                ad.load_space(st["space"])
+        except Exception as exc:
+            if not self.vehicle:
+                raise
+            traceback.print_exc()
+            self.errors[kind] = f"{type(exc).__name__}: {exc}"
+            return None
+        self.adapters[kind] = ad
+        return ad
+
+    def _frames(self, kind):
+        """A component's Design and 3D sections figures, made when it is first shown."""
+        if kind not in self.frames:
+            ad = self.adapters[kind]
+            f = {"design": ttk.Frame(self.tab_design), "sk": ttk.Frame(self.tab_3d)}
+            f["fig"] = Figure(figsize=(10, 7.5), dpi=100)
+            f["canvas"] = FigureCanvasTkAgg(f["fig"], master=f["design"])
+            NavigationToolbar2Tk(f["canvas"], f["design"]).update()
+            f["canvas"].get_tk_widget().pack(fill="both", expand=True)
+            f["views"] = ad.views(f["fig"])
+            f["fig3"] = Figure(figsize=(10, 7.5), dpi=100)
+            f["canvas3"] = FigureCanvasTkAgg(f["fig3"], master=f["sk"])
+            f["canvas3"].get_tk_widget().pack(fill="both", expand=True)
+            f["view3"] = ad.skeleton_view(f["fig3"])
+            self.frames[kind] = f
+        return self.frames[kind]
+
+    def switch(self, kind):
+        """Show a component: its left panel and its Design and 3D sections tabs."""
+        if kind == self.kind:
+            return
+        if kind not in self.adapters:
+            self.say(f"loading the {NAMES.get(kind, kind).lower()} ...", busy=True)
+            self.root.update_idletasks()
+        ad = self._adapter(kind)
+        if ad is None:
+            self.say(f"{NAMES[kind]}: not loaded: {self.errors[kind]}", error=True)
+            if self.kind is not None:
+                self.comp.set(self.kind)
+            return
+        if self.kind is not None:
+            self.picked[self.kind] = self.curve.get()
+            self.frames[self.kind]["design"].pack_forget()
+            self.frames[self.kind]["sk"].pack_forget()
+        self.kind, self.ad = kind, ad
+        f = self._frames(kind)
+        f["design"].pack(fill="both", expand=True)
+        f["sk"].pack(fill="both", expand=True)
+        self.fig, self.canvas, self.views = f["fig"], f["canvas"], f["views"]
+        self.fig3, self.canvas3, self.view3 = f["fig3"], f["canvas3"], f["view3"]
+        self.curve.set(self.picked.get(kind, ad.names[0]))
+        if self.vehicle:
+            self.comp.set(kind)
+        self._title()
         self.rebuild_panel()
         self.update_views()
+
+    def _title(self):
+        self.root.title(f"XGeom design tool: {'vehicle, ' if self.vehicle else ''}{self.ad.title}")
 
     # ------------------------------------------------------------ layout
     def _build_layout(self):
@@ -220,6 +374,15 @@ class App:
         left, right = ttk.Frame(paned), ttk.Frame(paned)
         paned.add(left, weight=0)
         paned.add(right, weight=1)
+        if self.vehicle:                                           # the component switcher
+            bar = ttk.Frame(left)
+            bar.pack(fill="x", side="top", padx=6, pady=(6, 2))
+            ttk.Label(bar, text="Component", font=("TkDefaultFont", 11, "bold")).pack(side="left", padx=(0, 8))
+            self.comp = tk.StringVar()
+            for k in self.kinds:
+                ttk.Radiobutton(bar, text=NAMES[k], value=k, variable=self.comp,
+                                command=lambda: self.switch(self.comp.get())).pack(side="left", padx=4)
+            ttk.Separator(left, orient="horizontal").pack(fill="x", side="top", pady=(2, 0))
         canvas = tk.Canvas(left, width=610, highlightthickness=0)
         sb = ttk.Scrollbar(left, orient="vertical", command=canvas.yview)
         self.panel = ttk.Frame(canvas)
@@ -231,25 +394,55 @@ class App:
 
         self.book = ttk.Notebook(right)
         self.book.pack(fill="both", expand=True)
-        tab = ttk.Frame(self.book)
-        self.book.add(tab, text="Design")
-        self.fig = Figure(figsize=(10, 7.5), dpi=100)
-        self.canvas = FigureCanvasTkAgg(self.fig, master=tab)
-        NavigationToolbar2Tk(self.canvas, tab).update()
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        self.views = self.ad.views(self.fig)
-        tab = ttk.Frame(self.book)
-        self.book.add(tab, text="3D sections")
-        self.fig3 = Figure(figsize=(10, 7.5), dpi=100)
-        self.canvas3 = FigureCanvasTkAgg(self.fig3, master=tab)
-        self.canvas3.get_tk_widget().pack(fill="both", expand=True)
-        self.view3 = self.ad.skeleton_view(self.fig3)
+        self.tab_design, self.tab_3d = ttk.Frame(self.book), ttk.Frame(self.book)
+        self.book.add(self.tab_design, text="Design")
+        self.book.add(self.tab_3d, text="3D sections")
+        if self.vehicle:
+            self.tab_vehicle = ttk.Frame(self.book)
+            self.book.add(self.tab_vehicle, text="Vehicle")
+            self._vehicle_layout()
         self.book.bind("<<NotebookTabChanged>>", lambda e: self.schedule_update())
+
+    def _vehicle_layout(self):
+        """The Vehicle tab: the placement settings above the 3D view (xgeom_vehicle)."""
+        import xgeom_vehicle as XV
+        tab = self.tab_vehicle
+        bar = ttk.Frame(tab)
+        bar.pack(fill="x", side="top", padx=6, pady=(6, 2))
+        num = dict(from_=-100.0, to=100.0, increment=0.005, width=8)
+        rows = (("Propeller", (("prop_dx", "plane at x - L (m)", num),
+                               ("prop_d", "D (m)", dict(num, from_=0.001))), "show"),
+                ("Rudder", (("rudder_dx", "root TE at x - L (m)", num),
+                            ("rudder_angle", "angle (deg)", dict(from_=-360.0, to=720.0, increment=15.0, width=6)),
+                            ("rudders", "rudders", dict(values=(1, 2, 4), width=3, state="readonly")),
+                            ("rudder_scale", "scale", dict(from_=0.01, to=100.0, increment=0.05, width=6))), None))
+        self.vset = {}
+        for r, (title, items, extra) in enumerate(rows):
+            ttk.Label(bar, text=title, font=("TkDefaultFont", 10, "bold")).grid(row=r, column=0, sticky="w")
+            c = 1
+            for key, text, kw in items:
+                ttk.Label(bar, text=text).grid(row=r, column=c, sticky="e", padx=(12, 3))
+                sb = ttk.Spinbox(bar, command=self.on_vehicle, **kw)
+                sb.grid(row=r, column=c + 1, sticky="w", pady=1)
+                sb.bind("<Return>", self.on_vehicle)
+                sb.bind("<FocusOut>", self.on_vehicle)
+                self.vset[key] = sb
+                c += 2
+            if extra == "show":
+                self.vshow = tk.StringVar(value="vehicle")
+                ttk.Label(bar, text="show").grid(row=r, column=c, sticky="e", padx=(24, 3))
+                for i, (val, text) in enumerate((("vehicle", "the vehicle"), ("stern", "the stern"))):
+                    ttk.Radiobutton(bar, text=text, value=val, variable=self.vshow,
+                                    command=self.on_vehicle).grid(row=r, column=c + 1 + i, sticky="w", padx=2)
+        self.figv = Figure(figsize=(10, 7), dpi=100)
+        self.canvasv = FigureCanvasTkAgg(self.figv, master=tab)
+        self.canvasv.get_tk_widget().pack(fill="both", expand=True)
+        self.viewv = XV.VehicleView(self.figv)
 
     def rebuild_panel(self):
         """(Re)create the left panel: the geometry's own boxes (PANELS), the
         picked curve and the output."""
-        case = self.case.get() if hasattr(self, "case") else "gui"
+        case = self.case.get() if hasattr(self, "case") and self.case.winfo_exists() else "gui"
         for w in self.panel.winfo_children():
             w.destroy()
         self.rows, self.picks, self.pinned = [], {}, []
@@ -263,7 +456,7 @@ class App:
         if c not in ad.names:
             c = ad.names[0]
             self.curve.set(c)
-        box = ttk.LabelFrame(self.panel, text=f"Curve {c}")
+        box = ttk.LabelFrame(self.panel, text=f"Curve {getattr(ad, 'curve_label', str)(c)}")
         box.pack(fill="x", padx=6, pady=4)
         ttk.Label(box, text=ad.describe(c), foreground=INK2, wraplength=560, justify="left").pack(fill="x", padx=4)
         top = ttk.Frame(box)
@@ -279,8 +472,10 @@ class App:
             ttk.Label(top, text="P1 .. P7: P2 = P3 and P5 = P6 at P4's value (zero slope at P4)",
                       foreground=INK2).pack(side="left", padx=8)
         else:
-            ttk.Label(top, text="control points").pack(side="left", padx=(10 if hasattr(self, "nseg") else 4, 2))
-            self.nctrl = ttk.Spinbox(top, from_=2, to=13, width=4, command=self.on_order)
+            lo, hi = getattr(ad, "order_range", (1, 12))
+            ttk.Label(top, text="control points").pack(side="left",
+                                                       padx=(10 if getattr(ad, "segment_choice", False) else 4, 2))
+            self.nctrl = ttk.Spinbox(top, from_=lo + 1, to=hi + 1, width=4, command=self.on_order)
             self.nctrl.set(ad.order(c) + 1)
             self.nctrl.bind("<Return>", self.on_order)
             self.nctrl.pack(side="left")
@@ -419,6 +614,43 @@ class App:
             sb.set(f"{s[k]:.3f}" if k == "tip_band" else s[k])
         self.sec_info.configure(text=self.ad.sections_info())
 
+    def on_elliptic(self):
+        """Hull: elliptical sections (r' of its own) or circular ones."""
+        self.guard(lambda: self.ad.set_elliptic(self.elliptic.get()))
+        self.after_change(structure=True)
+
+    def on_vehicle(self, _event=None):
+        """The Vehicle tab's settings: read, checked and drawn."""
+        pl = self.placement
+        if pl is None:
+            return
+        try:
+            new = {k: float(self.vset[k].get()) for k in ("prop_dx", "prop_d", "rudder_dx", "rudder_angle",
+                                                          "rudder_scale")}
+            new["rudders"] = int(float(self.vset["rudders"].get()))
+        except (ValueError, tk.TclError):
+            new = None
+        if new is not None and (new["prop_d"] <= 0.0 or new["rudder_scale"] <= 0.0 or new["rudders"] not in (1, 2, 4)):
+            self.say("the propeller's D and the rudder's scale are positive; 1, 2 or 4 rudders", error=True)
+            new = None
+        if new is not None:
+            new["rudder_angle"] %= 360.0
+            new["view"] = self.vshow.get()
+            if any(getattr(pl, k) != v for k, v in new.items()):
+                for k, v in new.items():
+                    setattr(pl, k, v)
+                self.schedule_update()
+        self._fill_vehicle()
+
+    def _fill_vehicle(self):
+        """The Vehicle tab's boxes show the placement in use."""
+        pl = self.placement
+        for k, sb in self.vset.items():
+            v = getattr(pl, k)
+            sb.set(f"{v:d}" if k == "rudders" else f"{v:g}" if k == "rudder_angle" else
+                   f"{v:.2f}" if k == "rudder_scale" else f"{v:.3f}")
+        self.vshow.set(pl.view)
+
     def say(self, text, error=False, busy=False):
         """The status bar: green ok, amber busy (a build running), red a problem
         or an error."""
@@ -433,7 +665,15 @@ class App:
 
     def update_views(self):
         self._pending = False
-        three_d = self.book.index(self.book.select()) == 1
+        tab = self.book.index(self.book.select())
+        if self.vehicle and tab == VEHICLE_TAB:
+            try:
+                self._update_vehicle()
+            except Exception as exc:
+                self.say(f"vehicle view failed: {type(exc).__name__}: {exc}", error=True)
+                traceback.print_exc()
+            return
+        three_d = tab == 1
         try:
             pv = self.ad.preview(skeleton=three_d)
             if three_d:
@@ -454,6 +694,43 @@ class App:
             self.say(f"preview failed: {type(exc).__name__}: {exc}", error=True)
             traceback.print_exc()
 
+    def _vehicle_part(self, kind):
+        """A component's lines for the Vehicle tab (xgeom_vehicle.PARTS), made again only when its design
+        has changed."""
+        import xgeom_vehicle as XV
+        ad = self.adapters[kind]
+        hit = self._vcache.get(kind)
+        if hit is None or hit[0] is not ad.design:
+            self._vcache[kind] = (ad.design, XV.PARTS[kind](ad))
+        return self._vcache[kind][1]
+
+    def _update_vehicle(self):
+        """The Vehicle tab: every component as its design stands, placed on the hull."""
+        import xgeom_vehicle as XV
+        t0 = time.time()
+        for k in self.kinds:
+            if k not in self.adapters and k not in self.errors:
+                self.say(f"loading the {NAMES[k].lower()} for the vehicle ...", busy=True)
+                self.root.update_idletasks()
+                self._adapter(k)
+        if "hull" not in self.adapters:
+            self.say("the vehicle needs the hull: " + self.errors.get("hull", "not loaded"), error=True)
+            return
+        parts = {k: self._vehicle_part(k) for k in self.kinds if k in self.adapters}
+        if self.placement is None:
+            self.placement = XV.default_placement(parts)
+            self._fill_vehicle()
+        self.viewv.update(parts, self.placement, self.kind)
+        self.canvasv.draw_idle()
+        problems = [f"{NAMES[k].lower()}: {q}" for k, part in parts.items() for q in part["problems"]]
+        problems += [f"{NAMES[k].lower()} not loaded: {e}" for k, e in self.errors.items()]
+        if problems:
+            self.say("problem: " + "; ".join(problems), error=True)
+        elif self._job is not None:
+            self.say(self._job["message"], busy=True)
+        else:
+            self.say(f"vehicle ok ({(time.time() - t0) * 1e3:.0f} ms)")
+
     # ------------------------------------------------------------ build
     def on_build(self):
         if self._job is not None:
@@ -465,7 +742,7 @@ class App:
             return
         case = self.case.get().strip() or "gui"
         self.build_btn.configure(state="disabled")
-        job = self._job = {"done": False, "result": None, "error": None, "t0": time.time(),
+        job = self._job = {"done": False, "result": None, "error": None, "t0": time.time(), "label": label,
                            "message": f"{label} running: writing {case} and building the CAD ..."}
         self.say(job["message"], busy=True)
         task = self.ad.build_task(case)                                 # the design as it is now
@@ -481,13 +758,13 @@ class App:
 
     def _poll(self):
         job = self._job
-        label = self.ad.build_label
+        label = job["label"]
         if not job["done"]:
             self.build_btn.configure(text=f"{time.time() - job['t0']:.0f} s")     # the build's time so far
             self.root.after(200, self._poll)
             return
         self._job = None
-        self.build_btn.configure(state="normal", text=label)
+        self.build_btn.configure(state="normal", text=self.ad.build_label)
         if job["error"]:
             print(job["error"])
             self.say(f"{label} failed: " + job["error"].strip().splitlines()[-1], error=True)
@@ -505,13 +782,13 @@ class App:
             self.say(f"set-up saved: {os.path.abspath(path)}")
 
     def on_load_params(self):
-        path = filedialog.askopenfilename(title="Blade parameter file", initialdir=HERE,
+        path = filedialog.askopenfilename(title=f"{NAMES.get(self.kind, self.kind)} parameter file", initialdir=HERE,
                                           filetypes=[("parameter files", "*.dat"), ("all files", "*")])
         if path:
             self.say(f"fitting the curves to {os.path.basename(path)} ...")
             self.root.update_idletasks()
             if self.guard(lambda: self.ad.load_params(path) or True):
-                self.root.title(f"XGeom design tool: {self.ad.title}")
+                self._title()
                 self.after_change(structure=True)
                 self.say(f"loaded {path}")
 
@@ -617,17 +894,71 @@ def blade_panel(app):
         app._pick(grid, i // 3, i % 3, c, f"{c}  {BM.UNITS[c]}")
 
 
-PANELS = {"rudder": rudder_panel, "blade": blade_panel}
+def hull_panel(app):
+    """The hull's boxes: the parameter file, the body (lengths, radii, elliptical sections) and the curves."""
+    ad = app.ad
+    p = ad.params
+    box = ttk.LabelFrame(app.panel, text="Parameter file")
+    box.pack(fill="x", padx=6, pady=4)
+    where = p.path or "(SUBOFF's equations: suboff_hull_params.dat is not here)"
+    ttk.Label(box, text=os.path.relpath(where, HERE) if where.startswith(HERE) else where,
+              wraplength=560).pack(anchor="w", padx=4)
+    ttk.Label(box, text=f"L {p.length:g} m: nose {p.nose:g}, middle {p.middle:g}, tail {p.tail:g}, cap {p.cap:g} m; "
+                        f"{len(p.x)} stations, " + ("axisymmetric" if p.axisymmetric else
+                                                   "elliptical sections (r and r')"),
+              foreground=INK2, wraplength=560).pack(anchor="w", padx=4)
+    row = ttk.Frame(box)
+    row.pack(fill="x", pady=3)
+    ttk.Button(row, text="Load ...", command=app.on_load_params).pack(side="left", padx=4)
+    ttk.Button(row, text="Save ...", command=app.on_save_params).pack(side="left")
+    ttk.Label(row, text="the design as a parameter file", foreground=INK2).pack(side="left", padx=6)
+
+    box = ttk.LabelFrame(app.panel, text="Body: the parts' lengths and the radii (m)")
+    box.pack(fill="x", padx=6, pady=4)
+    app._header(box)
+    specs = ad.global_rows()
+    for r, spec in enumerate(specs, start=1):
+        app.rows.append(VarRow(app, box, r, spec))
+    app.elliptic = tk.BooleanVar(value=ad.elliptic)
+    ttk.Checkbutton(box, text="elliptical sections: the half-width r' has radii and curves of its own",
+                    variable=app.elliptic, command=app.on_elliptic).grid(row=len(specs) + 1, column=0, columnspan=7,
+                                                                         sticky="w", padx=2, pady=(4, 2))
+
+    box = ttk.LabelFrame(app.panel, text="Curves (pick the curve to edit)")
+    box.pack(fill="x", padx=6, pady=4)
+    grid = ttk.Frame(box)
+    grid.pack(fill="x", padx=4, pady=2)
+    for i, c in enumerate(ad.names):
+        text = (c.replace("_", " ") if ad.design.axisymmetric else
+                {"nose_r": "nose r (XZ)", "tail_r": "tail r (XZ)", "nose_rp": "nose r' (XY)",
+                 "tail_rp": "tail r' (XY)"}[c])
+        app._pick(grid, i // 2, i % 2, c, text)
+
+
+PANELS = {"rudder": rudder_panel, "blade": blade_panel, "hull": hull_panel}
 
 
 def main():
+    default = "vehicle" if available("hull") else "rudder"
     ap = argparse.ArgumentParser(description="XGeom design tool")
-    ap.add_argument("geometry", nargs="?", default="rudder", choices=sorted(ADAPTERS))
-    ap.add_argument("--space", help="a <case>_design_space.json to start from")
-    ap.add_argument("--params", help="blade: the parameter file to start from")
+    ap.add_argument("geometry", nargs="?", default=default, choices=sorted(ADAPTERS) + ["vehicle"],
+                    help=f"what to design (default here: {default})")
+    ap.add_argument("--space", action="append", default=[],
+                    help="a <case>_design_space.json to start from (the vehicle: one per component)")
+    ap.add_argument("--params", action="append", default=[],
+                    help="the blade's or the hull's parameter file to start from (the vehicle: either, or both)")
     args = ap.parse_args()
-    space = os.path.abspath(args.space) if args.space else None
-    params = os.path.abspath(args.params) if args.params else None
+    if args.geometry == "vehicle" and not available("hull"):
+        ap.error("the vehicle needs xgeom_hull.py (the X_geom folder)")
+    if args.geometry != "vehicle":
+        if not available(args.geometry):
+            ap.error(f"{ADAPTERS[args.geometry][0]}.py is not in this folder")
+        if len(args.space) > 1 or len(args.params) > 1:
+            ap.error("one --space and one --params for one geometry")
+    space = [os.path.abspath(s) for s in args.space]
+    params = [os.path.abspath(p) for p in args.params]
+    if args.geometry != "vehicle":
+        space, params = (space or [None])[0], (params or [None])[0]
     os.chdir(HERE)                                   # the adapters' files are relative to this folder
     root = tk.Tk()
     root.geometry(f"{min(1600, root.winfo_screenwidth() - 40)}x{min(940, root.winfo_screenheight() - 90)}+10+10")

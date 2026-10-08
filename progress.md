@@ -1,6 +1,6 @@
 # Progress
 
-XGeom: rudder parametrization and propeller blades. Updated 6 Oct 2026.
+XGeom: rudder parametrization, propeller blades and hulls. Updated 8 Oct 2026.
 
 ## Achieved
 
@@ -31,14 +31,41 @@ XGeom: rudder parametrization and propeller blades. Updated 6 Oct 2026.
   them. The section table (para.py's 26-row format) is written to `airfoils/sections/` when first used; camber
   the mean of the two surfaces at the same x, half thickness their half difference. Own airfoils: `<name>.dat`
   in `airfoils/`. `para.py` and `BladeSurface` take a symmetric section (camber columns 0).
-- **Design tool** (`xgeom_tool.py` with `xgeom_rudder.py` or `xgeom_blade.py`, `xgeom_common.py`, `xcad_loft.py`):
-  sliders for every variable with bounds and free/held flags, the number of control points per curve, live 2D
-  and 3D views, Save set-up for the optimiser, the CAD build, OCC viewer. Blade: Load and Save parameter files,
-  blade and hub, the XCAD sections, 1 or 2 segments per curve. Status bar: green ok, amber while a build runs,
-  red for a problem or an error. Every 2D plot, in the tool and in the case check plots, has the span (height,
-  r, r/R) on the x axis.
-- **Checks**: `_rudder_modify_test.py`, `_xgeom_tool_test.py`, `_xgeom_blade_test.py`, `_airfoils_test.py`,
-  `_section_fit_test.py`, `_rudder_param_test.py` and `_tip_cap_test.py` pass.
+- **Hull** (`suboff.py`, `hull_extraction.py`): the DARPA SUBOFF bare hull (AFF-1) from the equations of Groves,
+  Huang and Chang (1989), in metres, and its STEP (a solid of revolution, one face per part: forebody, parallel
+  middle body, afterbody, aft cap). Stations cut from a hull's CAD (STEP or IGES, along x) or taken from the
+  equations; hydrostatics: V, S, LCB, Am, B, T, Cp, Cm, Cb, the parallel middle body, and for each half about
+  midship its Cp, centroid and share of the parallel middle body (the quantities Lackenby's variation works
+  with). Output: `outputs/hull/<case>_stations.dat` (the sectional area curve), `<case>_hydrostatics.dat`,
+  `<case>_check.png`, `suboff.step`.
+- **Hull curves** (`hull_modify.py`, `suboff_hull_params.dat`): a hull starts from a station table (half-height r
+  and half-width r' at stations, the nose, middle-body, tail and cap lengths). Each part of each view is a CST
+  curve: a class exponent (the nose's bluntness, the tail end's shape) times a Bernstein polynomial of control
+  values, joining the middle body with zero slope. Sections are ellipses (circles where r = r'). Design vector:
+  the lengths and the curves (exponents and coefficients) free by default (13 slots for SUBOFF), the radii and
+  the cap held. Output: the
+  design as a station table and as JSON, the set-up, stations, hydrostatics, section points, check plot, and
+  STEP (one NURBS face per part: the profile B-spline times the rational circle, so sections are exact
+  ellipses).
+- **Design tool** (`xgeom_tool.py` with `xgeom_rudder.py`, `xgeom_blade.py` or `xgeom_hull.py`, `xgeom_common.py`,
+  `xcad_loft.py`): sliders for every variable with bounds and free/held flags, the number of control points per
+  curve, live 2D and 3D views, Save set-up for the optimiser, the CAD build, OCC viewer. Blade: Load and Save
+  parameter files, blade and hub, the XCAD sections, 1 or 2 segments per curve. Hull: Load and Save parameter
+  files, the lengths and radii, elliptical sections on or off (r' with radii and curves of its own), each curve's
+  exponent and control values. Status bar: green ok, amber while a build runs, red for a problem or an error.
+  Every 2D plot, in the tool and in the case check plots, has the span or the length (height, r, r/R, x) on the
+  x axis.
+- **Vehicle** (`xgeom_vehicle.py`; `python xgeom_tool.py` in X_geom, the rudder alone in the Rudder folder): one
+  window switching between the hull, propeller and rudder panels (each as when alone, each keeping its state),
+  and a Vehicle tab with the hull, the propeller and the rudder at the stern as their designs stand. Placement:
+  the propeller plane on the axis (x - L, default the end) and its D in the vehicle (the blade scaled to it,
+  default half the hull's depth); the rudder root's TE (x - L, default the start of the cap, a quarter D clear of
+  the blades), the angle around the axis (default 180 deg, under the stern), 1, 2 or 4 rudders, a scale (default
+  1, mm to m). The rudder's root sits on the hull at its smallest distance from the axis along the root chord.
+  The whole vehicle or the stern.
+- **Checks**: `_rudder_modify_test.py`, `_xgeom_tool_test.py`, `_xgeom_blade_test.py`, `_xgeom_hull_test.py`,
+  `_airfoils_test.py`, `_hull_test.py`, `_hull_modify_test.py`, `_section_fit_test.py`, `_rudder_param_test.py`
+  and `_tip_cap_test.py` pass (the window checks with `--gui`).
 
 ## Current status
 
@@ -55,9 +82,22 @@ XGeom: rudder parametrization and propeller blades. Updated 6 Oct 2026.
   (x/c < 0.0125) and at cusped trailing edges; para.py fixes the 26 stations.
 - `UIUC-propDB/`, the UIUC propeller database (this copy: volume 1 only, 200 of its 1,114 data files), is kept as
   a reference; the code does not read it (user, 6 Oct 2026).
+- Hull: SUBOFF's equations give V 0.69921 m^3 and S 5.98826 m^2 (the report: 0.699 and 5.988), LCB 0.4611 L
+  from the nose, Cp 0.7919; its STEP matches them within 3e-9, and stations cut from the STEP give the radius
+  within 1e-6. Choices (user, 7 Oct 2026): SUBOFF first, built from its equations; form parameters with
+  Lackenby's shift as the variation; the whole hull varies; extraction and hydrostatics first.
+- Hull curves: order 5 per curve fits SUBOFF within 0.05 mm at the nose (N1 0.477, the equations' 1/2.1) and
+  0.12 mm at the tail (N2 1.97); V, S and LCB within 4e-6. Choices (user, 8 Oct 2026): CST control radii with a
+  nose exponent (over radii at stations and B-spline control points; SUBOFF needed 8 values per part for 0.6
+  to 2 mm with those), elliptical sections (over super-ellipses), in place of Lackenby's shift.
+- Vehicle: choices (user, 8 Oct 2026): one window with the hull, propeller and rudder and a Vehicle tab; the
+  placement by a few settings, the rudder under the stern by default. The wind-tunnel rudder at scale 1 and the
+  MSc propeller at D 0.254 m on SUBOFF: the rudder's root TE 97 mm ahead of the end, 64 mm clear of the blades.
 
 ## Next steps
 
+- Vehicle: the placement is not saved yet (a vehicle set-up: the three set-ups and the placement); the sail and
+  the fins; blended wing bodies later.
 - Review the blade in the tool: default segments, orders and free variables (`blade_control.py`); camber and
   rake fit poorly as 2 segments.
 - Optimisation: sample a saved set-up (`load_design_space`, `load_blade_space`, `Initial_sampling.py`), screen

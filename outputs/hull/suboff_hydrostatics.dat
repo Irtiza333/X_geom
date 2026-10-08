@@ -1,0 +1,31 @@
+# DARPA SUBOFF bare hull: hydrostatics
+# source: DARPA SUBOFF bare hull (AFF-1), equations of Groves, Huang and Chang (1989)
+# V, S and LCB by quadrature of the equations; the halves from the 404 stations
+# the report: volume 0.699 m^3, wetted surface 5.988 m^2
+# name                                value  unit   description
+length                          4.356100102  m      # L, nose to tail
+volume                         0.6992108413  m^3    # V
+wetted_surface                  5.988264212  m^2    # S
+lcb                             2.008606202  m      # centre of buoyancy from the nose
+lcb_mid                       -0.0388980613  -      # (LCB - L/2) / L, + aft of midship
+am                             0.2026829916  m^2    # Am, the largest section area
+x_am                            2.130424898  m      # its station (the middle of the parallel middle body)
+breadth                               0.508  m      # B, the largest breadth
+depth                                 0.508  m      # T, the largest depth
+cp                             0.7919413077  -      # prismatic coefficient V / (Am L)
+cm                             0.7853981634  -      # maximum-section coefficient Am / (B T) at Am
+cb                             0.6219892486  -      # block coefficient V / (L B T)
+l_over_b                          8.5750002  -      # L / B
+pmb_start                       1.015999898  m      # parallel middle body, start
+pmb_end                         3.244849898  m      # parallel middle body, end
+pmb_length                          2.22885  m      # parallel middle body, length
+cp_fore                        0.8687014901  -      # fore half (nose to midship): its volume / (Am L/2)
+cp_aft                         0.7151648597  -      # aft half (midship to tail): its volume / (Am L/2)
+xc_fore                        0.4414957017  -      # fore half: its centroid forward of midship / (L/2)
+xc_aft                         0.3639850575  -      # aft half: its centroid aft of midship / (L/2)
+p_fore                         0.5335277543  -      # fore half: its parallel middle body / (L/2)
+p_aft                           0.489795837  -      # aft half: its parallel middle body / (L/2)
+volume_stations                0.6992036608  m^3    # V from the stations (trapezoidal rule), a check
+wetted_surface_stations         5.988203257  m^2    # S from the stations (frusta), a check
+lcb_stations                    2.008606215  m      # LCB from the stations, a check
+n_stations                              404  -      # number of stations

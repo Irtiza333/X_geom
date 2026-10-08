@@ -1,0 +1,29 @@
+# hull case suboff_fit: hydrostatics
+# V, S and LCB from the stations (S approximate for ellipses)
+# name                                value  unit   description
+length                            4.3561001  m      # L, nose to tail
+volume                         0.6992086539  m^3    # V
+wetted_surface                  5.988274163  m^2    # S
+lcb                             2.008590261  m      # centre of buoyancy from the nose
+lcb_mid                      -0.03890172064  -      # (LCB - L/2) / L, + aft of midship
+am                             0.2026830293  m^2    # Am, the largest section area
+x_am                              2.1304249  m      # its station (the middle of the parallel middle body)
+breadth                        0.5080000473  m      # B, the largest breadth
+depth                          0.5080000473  m      # T, the largest depth
+cp                             0.7919386832  -      # prismatic coefficient V / (Am L)
+cm                             0.7853981634  -      # maximum-section coefficient Am / (B T) at Am
+cb                             0.6219871873  -      # block coefficient V / (L B T)
+l_over_b                        8.574999399  -      # L / B
+pmb_start                         1.0159999  m      # parallel middle body, start
+pmb_end                           3.2448499  m      # parallel middle body, end
+pmb_length                          2.22885  m      # parallel middle body, length
+cp_fore                        0.8687195023  -      # fore half (nose to midship): its volume / (Am L/2)
+cp_aft                         0.7151578641  -      # aft half (midship to tail): its volume / (Am L/2)
+xc_fore                        0.4415021325  -      # fore half: its centroid forward of midship / (L/2)
+xc_aft                         0.3639901289  -      # aft half: its centroid aft of midship / (L/2)
+p_fore                         0.5335277534  -      # fore half: its parallel middle body / (L/2)
+p_aft                          0.4897958383  -      # aft half: its parallel middle body / (L/2)
+volume_stations                0.6992086539  m^3    # V from the stations (trapezoidal rule), a check
+wetted_surface_stations         5.988274163  m^2    # S from the stations (frusta), a check
+lcb_stations                    2.008590261  m      # LCB from the stations, a check
+n_stations                             1205  -      # number of stations
