@@ -135,9 +135,16 @@ def test_vehicle(hull):
              "sections": [np.array([[-0.1, 0.0, 0.5], [0.1, 0.05, 0.9], [0.0, 0.0, 1.0]])]}
     parts = {"hull": XV.hull_part(hull), "blade": blade, "rudder": FakeRudder.part()}
     pl = XV.default_placement(parts)
-    check("defaults: propeller D = r* (half the depth), the rudder's root TE a quarter D clear of the blades",
-          [pl.prop_d, pl.rudder_dx, pl.rudder_angle, pl.rudders],
-          [0.254, round(min(-d.cap, -0.1 * 0.254 / 2.0 - 0.25 * 0.254), 3), 180.0, 1], 1e-12)
+    check("defaults: propeller D = r* (half the depth), the rudder's root TE a quarter D clear of the blades, "
+          "4 rudders from 180 deg", [pl.prop_d, pl.rudder_dx, pl.rudder_angle, pl.rudders],
+          [0.254, round(min(-d.cap, -0.1 * 0.254 / 2.0 - 0.25 * 0.254), 3), 180.0, 4], 1e-12)
+    pl.rudders, pl.rudder_angle = 6, 30.0
+    segs, info = XV.assemble(parts, pl)
+    tops = segs["rudders"][1::2]                                    # the loop at y = 200 of each rudder
+    angles = [np.degrees(np.arctan2(t[:, 1].mean(), t[:, 2].mean())) % 360 for t in tops]
+    check("6 rudders, the first at 30 deg: 360/6 apart, each root on the hull",
+          [len(tops)] + [a - (30.0 + 60.0 * k) for k, a in enumerate(angles)] + [len(info["rudder_root"])],
+          [6] + [0.0] * 6 + [6], 1e-9)
     pl.rudders, pl.rudder_angle, pl.rudder_scale = 4, 45.0, 0.5
     segs, info = XV.assemble(parts, pl)
     L, s = d.length, 0.254 / 2.0
@@ -223,19 +230,33 @@ def test_gui():
         app.update_views()
         root.update()
         n = {k: len(c.get_segments()) for k, c in app.viewv.col.items()}
-        check("the Vehicle tab: hull, blades and hub, a rudder; the status ok",
-              [n["hull"] > 40, n["blades"] > 20, n["hub"], 10 <= n["rudders"] <= XV.LOOPS,
-               app.status.cget("background") == XT.STATUS["ok"][0]], [1, 1, 14, 1, 1], 0)
-        app.vset["rudders"].set(2)
+        per = n["rudders"] // 4
+        check("the Vehicle tab: hull, blades and hub, 4 rudders; the status ok",
+              [n["hull"] > 40, n["blades"] > 20, n["hub"], n["rudders"] == 4 * per, 10 <= per <= XV.LOOPS,
+               app.status.cget("background") == XT.STATUS["ok"][0]], [1, 1, 14, 1, 1, 1], 0)
+        app.vset["rudders"].set(6)
         app.vset["rudder_angle"].set(90)
         app.vshow.set("stern")
         app.on_vehicle()
         app.update_views()
         root.update()
-        n2 = len(app.viewv.col["rudders"].get_segments())
-        check("placement: 2 rudders at 90 deg, the stern", [app.placement.rudders, app.placement.rudder_angle,
-                                                            app.placement.view == "stern", n2 == 2 * n["rudders"]],
-              [2, 90.0, 1, 1], 0)
+        n6 = len(app.viewv.col["rudders"].get_segments())
+        app.vset["rudders"].set(13)                                 # more than MAX_RUDDERS: refused
+        app.on_vehicle()
+        refused13 = app.status.cget("background") == XT.STATUS["error"][0] and app.vset["rudders"].get() == "6"
+        check("placement: 6 rudders from 90 deg, the stern; 13 refused (the box shows 6)",
+              [app.placement.rudders, app.placement.rudder_angle, app.placement.view == "stern", n6 == 6 * per,
+               refused13], [6, 90.0, 1, 1, 1], 0)
+        app.switch("blade")
+        n_sec = len(app._vehicle_part("blade")["sections"])
+        app.nblades.set(7)
+        app.on_blades()
+        app.update_views()
+        root.update()
+        n7 = len(app.viewv.col["blades"].get_segments())
+        app.switch("hull")
+        check("blades Z 7 in the propeller panel: the vehicle draws 7 blades; Z kept when the hull is shown",
+              [app.adapters["blade"].params.blades, n7, app.adapters["blade"].file_blades], [7, 7 * n_sec, 5], 0)
         app.vset["prop_d"].set(-1)
         app.on_vehicle()
         check("a negative propeller D is refused (red), the box shows the D in use",

@@ -120,6 +120,7 @@ SEG_U_BOUNDS = (0.02, 0.98)       # 2 segments: P4's position u4, fraction of th
 SEG_W_BOUNDS = (0.02, 5.0)        # 2 segments: the weights w23, w56 in the fit
 HUB_HEIGHT = DEFAULT_HUB_HEIGHT    # m, hub_new's: the hub height when the file gives none
 CLEARANCE_MM = 25.0               # x_blade_new.CLEARANCE_THRESHOLD, the MSc blade (D = 1.4 m)
+BLADES = (2, 12)                  # the number of blades with_blades accepts
 SECTIONS = 56                     # sections in the XCAD points file (x_blade_new.R_VALUES: 56 from r/R 0.18)
 TIP_BAND = 0.93                   # r/R where the tip band starts (x_blade_new.R_TIP_BAND)
 TIP_SECTIONS = 14                 # sections in the tip band, closer together towards the tip (x_blade_new)
@@ -245,6 +246,15 @@ def read_params(path):
         except ValueError as exc:
             raise ValueError(f"{path}: {exc}") from None
     return params
+
+
+def with_blades(params, blades):
+    """The parameter file's data with another number of blades Z (BLADES: 2 .. 12): the clearance check, the
+    hub sector of the CAD and the parameter file written follow it; the same params when Z is unchanged."""
+    z = int(blades)
+    if z != blades or not BLADES[0] <= z <= BLADES[1]:
+        raise ValueError(f"the number of blades is a whole number from {BLADES[0]} to {BLADES[1]}")
+    return params if z == params.blades else dataclasses.replace(params, blades=z)
 
 
 def write_params(path, params, notes=()):
@@ -824,7 +834,8 @@ def space_record(space, design, params, settings=None):
 def load_blade_space(path):
     """(space, design, record) of a set-up the design tool saved
     (<case>_design_space.json); the parameter file is read again from the path
-    the record names:
+    the record names, with the record's number of blades (the tool can change
+    it):
 
         space, design, rec = load_blade_space("outputs/blade/gui_design_space.json")
         x0, bounds = space.to_vector(design), space.bounds
@@ -834,6 +845,8 @@ def load_blade_space(path):
     with open(path) as fh:
         rec = json.load(fh)
     params = read_params(rec["params_file"])
+    if rec.get("globals", {}).get("blades") is not None:
+        params = with_blades(params, rec["globals"]["blades"])
     space, design = BladeSpace.from_dict(params, rec["space"])
     return space, design, rec
 

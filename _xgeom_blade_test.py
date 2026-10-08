@@ -346,6 +346,19 @@ def test_adapter(tmp, table):
           [ad3.design.radius - 0.72, ad3.design.hub_radius - 0.13]
           + [np.abs(ad3.design.prop(c)(rr) - ad.design.prop(c)(rr)).max() / np.ptp(ad.design.prop(c)(rr))
              for c in BM.CURVES], 0.0, 0.01)
+    gap5 = ad.preview()["clearance_mm"]
+    no_z = [refused(ad.set_blades, z) for z in (1, 13, 4.5)]
+    ad.set_blades(7)
+    pv7 = ad.preview()
+    sp7 = ad.save_space(os.path.join(tmp, "setup7.json"))
+    s7, _, rec7 = BM.load_blade_space(sp7)
+    ad7 = XBL.BladeAdapter(params=path)
+    ad7.load_space(sp7)
+    p7 = BM.read_params(ad.save_params(os.path.join(tmp, "z7.dat")))
+    check("blades Z: 1, 13 and 4.5 refused; 7: the blades closer, the set-up and the saved file keep 7, the "
+          "file's 5 kept apart", no_z + [pv7["clearance_mm"] < gap5, rec7["globals"]["blades"], s7.params.blades,
+                                         ad7.params.blades, ad7.file_blades, p7.blades], [1, 1, 1, 1, 7, 7, 7, 5, 7], 0)
+    print(f"       blades {gap5:.1f} mm apart with 5, {pv7['clearance_mm']:.1f} mm with 7")
 
 
 def test_gui(tmp, table):
@@ -398,6 +411,17 @@ def test_gui(tmp, table):
               [ok_bg == XT.STATUS["ok"][0], err_bg == XT.STATUS["error"][0], prob.startswith("problem (no CAD"),
                "hub height" in prob, app.status.cget("background") == XT.STATUS["error"][0],
                app.status.winfo_ismapped()], [1] * 6, 0)
+        app.nblades.set(7)
+        app.on_blades()
+        app.book.select(1)
+        root.update()
+        app.update_views()
+        root.update()
+        n7 = sum(len(c.get_segments()) for c in app.view3.col.values())
+        app.nblades.set(1)                                    # refused: the box shows the Z in use
+        app.on_blades()
+        check("blades Z 7 from the box: 7 blades in the propeller tab; 1 refused (the box shows 7)",
+              [app.ad.params.blades, n7, app.nblades.get() == "7"], [7, 30 * 7 + 14, 1], 0)
     finally:
         root.destroy()
 

@@ -35,11 +35,13 @@ Vehicle
                             (default half the hull's depth or breadth, the larger)
                  rudder     root TE at x - L: the root's trailing edge from the end of
                             the hull (default the start of the cap, a quarter of the
-                            propeller's D clear of the blades); angle around the axis
-                            from the top towards starboard (180 under the stern); 1, 2
-                            (opposite) or 4 (cruciform) rudders; scale (1: its own size,
-                            mm to m). The root sits on the hull: at the hull's distance
-                            from the axis in its direction, the smallest along the root.
+                            propeller's D clear of the blades); rudders: how many, 1 to
+                            12, evenly spaced around the axis (default 4, a cross);
+                            first at: the first one's angle around the axis from the
+                            top towards starboard (180 under the stern); scale (1: its
+                            own size, mm to m). Each root sits on the hull: at the
+                            hull's distance from the axis in its direction, the
+                            smallest along the root.
                  show       the whole vehicle or its stern (from the start of the tail).
 Left panel (rudder)
     H         the height of the modified region, between its low and high
@@ -65,6 +67,10 @@ Left panel (blade)
               the blade radius R, the hub radius and the hub height (m; the hub
               is centred at x = 0 and must cover the blade root). A change of
               either radius stretches the distributions over the new span.
+              blades Z: the number of blades, 2 to 12 (the parameter file's to
+              start with); the clearance check, the propeller tab, the vehicle,
+              the CAD's hub sector and the parameter file written follow it. It
+              is saved with the set-up; it is not in the design vector.
     Sections  the sections of the XCAD points file (para.py's, 53 points
               each) and the 3D sections tab: how many, root to tip, and how
               many of them lie from the tip band's r/R to the tip, closer
@@ -413,8 +419,8 @@ class App:
         rows = (("Propeller", (("prop_dx", "plane at x - L (m)", num),
                                ("prop_d", "D (m)", dict(num, from_=0.001))), "show"),
                 ("Rudder", (("rudder_dx", "root TE at x - L (m)", num),
-                            ("rudder_angle", "angle (deg)", dict(from_=-360.0, to=720.0, increment=15.0, width=6)),
-                            ("rudders", "rudders", dict(values=(1, 2, 4), width=3, state="readonly")),
+                            ("rudders", "rudders", dict(from_=1, to=XV.MAX_RUDDERS, increment=1, width=4)),
+                            ("rudder_angle", "first at (deg)", dict(from_=-360.0, to=720.0, increment=15.0, width=6)),
                             ("rudder_scale", "scale", dict(from_=0.01, to=100.0, increment=0.05, width=6))), None))
         self.vset = {}
         for r, (title, items, extra) in enumerate(rows):
@@ -614,6 +620,20 @@ class App:
             sb.set(f"{s[k]:.3f}" if k == "tip_band" else s[k])
         self.sec_info.configure(text=self.ad.sections_info())
 
+    def on_blades(self, _event=None):
+        """Blade: the number of blades from the Blade and hub box."""
+        try:
+            z = int(self.nblades.get())
+        except ValueError:
+            z = None
+        except tk.TclError:                                          # the box is gone (panel rebuilt)
+            return
+        if z is not None and z != self.ad.params.blades:
+            if self.guard(lambda: self.ad.set_blades(z) or True):
+                self.refresh_labels()
+                self.schedule_update()
+        self.nblades.set(self.ad.params.blades)                      # what is used
+
     def on_elliptic(self):
         """Hull: elliptical sections (r' of its own) or circular ones."""
         self.guard(lambda: self.ad.set_elliptic(self.elliptic.get()))
@@ -630,8 +650,9 @@ class App:
             new["rudders"] = int(float(self.vset["rudders"].get()))
         except (ValueError, tk.TclError):
             new = None
-        if new is not None and (new["prop_d"] <= 0.0 or new["rudder_scale"] <= 0.0 or new["rudders"] not in (1, 2, 4)):
-            self.say("the propeller's D and the rudder's scale are positive; 1, 2 or 4 rudders", error=True)
+        n_max = self._xv().MAX_RUDDERS
+        if new is not None and (new["prop_d"] <= 0.0 or new["rudder_scale"] <= 0.0 or not 1 <= new["rudders"] <= n_max):
+            self.say(f"the propeller's D and the rudder's scale are positive; 1 to {n_max} rudders", error=True)
             new = None
         if new is not None:
             new["rudder_angle"] %= 360.0
@@ -641,6 +662,11 @@ class App:
                     setattr(pl, k, v)
                 self.schedule_update()
         self._fill_vehicle()
+
+    @staticmethod
+    def _xv():
+        import xgeom_vehicle as XV
+        return XV
 
     def _fill_vehicle(self):
         """The Vehicle tab's boxes show the placement in use."""
@@ -695,13 +721,14 @@ class App:
             traceback.print_exc()
 
     def _vehicle_part(self, kind):
-        """A component's lines for the Vehicle tab (xgeom_vehicle.PARTS), made again only when its design
-        has changed."""
+        """A component's lines for the Vehicle tab (xgeom_vehicle.PARTS), made again only when its design or
+        its parameter file in use (the blade's Z) has changed."""
         import xgeom_vehicle as XV
         ad = self.adapters[kind]
+        key = (ad.design, getattr(ad, "params", None))
         hit = self._vcache.get(kind)
-        if hit is None or hit[0] is not ad.design:
-            self._vcache[kind] = (ad.design, XV.PARTS[kind](ad))
+        if hit is None or any(a is not b for a, b in zip(hit[0], key)):
+            self._vcache[kind] = (key, XV.PARTS[kind](ad))
         return self._vcache[kind][1]
 
     def _update_vehicle(self):
@@ -853,7 +880,8 @@ def blade_panel(app):
         sections = "airfoil " + airfoils.describe(p.airfoil)
     else:
         sections = f"sections: {p.section_table}"
-    ttk.Label(box, text=f"D {p.diameter:g} m, {p.blades} blades, root r/R {p.root_r:g}, hub height {hub_h}, "
+    z_file = getattr(ad, "file_blades", p.blades)
+    ttk.Label(box, text=f"D {p.diameter:g} m, {z_file} blades, root r/R {p.root_r:g}, hub height {hub_h}, "
                         f"{len(p.r)} rows; {sections}", foreground=INK2, wraplength=560).pack(anchor="w", padx=4)
     row = ttk.Frame(box)
     row.pack(fill="x", pady=3)
@@ -864,8 +892,20 @@ def blade_panel(app):
     box = ttk.LabelFrame(app.panel, text="Blade and hub (the curves stretch over the span between them)")
     box.pack(fill="x", padx=6, pady=4)
     app._header(box)
-    for r, spec in enumerate(ad.global_rows(), start=1):
+    specs = ad.global_rows()
+    for r, spec in enumerate(specs, start=1):
         app.rows.append(VarRow(app, box, r, spec))
+    row = ttk.Frame(box)
+    row.grid(row=len(specs) + 1, column=0, columnspan=7, sticky="w", padx=2, pady=(4, 2))
+    ttk.Label(row, text="blades Z").pack(side="left", padx=(2, 4))
+    app.nblades = ttk.Spinbox(row, from_=BM.BLADES[0], to=BM.BLADES[1], width=4, command=app.on_blades)
+    app.nblades.set(p.blades)
+    app.nblades.bind("<Return>", app.on_blades)
+    app.nblades.bind("<FocusOut>", app.on_blades)
+    app.nblades.pack(side="left")
+    ttk.Label(row, text=f"the file has {z_file}; the clearance check, the propeller tab, the vehicle and the "
+                        f"CAD's hub sector follow it", foreground=INK2, wraplength=470,
+              justify="left").pack(side="left", padx=6)
 
     box = ttk.LabelFrame(app.panel, text="Sections (the XCAD points file and the 3D sections tab; 53 points each)")
     box.pack(fill="x", padx=6, pady=4)

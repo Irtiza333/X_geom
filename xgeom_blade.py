@@ -22,6 +22,10 @@ fitted to the parameter file while none of the curve's variables has changed,
 else to the curve's present shape. load_params reads another parameter file;
 save_params writes the design as one. set_sections sets the sections of the
 XCAD points file and the 3D sections tab (blade_modify.section_stations).
+set_blades sets the number of blades Z (the parameter file's by default): the
+clearance check, the propeller views, the CAD's hub sector, the parameter file
+the design is written as and the set-up follow it (it is a setting, not in the
+design vector).
 
 The adapter has the methods of xgeom_rudder.RudderAdapter that the tool uses.
 """
@@ -68,6 +72,7 @@ class BladeAdapter:
         params = BM.read_params(path)
         design, _ = BM.fit_design(params, self.settings["orders"], self.settings["segments"])
         self.params, self.design, self.meta = params, design, {}
+        self.file_blades = params.blades            # the file's Z (set_blades may change the one in use)
         self.as_fitted = set(BM.CURVES)             # curves still as fitted to the file (no variable changed)
         self._rebuild()
         self._original = None
@@ -255,6 +260,11 @@ class BladeAdapter:
                     f"them between P4 and the root and the tip, w23 and w56 are their weights; {diff}")
         return f"{BM.DESCRIPTIONS[curve]} against r/R, a Bezier curve from the root (C0) to the tip; {diff}"
 
+    def set_blades(self, z):
+        """The number of blades Z (blade_modify.BLADES: 2 .. 12); refused (ValueError) otherwise."""
+        self.params = BM.with_blades(self.params, z)
+        self._rebuild()
+
     # ---------------------------------------------------------------- sections
     def stations(self):
         """r/R of the XCAD sections (blade_modify.section_stations)."""
@@ -382,6 +392,9 @@ class BladeAdapter:
         if rec.get("geometry") != "blade":
             raise ValueError(f"{path} is not a blade design space")
         params = BM.read_params(rec["params_file"])
+        self.file_blades = params.blades
+        if rec.get("globals", {}).get("blades") is not None:
+            params = BM.with_blades(params, rec["globals"]["blades"])
         space, design = BM.BladeSpace.from_dict(params, rec["space"])
         self.params, self.design, self._original = params, design, None
         self.as_fitted = set()                      # a saved design: refits keep its curves' shapes

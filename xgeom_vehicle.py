@@ -13,9 +13,10 @@ Placement (Placement, the Vehicle tab's settings):
     rudder_dx      the rudder root's trailing edge from the end of the hull: x - L (m); default the end of the tail
                    (the start of the cap; with no cap 5 % of L ahead of the end), further forward if the blades
                    reach there: a quarter of the propeller's diameter clear of them
-    rudder_angle   around the axis from the top towards starboard (deg): 0 above, 90 to starboard, 180 under the
-                   stern (default)
-    rudders        1, 2 (the second opposite the first) or 4 (cruciform, 90 deg apart)
+    rudder_angle   the first rudder's, around the axis from the top towards starboard (deg): 0 above, 90 to
+                   starboard, 180 under the stern (default)
+    rudders        how many, 1 to MAX_RUDDERS (12), evenly spaced around the axis (360/N deg apart); default 4,
+                   a cross with one under the stern
     rudder_scale   the rudder (mm) to the hull's metres: 1 keeps its size (default)
     view           "vehicle" the whole of it, "stern" from the start of the tail
 The propeller's frame (para.py's) has x downstream, as the hull's, so it is moved and scaled only. The rudder's
@@ -36,6 +37,7 @@ from xgeom_hull import short_ticks
 
 COLLECTIONS = (("hull", GREY, 0.5), ("hub", INK2, 0.8), ("blades", BLUE, 0.6), ("rudders", ORANGE, 0.6))
 LOOPS = 30                       # rudder loops drawn, evenly from the root to the cap
+MAX_RUDDERS = 12
 BLADE_EVERY = 4                  # every 4th section of the XCAD points file (and the last) per blade
 OWNS = {"hull": ("hull",), "blade": ("blades", "hub"), "rudder": ("rudders",)}   # a component's lines
 
@@ -46,7 +48,7 @@ class Placement:
     prop_d: float = 0.25
     rudder_dx: float = -0.1
     rudder_angle: float = 180.0
-    rudders: int = 1
+    rudders: int = 4
     rudder_scale: float = 1.0
     view: str = "vehicle"
 
@@ -239,13 +241,12 @@ class VehicleView:
                          f"{info['design_d']:.3g} m x {info['prop_scale']:.3f}), plane at x {info['prop_x']:.3f} m")
         if "rudder_te" in info:
             n = len(info["rudder_root"])
-            rho = info["rudder_root"]
-            roots = (f"{1000 * rho[0]:.1f}" if max(rho) - min(rho) < 5e-5 else
-                     ", ".join(f"{1000 * r:.1f}" for r in rho))
-            lines.append(f"rudder{'s' if n > 1 else ''} (orange): root from x {info['rudder_le']:.3f} to "
-                         f"{info['rudder_te']:.3f} m, on the hull at "
-                         + ", ".join(f"{(pl.rudder_angle + 360.0 * k / n) % 360:g}" for k in range(n))
-                         + f" deg, {roots} mm from the axis")
+            rho = 1000.0 * np.array(info["rudder_root"])
+            roots = f"{rho[0]:.1f}" if np.ptp(rho) < 0.05 else f"{rho.min():.1f} to {rho.max():.1f}"
+            where = (", ".join(f"{(pl.rudder_angle + 360.0 * k / n) % 360:g}" for k in range(n)) + " deg" if n <= 4
+                     else f"{pl.rudder_angle % 360:g} deg and every {360.0 / n:.4g} deg from there")
+            lines.append(f"{n} rudder{'s' if n > 1 else ''} (orange): root from x {info['rudder_le']:.3f} to "
+                         f"{info['rudder_te']:.3f} m, on the hull at {where}, {roots} mm from the axis")
             gap = info.get("gap")
             if gap is not None:
                 lines.append(f"rudder{'s' if n > 1 else ''} to the blades (within their radius): "
