@@ -22,10 +22,12 @@ fitted to the parameter file while none of the curve's variables has changed,
 else to the curve's present shape. load_params reads another parameter file;
 save_params writes the design as one. set_sections sets the sections of the
 XCAD points file and the 3D sections tab (blade_modify.section_stations).
-set_blades sets the number of blades Z (the parameter file's by default): the
-clearance check, the propeller views, the CAD's hub sector, the parameter file
-the design is written as and the set-up follow it (it is a setting, not in the
-design vector).
+set_blades sets the number of blades Z (2 to 7; the parameter file's by
+default): the clearance check, the propeller views, the CAD's hub sector, the
+parameter file the design is written as and the set-up follow it (it is a
+setting, not in the design vector). Blades closer than the clearance (they
+interfere) are a warning, not a problem: the CAD is still built (the hub radius
+moves the root section, which may make room for them).
 
 The adapter has the methods of xgeom_rudder.RudderAdapter that the tool uses.
 """
@@ -261,7 +263,7 @@ class BladeAdapter:
         return f"{BM.DESCRIPTIONS[curve]} against r/R, a Bezier curve from the root (C0) to the tip; {diff}"
 
     def set_blades(self, z):
-        """The number of blades Z (blade_modify.BLADES: 2 .. 12); refused (ValueError) otherwise."""
+        """The number of blades Z (blade_modify.BLADES: 2 .. 7); refused (ValueError) otherwise."""
         self.params = BM.with_blades(self.params, z)
         self._rebuild()
 
@@ -314,10 +316,11 @@ class BladeAdapter:
         return np.stack([bs.b(xi, np.full_like(xi, e)) for e in eta]) * 1000.0
 
     def preview(self, skeleton=False):
-        """What the live views draw: the design, its problems, the curves, the
-        file's rows and splines, the blade (BladeSurface, the CAD shape): sections
-        at the view radii, LE, TE, mid-chord and tip lines, the hub; with skeleton
-        the blade's sections as XCAD gets them (para.py's at stations())."""
+        """What the live views draw: the design, its problems and warnings
+        (blade_modify.design_checks), the curves, the file's rows and splines, the
+        blade (BladeSurface, the CAD shape): sections at the view radii, LE, TE,
+        mid-chord and tip lines, the hub; with skeleton the blade's sections as
+        XCAD gets them (para.py's at stations())."""
         t0 = time.time()
         d, p = self.design, self.params
         rr = np.linspace(d.r0, d.r1, 200)
@@ -325,11 +328,12 @@ class BladeAdapter:
         out = {"design": d, "rr": rr, "curves": {c: d.prop(c)(rr) for c in BM.CURVES}, "file_rr": file_rr,
                "file": {c: p.spline(c)(file_rr) for c in BM.CURVES}, "rows": p.rows(), "radii": self._view_radii(),
                "hub": (1000.0 * d.hub_radius, 1000.0 * d.hub_height)}
+        warnings = []
         try:
             pts, _ = BM.blade_points(d, p)
             out["clearance_mm"] = BM.clearance(pts, p.blades) * 1000.0
-            problems = BM.design_problems(d, p, self.settings["clearance_mm"], points=pts,
-                                          gap_mm=out["clearance_mm"], hub=self.settings["hub"])
+            problems, warnings = BM.design_checks(d, p, self.settings["clearance_mm"], points=pts,
+                                                  gap_mm=out["clearance_mm"], hub=self.settings["hub"])
         except Exception as exc:
             problems = [f"{type(exc).__name__}: {exc}"]
         try:
@@ -345,7 +349,7 @@ class BladeAdapter:
             out["orig_sections"] = self._original_views()["sections"]
         except Exception:
             out["orig_sections"] = None
-        out["problems"] = problems
+        out["problems"], out["warnings"] = problems, warnings
         if skeleton:                                          # the XCAD sections
             try:
                 out["skeleton"] = BM.blade_points(d, p, self.stations())[0].reshape(-1, 53, 3) * 1000.0
@@ -430,7 +434,7 @@ class BladeAdapter:
                                  f" {cad['cad_paths']['iges']}, {cad['cad_paths']['step']}")
             out.update(view=cad["cad_paths"]["step"],
                        message=f"{files}, {os.path.basename(cad['cad_paths']['iges'])} and {case}.step; "
-                               f"OCC viewer shows it")
+                               f"OCC viewer shows it" + (f" (warning: {res['warnings'][0]})" if res["warnings"] else ""))
             return out
         return run
 

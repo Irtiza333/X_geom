@@ -479,6 +479,40 @@ def test_xcad_and_writers(p, orig, base, secs):
     check("distance to the original: the baseline on it (to the stack's interpolation)", g.max(), 0.0, 5e-4)
 
 
+def test_span(p, orig, base, secs):
+    print("\nthe full height: the original stretched in height (synthetic rudder)")
+    k = 1.6
+    o2 = orig.scaled(k)
+    yy = np.linspace(0.0, Z_OPT, 17)
+    check("scaled: z_top, rows, values at k y as the original's at y, slopes / k, the TE line",
+          [o2.z_top - k * Z_OPT, np.abs(o2.y_rows - k * orig.y_rows).max(), o2.scale - k,
+           max(np.abs(o2.value(c, k * yy) - orig.value(c, yy)).max() for c in orig.names),
+           max(np.abs(o2.slope(c, k * yy) - orig.slope(c, yy) / k).max() for c in orig.names),
+           np.abs(o2.x_te(k * yy) - orig.x_te(yy)).max()], 0.0, 1e-9)
+    b2 = base.copy()
+    b2.H = k * base.H
+    s2 = RM.modified_sections(RM.pin(b2, o2), o2, 50, 200, R_TE)
+    check("a design k times as high on it: the same sections at k times the heights (mm)",
+          [max(abs(k * a.y - b.y) for a, b in zip(secs, s2)), max(np.abs(a.selig - b.selig).max() for a, b in zip(secs, s2)),
+           max(abs(a.x_le - b.x_le) for a, b in zip(secs, s2))], 0.0, 1e-9)
+    check("at_degree keeps the stretch; scaled(1) is the same; scaled(1/k) back to z_top",
+          [o2.at_degree(5).scale - k, orig.scaled(1.0) is orig, o2.scaled(1.0 / k).z_top - Z_OPT], [0, 1, 0], 1e-9)
+    raises("a height scale of 0 raises", lambda: orig.scaled(0.0))
+    st = RM.scaled_stack(RM.read_stack(p["stack"]), k)
+    x_le, xy = RM.original_section_at(st, k * 40.0)
+    check("scaled_stack: the original section at k y is the stack's at y",
+          [x_le - x_le_true(40.0), np.abs(xy - true_section(40.0)[4]).max()], 0.0, 5e-7)
+    with tempfile.TemporaryDirectory() as tmp:
+        res = RM.write_case(tmp, "k", RM.pin(b2, o2), o2, p["xcad"], 50, 200, R_TE, plot=False)
+        loops, out = RM.read_xcad(p["xcad"]), RM.read_xcad(res["paths"]["xcad"])
+        import json
+        rec = json.load(open(res["paths"]["json"]))
+        kept = res["xcad"]["kept"]
+        check("write_case: the kept original loops k times as high (x and z kept), the stretch recorded",
+              [len(kept) > 0, max(np.abs(out[50 + j][1] - loops[i - 1][1] * [1.0, 1.0, k]).max()
+                                  for j, i in enumerate(kept)), rec["settings"]["height_scale"]], [1, 0, k], 1e-8)
+
+
 def test_real():
     print("\nthe real rudder (outputs/ of the extraction)")
     paths = {k: os.path.join(HERE, v) for k, v in REAL.items()}
@@ -544,6 +578,7 @@ def main():
         p = write_synthetic(tmp)
         orig, base, secs = test_original_and_designs(p)
         test_xcad_and_writers(p, orig, base, secs)
+        test_span(p, orig, base, secs)
     test_real()
     print()
     if _FAILED:

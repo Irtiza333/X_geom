@@ -12,7 +12,9 @@ XGeom: rudder parametrization, propeller blades and hulls. Updated 8 Oct 2026.
 - **Rudder modification below H** (`rudder_modify.py`, `modify_control.py`, `bezier_section.py`): the original
   stays above H; below H the LE and the x and z of every section control point follow spanwise Bezier curves
   pinned to the original at H. Output: the whole rudder as an XCAD file, section tables, the design as JSON and a
-  flat design vector for the optimiser.
+  flat design vector for the optimiser. The full height (root to the top of the cap) is a setting: a new one
+  stretches the whole rudder in height (`OriginalShape.scaled`, `scaled_stack`; H, its bounds and the curves'
+  heights in proportion, x, chords and section shapes kept), saved with the set-up as `height_scale`.
 - **Propeller blade** (`blade_modify.py`, `blade_control.py`, `msc_blade_params.dat`): a blade always starts from
   a parameter file (D, blades, root r/R, hub height, section table, and the radial table r/R, P/D, c/D, t/c, f/c,
   skew, rake/D). Design variables: the blade radius, hub radius and hub height (the curves stretch over the span
@@ -50,11 +52,13 @@ XGeom: rudder parametrization, propeller blades and hulls. Updated 8 Oct 2026.
 - **Design tool** (`xgeom_tool.py` with `xgeom_rudder.py`, `xgeom_blade.py` or `xgeom_hull.py`, `xgeom_common.py`,
   `xcad_loft.py`): sliders for every variable with bounds and free/held flags, the number of control points per
   curve, live 2D and 3D views, Save set-up for the optimiser, the CAD build, OCC viewer. Blade: Load and Save
-  parameter files, blade and hub, the number of blades Z (2 to 12, the file's to start with; the clearance check,
+  parameter files, blade and hub, the number of blades Z (2 to 7, the file's to start with; the clearance check,
   the propeller views, the CAD's hub sector, the parameter file written and the set-up follow it; a setting, not
-  in the design vector), the XCAD sections, 1 or 2 segments per curve. Hull: Load and Save parameter
+  in the design vector; blades closer than the clearance give a warning, the CAD is still built), the XCAD
+  sections, 1 or 2 segments per curve. Rudder: H and the full height. Hull: Load and Save parameter
   files, the lengths and radii, elliptical sections on or off (r' with radii and curves of its own), each curve's
-  exponent and control values. Status bar: green ok, amber while a build runs, red for a problem or an error.
+  exponent and control values. Status bar: green ok, amber while a build runs, orange a warning (the build still
+  runs), red for a problem or an error.
   Every 2D plot, in the tool and in the case check plots, has the span or the length (height, r, r/R, x) on the
   x axis.
 - **Vehicle** (`xgeom_vehicle.py`; `python xgeom_tool.py` in X_geom, the rudder alone in the Rudder folder): one
@@ -63,9 +67,11 @@ XGeom: rudder parametrization, propeller blades and hulls. Updated 8 Oct 2026.
   the propeller plane on the axis (x - L, default the end) and its D in the vehicle (the blade scaled to it,
   default half the hull's depth); the rudder root's TE (x - L, default the start of the cap, a quarter D clear of
   the blades), the number of rudders (1 to 12, evenly spaced around the axis; default 4, a cross), the first
-  one's angle around the axis (default 180 deg, under the stern), a scale (default 1, mm to m). Each rudder's
-  root sits on the hull at its smallest distance from the axis along the root chord. The whole vehicle or the
-  stern.
+  one's angle around the axis (default 180 deg, under the stern), a scale (default 1, mm to m). Each rudder sits
+  tangent to the hull, never inside it: its flat root touches the hull at the highest point under it (every point
+  of the rudder, across its thickness, tested against the hull's elliptical sections), and a copy of the root
+  section extruded inwards by the largest gap under the root plus 2 % of the root chord closes the joint. The
+  whole vehicle or the stern.
 - **Checks**: `_rudder_modify_test.py`, `_xgeom_tool_test.py`, `_xgeom_blade_test.py`, `_xgeom_hull_test.py`,
   `_airfoils_test.py`, `_hull_test.py`, `_hull_modify_test.py`, `_section_fit_test.py`, `_rudder_param_test.py`
   and `_tip_cap_test.py` pass (the window checks with `--gui`).
@@ -96,16 +102,20 @@ XGeom: rudder parametrization, propeller blades and hulls. Updated 8 Oct 2026.
 - Vehicle: choices (user, 8 Oct 2026): one window with the hull, propeller and rudder and a Vehicle tab; the
   placement by a few settings, the rudder under the stern by default; any number of rudders, evenly spaced
   around the axis; the number of blades chosen in the propeller panel. The wind-tunnel rudder at scale 1 and the
-  MSc propeller at D 0.254 m on SUBOFF: the rudder's root TE 97 mm ahead of the end, 64 mm clear of the blades.
+  MSc propeller at D 0.254 m on SUBOFF: the rudder's root TE 97 mm ahead of the end, 64 mm clear of the blades;
+  tangent to the hull at the root LE, 60.8 mm from the axis, the root extruded 34.6 mm inwards (a 31.0 mm gap at
+  the TE). Choices (user, 8 Oct 2026, later): the rudder tangent to the hull, the gap under its flat root closed by
+  the root section extruded inwards; the full rudder height not fixed by the example; at most 7 blades, and only a
+  warning when blades interfere (the hub radius moves the root section).
 - Blade count (the MSc blade as fitted): Z 2 to 7 pass the clearance check (25 mm; 29.6 mm apart at 7) and the
-  hub sector; Z 8 and 9 fail the clearance (17.5 and 6.5 mm), from 10 the hub sector too (the root footprint
-  overruns 360/Z). Checked without OCC (the hub sector's grids); the CAD with Z other than 5 is still to be built
-  on the user's machine.
+  hub sector. Checked without OCC (the hub sector's grids); the CAD with Z other than 5 is still to be built on the
+  user's machine.
 
 ## Next steps
 
-- Vehicle: the placement is not saved yet (a vehicle set-up: the three set-ups and the placement); the sail and
-  the fins; blended wing bodies later.
+- Vehicle: the placement is not saved yet (a vehicle set-up: the three set-ups and the placement); the vehicle
+  as one CAD solid (the hull, the rudders with their root extrusions, the propeller) when the CFD needs it; the
+  sail and the fins; blended wing bodies later.
 - Review the blade in the tool: default segments, orders and free variables (`blade_control.py`); camber and
   rake fit poorly as 2 segments.
 - Optimisation: sample a saved set-up (`load_design_space`, `load_blade_space`, `Initial_sampling.py`), screen

@@ -347,7 +347,7 @@ def test_adapter(tmp, table):
           + [np.abs(ad3.design.prop(c)(rr) - ad.design.prop(c)(rr)).max() / np.ptp(ad.design.prop(c)(rr))
              for c in BM.CURVES], 0.0, 0.01)
     gap5 = ad.preview()["clearance_mm"]
-    no_z = [refused(ad.set_blades, z) for z in (1, 13, 4.5)]
+    no_z = [refused(ad.set_blades, z) for z in (1, 8, 4.5)]
     ad.set_blades(7)
     pv7 = ad.preview()
     sp7 = ad.save_space(os.path.join(tmp, "setup7.json"))
@@ -355,10 +355,21 @@ def test_adapter(tmp, table):
     ad7 = XBL.BladeAdapter(params=path)
     ad7.load_space(sp7)
     p7 = BM.read_params(ad.save_params(os.path.join(tmp, "z7.dat")))
-    check("blades Z: 1, 13 and 4.5 refused; 7: the blades closer, the set-up and the saved file keep 7, the "
-          "file's 5 kept apart", no_z + [pv7["clearance_mm"] < gap5, rec7["globals"]["blades"], s7.params.blades,
-                                         ad7.params.blades, ad7.file_blades, p7.blades], [1, 1, 1, 1, 7, 7, 7, 5, 7], 0)
+    check("blades Z: 1, 8 and 4.5 refused (2 to 7); 7: the blades closer, the set-up and the saved file keep 7, "
+          "the file's 5 kept apart", no_z + [pv7["clearance_mm"] < gap5, rec7["globals"]["blades"], s7.params.blades,
+                                             ad7.params.blades, ad7.file_blades, p7.blades],
+          [1, 1, 1, 1, 7, 7, 7, 5, 7], 0)
     print(f"       blades {gap5:.1f} mm apart with 5, {pv7['clearance_mm']:.1f} mm with 7")
+    ad.settings["clearance_mm"] = pv7["clearance_mm"] + 10.0       # closer than the clearance: interfering
+    pvw = ad.preview()
+    res = BM.write_case(tmp, "warn", ad.design, ad.params, cad=False, settings=ad._case_settings(), plot=False)
+    rec = json.load(open(res["paths"]["design.json"]))
+    strict = BM.design_problems(ad.design, ad.params, ad.settings["clearance_mm"])
+    check("blades closer than the clearance: a warning, not a problem (the tool builds the CAD); design.json "
+          "records it; design_problems (the optimiser's check) still rejects the design",
+          [len(pvw["problems"]), len(pvw["warnings"]), "interfere" in pvw["warnings"][0], len(res["problems"]),
+           len(rec["warnings"]), len(strict)], [0, 1, 1, 0, 1, 1], 0)
+    ad.settings["clearance_mm"] = BM.CLEARANCE_MM
 
 
 def test_gui(tmp, table):
@@ -418,10 +429,18 @@ def test_gui(tmp, table):
         app.update_views()
         root.update()
         n7 = sum(len(c.get_segments()) for c in app.view3.col.values())
-        app.nblades.set(1)                                    # refused: the box shows the Z in use
+        app.nblades.set(8)                                    # refused: the box shows the Z in use
         app.on_blades()
-        check("blades Z 7 from the box: 7 blades in the propeller tab; 1 refused (the box shows 7)",
+        check("blades Z 7 from the box: 7 blades in the propeller tab; 8 refused (the box shows 7)",
               [app.ad.params.blades, n7, app.nblades.get() == "7"], [7, 30 * 7 + 14, 1], 0)
+        app.ad.set("hub_height", 1.0)                          # no problem left
+        app.ad.settings["clearance_mm"] = 500.0               # every gap is closer than that
+        app.update_views()
+        warn = app.status.cget("text")
+        check("a warning in orange (blades interfere), the build still allowed",
+              [app.status.cget("background") == XT.STATUS["warn"][0], warn.startswith("warning (CAD still possible)"),
+               len(app.ad.preview()["problems"])], [1, 1, 0], 0)
+        app.ad.settings["clearance_mm"] = BM.CLEARANCE_MM
     finally:
         root.destroy()
 

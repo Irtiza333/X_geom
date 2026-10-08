@@ -372,10 +372,36 @@ class OriginalShape:
     x_le_rows: np.ndarray        # x of the original LE at those heights
     sources: dict = field(default_factory=dict)
     base: dict = field(default_factory=dict, repr=False)      # the quartic rows and fit options (at_degree)
+    scale: float = 1.0           # heights stretched by this from the extracted rudder (scaled)
 
     @property
     def names(self):
         return curve_names(self.degree)
+
+    def scaled(self, k):
+        """The same original stretched in height by k: every height (z_top, the rows, the data, the curves'
+        control heights) times k, the x of the LE and TE and the section coordinates kept. A design on it is
+        the design on this one stretched by k when its H is k times as high (pin and the sections follow
+        heights in proportion). scale records the stretch from the extracted rudder."""
+        k = float(k)
+        if not k > 0.0:
+            raise ValueError(f"a height scale is positive, not {k:g}")
+        if k == 1.0:
+            return self
+        curves = {}
+        for c, b in self.curves.items():
+            ctrl = np.array(b.ctrl, dtype=float)
+            ctrl[:, 0] *= k
+            curves[c] = Bezier(ctrl, b.w)
+        base = dict(self.base)
+        if "le" in base:
+            base["le"] = (np.asarray(base["le"][0], dtype=float) * k, base["le"][1])
+        if "y_tab" in base:
+            base["y_tab"] = np.asarray(base["y_tab"], dtype=float) * k
+        return OriginalShape(self.z_top * k, self.degree, curves,
+                             {c: (np.asarray(y, dtype=float) * k, v) for c, (y, v) in self.data.items()},
+                             dict(self.residuals), np.asarray(self.y_rows, dtype=float) * k, self.x_te_rows,
+                             self.x_le_rows, dict(self.sources), base, self.scale * k)
 
     def _heights(self, y):
         y = np.atleast_1d(np.asarray(y, dtype=float))
@@ -406,11 +432,11 @@ class OriginalShape:
             return self
         b = self.base
         return _original(self.z_top, degree, b["le"], b["y_tab"], b["ctrl4"], self.y_rows, self.x_te_rows,
-                         self.x_le_rows, b["orders"], b["weights"], b["free_heights"], self.sources)
+                         self.x_le_rows, b["orders"], b["weights"], b["free_heights"], self.sources, self.scale)
 
 
 def _original(z_top, degree, le, y_tab, ctrl4, y_rows, x_te_rows, x_le_rows, orders, weights, free_heights,
-              sources):
+              sources, scale=1.0):
     degree = int(degree)
     if degree < BASE_DEGREE:
         raise ValueError(f"the sections need degree {BASE_DEGREE} or more (the section fits are quartics)")
@@ -422,7 +448,8 @@ def _original(z_top, degree, le, y_tab, ctrl4, y_rows, x_te_rows, x_le_rows, ord
                                           weights=weights.get(c), free_heights=free_heights)
     base = {"le": le, "y_tab": y_tab, "ctrl4": ctrl4, "orders": orders, "weights": weights,
             "free_heights": free_heights}
-    return OriginalShape(z_top, degree, curves, data, residuals, y_rows, x_te_rows, x_le_rows, sources, base)
+    return OriginalShape(z_top, degree, curves, data, residuals, y_rows, x_te_rows, x_le_rows, sources, base,
+                         float(scale))
 
 
 def fit_original(corner_points, section_table, z_top=None, orders=None, weights=None, free_heights=False,
@@ -786,7 +813,8 @@ def load_design_space(path):
     """(space, design, record) of a set-up the design tool saved
     (<case>_design_space.json). The original shape is fitted again from the
     files and fit settings the record names (paths relative to the folder the
-    tool ran in), so the space is the one the tool set up:
+    tool ran in) and stretched in height by the record's height_scale (the
+    tool's full height), so the space is the one the tool set up:
 
         space, design, rec = load_design_space("outputs/modified/gui_design_space.json")
         x0, bounds = space.to_vector(design), space.bounds      # the free variables
@@ -797,9 +825,11 @@ def load_design_space(path):
     with open(path) as fh:
         rec = json.load(fh)
     f, s = rec["files"], rec["settings"]
-    orig = fit_original(f["corner_points"], f["section_table"], s.get("z_top"), s.get("fit_orders"),
+    k = float(s.get("height_scale") or 1.0)               # the tool's span: the original stretched in height
+    z_top = None if s.get("z_top") is None else float(s["z_top"]) / k
+    orig = fit_original(f["corner_points"], f["section_table"], z_top, s.get("fit_orders"),
                         free_heights=s.get("fit_free_heights", False),
-                        degree=rec["space"].get("degree", BASE_DEGREE))
+                        degree=rec["space"].get("degree", BASE_DEGREE)).scaled(k)
     space, design = DesignSpace.from_dict(orig, rec["space"])
     return space, design, rec
 
@@ -1004,6 +1034,12 @@ def original_section_at(stack, y):
     return (1.0 - f) * a.x_le + f * b.x_le, (1.0 - f) * a.xy + f * b.xy
 
 
+def scaled_stack(stack, k):
+    """The stack (read_stack) stretched in height by k (each section's height times k; its points, in the
+    airfoil frame, kept), as OriginalShape.scaled stretches the original."""
+    return [StackSection(s.y * float(k), s.chord, s.x_le, s.x_te, s.tilt_deg, s.xy) for s in stack]
+
+
 # --------------------------------------------------------------------------
 # XCAD point files (the format of Rudder_geom_extraction.write_xcad; that
 # module needs the OCC bindings, this one does not, so the few lines it takes
@@ -1090,7 +1126,7 @@ def kept_loops(loops, H, gap, units="m"):
 
 
 def write_modified_xcad(path, sections, original_xcad, H, gap_mm=None, units="m",
-                        original_units="m"):
+                        original_units="m", height_scale=1.0):
     """The modified rudder as one XCAD file: the modified sections from the
     root to H, then the loops of the original file above them (kept_loops:
     the extracted sections from H + gap up, the tilted tip section and the
@@ -1098,14 +1134,17 @@ def write_modified_xcad(path, sections, original_xcad, H, gap_mm=None, units="m"
     modified step, H / (n_sec - 1)) leaves out the extracted sections just
     above H, which would sit a fraction of a millimetre from the replica at H
     and differ from it by the fit error; the tip section and the cap stay
-    whatever H is. Returns what was written."""
+    whatever H is. height_scale (the original's scale) stretches the
+    original's loops in height first. Returns what was written."""
     gap = H / (len(sections) - 1) if gap_mm is None else float(gap_mm)
     loops = read_xcad(original_xcad)
+    if float(height_scale) != 1.0:                          # XCAD's Z is the height
+        loops = [(None, pts * np.array([1.0, 1.0, float(height_scale)])) for _, pts in loops]
     kept = kept_loops(loops, H, gap, original_units)
     out = [xcad_lines(s.loop(), units) for s in sections]
     for k in kept:
         lines, pts = loops[k]
-        out.append(lines if units == original_units
+        out.append(lines if lines is not None and units == original_units
                    else xcad_lines(xcad_to_working(pts, original_units), units))
     write_xcad_lines(path, out)
     return {"path": path, "n_modified": len(sections), "gap_mm": gap, "n_original": len(loops),
@@ -1409,21 +1448,23 @@ def write_case(out_dir, case, design, orig, original_xcad, n_sec=50, num_pts=200
     p = {k: os.path.join(out_dir, f"{case}_{name}") for k, name in
          (("xcad", f"sections_xcad_{units}.dat"), ("table", "sections.dat"), ("params", "thickness_params.txt"),
           ("json", "design.json"), ("png", "check.png"))}
-    xinfo = write_modified_xcad(p["xcad"], secs, original_xcad, d.H, gap_mm, units, original_units)
+    xinfo = write_modified_xcad(p["xcad"], secs, original_xcad, d.H, gap_mm, units, original_units, orig.scale)
     quartic = all(s.params() is not None for s in secs)
     if quartic:
         write_params_txt(p["params"], secs)
     else:
         p.pop("params")
     notes = [f"case         : {case}; H = {d.H:g} mm (original fitted up to {orig.z_top:g} mm), {len(secs)} sections, "
-             f"TE radius {te_radius_mm:g} mm",
+             f"TE radius {te_radius_mm:g} mm" + (f"; the original stretched in height by {orig.scale:.6g}"
+                                                  if orig.scale != 1.0 else ""),
              f"XCAD file    : {os.path.basename(p['xcad'])}, these sections then the original loops "
              f"{xinfo['kept'][0] if xinfo['kept'] else '-'} .. {xinfo['kept'][-1] if xinfo['kept'] else '-'}"
              f" of {os.path.basename(original_xcad)}"
              + (f" (from y = {xinfo['first_kept_y']:.4f} mm)" if xinfo["kept"] else "")]
     write_sections_dat(p["table"], secs, notes)
     rec = {"case": case, "written": f"{datetime.date.today():%d %b %Y}",
-           "settings": {"z_top_mm": orig.z_top, "h_min_mm": None if h_min is None else float(h_min),
+           "settings": {"z_top_mm": orig.z_top, "height_scale": orig.scale,
+                        "h_min_mm": None if h_min is None else float(h_min),
                         "h_max_mm": None if h_max is None else float(h_max),
                         "degree": int(d.degree), "n_sections": len(secs), "num_pts": num_pts,
                         "te_radius_mm": te_radius_mm, "gap_mm": xinfo["gap_mm"], "xcad_units": units},

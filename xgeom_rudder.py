@@ -12,6 +12,12 @@ value against the height; the section is a Bezier half-section of degree n
 raises n by one and adds that point's two curves. P1x is held at 0 by default
 (its slots unticked), which keeps the LE round.
 
+The full height (set_span) is the extracted rudder's to start with: a new one
+stretches the whole rudder in height (the original's fits, its stack and loops,
+H, its bounds and the curves' heights in proportion; x, the chords and the
+section shapes kept). It is a setting saved with the set-up (height_scale), not
+a design variable.
+
 An adapter gives the tool:
     title, names, summary()                   what there is to edit, the line under the title
     describe(curve), order(curve), joins      a curve's text, its order, whether it has a join switch
@@ -41,6 +47,7 @@ import rudder_modify as RM
 from xgeom_common import BLUE, GREY, GRID, INK2, RED, SECTION_COLORS, Row, fit_box, keep_fitted
 MAX_DEGREE = 12
 MAX_ORDER = 12
+SPAN_RANGE = (0.25, 4.0)         # the full height, as a multiple of the extracted rudder's
 SKELETON_UNCHANGED = 90          # original loops drawn above H, at most (the tip and cap loops always)
 N_VIEW = 5                       # sections drawn in the Design tab's 3D view, from the root to H
 Z_STRETCH = 3.0                  # the 3D view stretches the thickness by this, so the polygons show
@@ -65,8 +72,9 @@ class RudderAdapter:
                          "plot": bool(s.plot), "fit_orders": dict(MC.FIT_ORDERS),
                          "fit_free_heights": bool(s.fit_free_heights)}
         self.title = "Rudder, modified below H"
-        self.stack = RM.read_stack(MC.STACK)
-        self.loops0 = [RM.xcad_to_working(pts, "m") for _, pts in RM.read_xcad(MC.XCAD_ORIGINAL)]
+        self.stack = self._stack0 = RM.read_stack(MC.STACK)
+        self.loops0 = self._loops00 = [RM.xcad_to_working(pts, "m") for _, pts in RM.read_xcad(MC.XCAD_ORIGINAL)]
+        self.span0 = float(max(lp[:, 1].max() for lp in self._loops00))     # the extracted rudder's full height
         H = min(max(float(MC.H), self.settings["h_min"]), self.settings["h_max"])
         self.orders = {c: int(MC.ORDERS.get(c, RM.DEFAULT_ORDER)) for c in self.orig.names}
         self.join = {c: MC.JOIN for c in self.orig.names}
@@ -174,6 +182,41 @@ class RudderAdapter:
         self._rebuild()
         return err
 
+    @property
+    def span(self):
+        """The full height (mm): the root to the top of the cap."""
+        return self.span0 * self.orig.scale
+
+    def set_span(self, span):
+        """Stretch the whole rudder in height to a full height of `span` mm
+        (SPAN_RANGE times the extracted rudder's): see the module docstring.
+        Returns the stretch applied (new height over old)."""
+        k = float(span) / self.span0
+        lo, hi = SPAN_RANGE
+        if not lo <= k <= hi:
+            raise ValueError(f"the full height must lie between {lo * self.span0:.1f} and {hi * self.span0:.1f} mm "
+                             f"({lo:g} to {hi:g} times the extracted rudder's {self.span0:.1f} mm)")
+        return self._apply_scale(k)
+
+    def _apply_scale(self, k):
+        """The rudder at height scale k from the extracted one (orig, stack, loops, H and its bounds)."""
+        r = float(k) / self.orig.scale
+        if abs(r - 1.0) < 1e-12:
+            return 1.0
+        self.orig = self.orig.scaled(r)
+        self.stack = RM.scaled_stack(self._stack0, k)
+        self.loops0 = [lp * np.array([1.0, k, 1.0]) for lp in self._loops00]
+        s = self.settings
+        for key in ("z_top", "h_min", "h_max"):
+            s[key] *= r
+        if s["gap_mm"] is not None:
+            s["gap_mm"] = float(s["gap_mm"]) * r
+        d = self.design.copy()
+        d.H *= r
+        self.design = RM.pin(d, self.orig)
+        self._rebuild()
+        return r
+
     def _drop_meta(self, curve):
         for name in [n for n in self.meta if n.startswith(curve + ".")]:
             del self.meta[name]
@@ -214,8 +257,8 @@ class RudderAdapter:
         """The line under the title."""
         n, m = self.n_free()
         st = self.settings
-        return (f"{n} of {m} variables free; H {self.design.H:.2f} mm in [{st['h_min']:g}, {st['h_max']:g}]; "
-                f"sections of degree {self.degree}")
+        return (f"{n} of {m} variables free; H {self.design.H:.2f} mm in [{st['h_min']:.4g}, {st['h_max']:.4g}]; "
+                f"full height {self.span:.1f} mm; sections of degree {self.degree}")
 
     def describe(self, curve):
         return RM.describe(curve)
@@ -309,8 +352,8 @@ class RudderAdapter:
         degree), the settings and the input files. rudder_modify.
         load_design_space reads it back for the optimiser."""
         return {"geometry": "rudder", "written": time.strftime("%d %b %Y %H:%M"),
-                "settings": dict(self.settings), "files": dict(self.files),
-                "space": self.free_space().to_dict(self.design)}
+                "settings": dict(self.settings, height_scale=self.orig.scale, span_mm=self.span),
+                "files": dict(self.files), "space": self.free_space().to_dict(self.design)}
 
     def save_space(self, path):
         """Write space_record() as JSON."""
@@ -328,6 +371,7 @@ class RudderAdapter:
         for k in ("n_sections", "te_radius_mm"):
             if k in rec.get("settings", {}):
                 self.settings[k] = rec["settings"][k]
+        self._apply_scale(float(rec.get("settings", {}).get("height_scale") or 1.0))     # its full height
         space, design = RM.DesignSpace.from_dict(self.orig, rec["space"])
         self.orig = space.orig
         self.orders, self.join, self.design = dict(space.orders), dict(space.join), design
@@ -414,11 +458,9 @@ class RudderViews:
         keep_fitted(fig, self.ax_sec, lambda: self.box)
         for ax in (self.ax_plan, self.ax_curve):
             ax.grid(True, color=GRID, lw=0.6)
-        o = adapter.orig
-        m = o.y_rows <= o.z_top + 1e-9
         ax = self.ax_plan
-        ax.plot(o.y_rows[m], o.x_le_rows[m], "--", color=INK2, lw=1, label="original LE")
-        ax.plot(o.y_rows[m], o.x_te_rows[m], "-", color=INK2, lw=1, label="TE line (kept)")
+        self.o_le, = ax.plot([], [], "--", color=INK2, lw=1, label="original LE")
+        self.o_te, = ax.plot([], [], "-", color=INK2, lw=1, label="TE line (kept)")
         self.sec_lines = [ax.plot([], [], "-", color=GRID, lw=0.8)[0] for _ in range(12)]
         self.le_line, = ax.plot([], [], "-", color=BLUE, lw=2.0, label="LE")
         self.le_poly, = ax.plot([], [], "o--", color=BLUE, lw=0.8, ms=5, mfc="white")
@@ -463,6 +505,9 @@ class RudderViews:
     def update(self, pv, curve):
         a, o, d = self.a, self.a.orig, pv["design"]
         yy, cv = pv["yy"], pv["curves"]
+        m = o.y_rows <= o.z_top + 1e-9                       # the original (its full height may have changed)
+        self.o_le.set_data(o.y_rows[m], o.x_le_rows[m])
+        self.o_te.set_data(o.y_rows[m], o.x_te_rows[m])
         # planform, the height along x
         self.le_line.set_data(yy, cv["LE"])
         le = d.curve("LE")
@@ -596,8 +641,6 @@ class SkeletonView:
                     for k, c, w in (("unchanged", GREY, 0.6), ("modified", BLUE, 0.8), ("cut", RED, 2.0))}
         for c in self.col.values():
             ax.add_collection3d(c)
-        allp = np.vstack(adapter.loops0)
-        self.lo, self.hi = allp.min(axis=0), allp.max(axis=0)
         ax.set_xlabel("x (mm)")
         ax.set_ylabel("z (mm)")
         ax.set_zlabel("y, height (mm)")
@@ -616,7 +659,9 @@ class SkeletonView:
         segs = {k: [self._frame(lp) for lp in sk[k]] for k in self.col}
         for k, c in self.col.items():
             c.set_segments(segs[k])
-        f = np.vstack([s for v in segs.values() for s in v] + [self._frame(np.array([self.lo, self.hi]), 1)])
+        allp = np.vstack(self.a.loops0)                     # the whole rudder at its full height
+        box = np.array([allp.min(axis=0), allp.max(axis=0)])
+        f = np.vstack([s for v in segs.values() for s in v] + [self._frame(box, 1)])
         lo, hi = f.min(axis=0), f.max(axis=0)
         self.ax.set_xlim(lo[0], hi[0])
         self.ax.set_ylim(lo[1], hi[1])

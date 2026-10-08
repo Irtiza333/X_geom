@@ -120,7 +120,7 @@ SEG_U_BOUNDS = (0.02, 0.98)       # 2 segments: P4's position u4, fraction of th
 SEG_W_BOUNDS = (0.02, 5.0)        # 2 segments: the weights w23, w56 in the fit
 HUB_HEIGHT = DEFAULT_HUB_HEIGHT    # m, hub_new's: the hub height when the file gives none
 CLEARANCE_MM = 25.0               # x_blade_new.CLEARANCE_THRESHOLD, the MSc blade (D = 1.4 m)
-BLADES = (2, 12)                  # the number of blades with_blades accepts
+BLADES = (2, 7)                   # the number of blades with_blades accepts
 SECTIONS = 56                     # sections in the XCAD points file (x_blade_new.R_VALUES: 56 from r/R 0.18)
 TIP_BAND = 0.93                   # r/R where the tip band starts (x_blade_new.R_TIP_BAND)
 TIP_SECTIONS = 14                 # sections in the tip band, closer together towards the tip (x_blade_new)
@@ -249,7 +249,7 @@ def read_params(path):
 
 
 def with_blades(params, blades):
-    """The parameter file's data with another number of blades Z (BLADES: 2 .. 12): the clearance check, the
+    """The parameter file's data with another number of blades Z (BLADES: 2 .. 7): the clearance check, the
     hub sector of the CAD and the parameter file written follow it; the same params when Z is unchanged."""
     z = int(blades)
     if z != blades or not BLADES[0] <= z <= BLADES[1]:
@@ -912,16 +912,18 @@ def blade_surface(design, params):
     return BladeSurface(*design.props(), d=design.diameter, r_root=design.r0, airfoil_path=params.section_path())
 
 
-def design_problems(design, params, clearance_mm=CLEARANCE_MM, points=None, gap_mm=None, hub=True):
-    """What makes the design unbuildable: a hub radius not between 0 and 90 % of
-    the blade radius; chord, thickness or pitch not positive inside the blade;
-    blades closer than clearance_mm (the MSc check); with the hub, a hub too
-    short for the blade root (hub_new: the hub, centred at x = 0, must reach 2 %
-    of the root section's axial extent beyond it). points (blade_points at
-    x_blade_new's stations) and gap_mm save computing them again."""
+def design_checks(design, params, clearance_mm=CLEARANCE_MM, points=None, gap_mm=None, hub=True):
+    """(problems, warnings) of a design. Problems make it unbuildable: a hub
+    radius not between 0 and 90 % of the blade radius; chord, thickness or
+    pitch not positive inside the blade; with the hub, a hub too short for the
+    blade root (hub_new: the hub, centred at x = 0, must reach 2 % of the root
+    section's axial extent beyond it). The warning: blades closer than
+    clearance_mm (the MSc check), so neighbouring blades interfere; the design
+    tool still builds the CAD then. points (blade_points at x_blade_new's
+    stations) and gap_mm save computing them again."""
     if not 0.0 < design.r0 < 0.9 * design.r1:
         return [f"hub radius {design.hub_radius:.4g} m: it must lie between 0 and 90 % of the blade radius "
-                f"({design.radius:.4g} m)"]
+                f"({design.radius:.4g} m)"], []
     out = []
     rr = np.linspace(design.r0, design.r0 + 0.999 * (design.r1 - design.r0), 400)
     for c in ("chord", "thickness", "pitch"):
@@ -929,12 +931,14 @@ def design_problems(design, params, clearance_mm=CLEARANCE_MM, points=None, gap_
         if np.any(v <= 0.0):
             out.append(f"{c} not positive from r/R {rr[np.argmax(v <= 0.0)]:.3f}")
     if out:
-        return out
+        return out, []
     pts = blade_points(design, params)[0] if points is None else points
     if gap_mm is None:
         gap_mm = clearance(pts, params.blades) * 1000.0
+    warnings = []
     if gap_mm < clearance_mm:
-        out.append(f"blades {gap_mm:.1f} mm apart, less than {clearance_mm:g} mm (the clearance check)")
+        warnings.append(f"blades {gap_mm:.1f} mm apart, less than {clearance_mm:g} mm (the clearance check): "
+                        f"neighbouring blades interfere")
     if hub:
         x = pts[:53, 0]                                     # the root section
         a, b = float(x.min()), float(x.max())
@@ -942,7 +946,14 @@ def design_problems(design, params, clearance_mm=CLEARANCE_MM, points=None, gap_
         if not (-half < a - margin and b + margin < half):
             out.append(f"hub height {1000.0 * design.hub_height:.0f} mm does not cover the blade root (x from "
                        f"{1000.0 * a:.0f} to {1000.0 * b:.0f} mm; the hub is centred at x = 0)")
-    return out
+    return out, warnings
+
+
+def design_problems(design, params, clearance_mm=CLEARANCE_MM, points=None, gap_mm=None, hub=True):
+    """The MSc feasibility check, for the optimiser: design_checks' problems
+    and its clearance warning together (a design with any is rejected)."""
+    problems, warnings = design_checks(design, params, clearance_mm, points, gap_mm, hub)
+    return problems + warnings
 
 
 def write_points(path, points, per_section=53):
@@ -971,7 +982,7 @@ def design_params(design, params, n=101):
                        hub_height=design.hub_height, airfoil=params.airfoil)
 
 
-def design_record(design, params, space=None, problems=(), gap_mm=None, settings=None):
+def design_record(design, params, space=None, problems=(), gap_mm=None, settings=None, warnings=()):
     """The design as plain data: the parameter file it came from, the blade's
     globals, each curve's form, variables and control points (r/R, value) with
     their weights, the fit to the file, the checks."""
@@ -983,7 +994,8 @@ def design_record(design, params, space=None, problems=(), gap_mm=None, settings
            "curves": {c: {"segments": cu.segments, "variables": {k: cu.get(k) for k in cu.keys()},
                           "control_points": design.ctrl(c).tolist(), "weights": cu.weights().tolist(),
                           "max_diff_from_file": rep[c][0]} for c, cu in design.curves.items()},
-           "problems": list(problems), "clearance_mm": gap_mm, "settings": dict(settings or {})}
+           "problems": list(problems), "warnings": list(warnings), "clearance_mm": gap_mm,
+           "settings": dict(settings or {})}
     if space is not None:
         rec["space"] = space.to_dict(design)
     return rec
@@ -1002,22 +1014,23 @@ def write_case(out_dir, case, design, params, space=None, cad=True, settings=Non
     pts, stations = blade_points(design, params, settings_stations(design.r0, st))
     check_pts = blade_points(design, params)[0]                                  # x_blade_new's stations
     gap = clearance(check_pts, params.blades) * 1000.0
-    problems = design_problems(design, params, st.get("clearance_mm", CLEARANCE_MM), points=check_pts, gap_mm=gap,
-                               hub=st.get("hub", True))
+    problems, warnings = design_checks(design, params, st.get("clearance_mm", CLEARANCE_MM), points=check_pts,
+                                       gap_mm=gap, hub=st.get("hub", True))
     paths = {k: os.path.join(out_dir, f"{case}_{k}") for k in ("params.dat", "xcad_m.dat", "design.json")}
     write_params(paths["params.dat"], design_params(design, params),
                  notes=(f"design {case} from {os.path.basename(params.path) or 'memory'}, "
                         f"{datetime.date.today().isoformat()}",))
     write_points(paths["xcad_m.dat"], pts)
     with open(paths["design.json"], "w") as fh:
-        json.dump(design_record(design, params, space, problems, gap, st), fh, indent=1)
+        json.dump(design_record(design, params, space, problems, gap, st, warnings), fh, indent=1)
     if space is not None:
         paths["space"] = os.path.join(out_dir, f"{case}_design_space.json")
         with open(paths["space"], "w") as fh:
             json.dump(space_record(space, design, params, st), fh, indent=1)
     if plot:
         paths["check"] = plot_case(os.path.join(out_dir, f"{case}_check.png"), case, design, params)
-    out = {"paths": paths, "problems": problems, "clearance_mm": gap, "sections": len(stations)}
+    out = {"paths": paths, "problems": problems, "warnings": warnings, "clearance_mm": gap,
+           "sections": len(stations)}
     if cad:
         if problems:
             raise ValueError(f"{case}: no CAD for a design with problems: {problems[0]}")

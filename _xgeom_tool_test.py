@@ -174,6 +174,52 @@ def test_adapter():
         os.chdir(cwd)
 
 
+def test_span():
+    print("\nthe full height (xgeom_rudder.set_span)")
+    need = ["outputs/corner_points.dat", "outputs/thickness_params_H80_info.dat",
+            "outputs/sections_xcad_with_cap_y0_y200_m.dat", "outputs/sections_stack_y0_y200_raw_mm.dat"]
+    if any(not os.path.exists(os.path.join(HERE, p)) for p in need):
+        print("       skipped, the extraction's outputs are not here")
+        return
+    cwd = os.getcwd()
+    os.chdir(HERE)
+    try:
+        import rudder_modify as RM
+        import xgeom_rudder as XR
+        ad = XR.RudderAdapter()
+        ad.set("LE.dx3", -10.0)
+        span0, h0, (lo0, hi0), vals0 = ad.span, ad.design.H, ad.bounds("H"), dict(ad.values)
+        secs0 = RM.modified_sections(ad.design, ad.orig, 20)
+        r = ad.set_span(1.5 * span0)
+        secs1 = RM.modified_sections(ad.design, ad.orig, 20)
+        top = max(lp[:, 1].max() for v in ad.skeleton().values() for lp in v)
+        check("full height x1.5: H and its bounds x1.5, the other variables kept, the sections x1.5 as high, "
+              "the 3D loops to the new top",
+              [r, ad.design.H / h0, ad.bounds("H")[0] / lo0, ad.bounds("H")[1] / hi0,
+               max(abs(ad.values[n] - vals0[n]) for n in vals0 if n != "H"),
+               max(abs(b.y - 1.5 * a.y) + np.abs(a.selig - b.selig).max() for a, b in zip(secs0, secs1)),
+               top / (1.5 * span0), len(ad.preview()["problems"])], [1.5, 1.5, 1.5, 1.5, 0, 0, 1, 0], 1e-9)
+        try:
+            ad.set_span(0.1 * span0)
+            refused = False
+        except ValueError:
+            refused = True
+        with tempfile.TemporaryDirectory() as tmp:
+            setup = ad.save_space(os.path.join(tmp, "s_design_space.json"))
+            space, design, _ = RM.load_design_space(setup)
+            ad2 = XR.RudderAdapter()
+            ad2.load_space(setup)
+            check("a full height of a tenth refused; the set-up keeps it: load_design_space and load_space",
+                  [refused, space.orig.scale, design.H / h0, ad2.span / span0,
+                   np.abs(space.to_vector(design) - ad.free_space().to_vector(ad.design)).max(),
+                   max(abs(ad2.values[n] - ad.values[n]) for n in ad.values)], [1, 1.5, 1.5, 1.5, 0, 0], 1e-9)
+        ad.set_span(span0)
+        check("back to the extracted height: H and the stretch as before", [ad.design.H - h0, ad.orig.scale],
+              [0, 1], 1e-9)
+    finally:
+        os.chdir(cwd)
+
+
 def test_gui():
     print("\nthe window (xgeom_tool.py)")
     try:
@@ -202,6 +248,17 @@ def test_gui():
         n3 = sum(len(c.get_segments()) for c in app.view3.col.values())
         check("the window follows a slider, a new section point, the 3D sections",
               [app.ad.get("H"), app.ad.degree, len(app.rows) > 3, 70 <= n3 <= 200], [60.0, 5, 1, 1], 1e-12)
+        span0 = app.ad.span
+        app.span_box.set("300")
+        app.on_span()
+        app.update_views()
+        root.update()
+        tops = max(s[:, 2].max() for c in app.view3.col.values() for s in c._segments3d)
+        app.span_box.set("10")                                     # too low: refused, the box shows 300
+        app.on_span()
+        check("the full height box: 300 mm stretches the rudder (H 60 -> 60 x 300 / the extracted), 10 refused",
+              [app.ad.span, app.ad.get("H") / (60.0 * 300.0 / span0), tops > 290.0, app.span_box.get() == "300.00",
+               app.status.cget("background") == XT.STATUS["error"][0]], [300.0, 1, 1, 1, 1], 1e-9)
     finally:
         root.destroy()
         os.chdir(cwd)
@@ -211,6 +268,7 @@ def main():
     print("design tool self-check")
     test_loft()
     test_adapter()
+    test_span()
     if "--gui" in sys.argv:
         test_gui()
     print()

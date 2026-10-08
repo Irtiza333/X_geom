@@ -153,22 +153,49 @@ def test_vehicle(hull):
           [tip[0], np.hypot(tip[1], tip[2]), np.arctan2(tip[2], tip[1]) % (2 * np.pi),
            np.abs(segs["hub"][0][:, 1:]).max()],
           [L + pl.prop_dx, s * 1.0, np.deg2rad(90.0 + 120.0), s * 0.4], 1e-12)
-    xr = np.linspace(L + pl.rudder_dx - 0.05, L + pl.rudder_dx, 201)
-    errs, angles = [], []
+    te, chord = L + pl.rudder_dx, 0.05                              # the plate at scale 0.5: chord 50 mm
+    overlap = XV.ROOT_OVERLAP * chord
+    errs, angles, clear, reach = [], [], [], []
     for k in range(4):
-        root = segs["rudders"][2 * k]                               # the loop at y = 0
+        root, top = segs["rudders"][2 * k], segs["rudders"][2 * k + 1]
+        inner = segs["roots"][17 * k]                               # the root section's inner copy
         phi = np.deg2rad(45.0 + 90.0 * k)
         er, et = np.array([0.0, np.sin(phi), np.cos(phi)]), np.array([0.0, -np.cos(phi), np.sin(phi)])
-        rho = XV.surface_distance(d, xr, phi).min()
-        errs += [np.abs(root @ er - rho).max(), root[:, 0].max() - (L + pl.rudder_dx), np.abs(root @ et).max() - 0.003]
-        angles.append(np.degrees(np.arctan2((segs["rudders"][2 * k + 1] @ np.array([0, 1, 0])).mean(),
-                                            (segs["rudders"][2 * k + 1] @ np.array([0, 0, 1])).mean())) % 360)
-    check("4 rudders at 45 .. 315 deg: root on the hull (its smallest distance along the root), TE at x, thickness",
-          errs + [a - (45.0 + 90.0 * k) for k, a in enumerate(angles)], 0.0, 1e-9)
+        rho = info["rudder_root"][k]
+        f = np.linspace(-1.0, 1.0, 41)                              # across the thickness, finer than the placement
+        dense = np.vstack([root - np.outer(root @ et, et) + np.outer((root @ et) * fi, et) for fi in f])
+        clear.append((np.hypot(dense[:, 1], dense[:, 2]) - d.radius("r", dense[:, 0])).min())
+        w, x = inner @ et, inner[:, 0]
+        reach.append((np.sqrt(np.clip(d.radius("r", x) ** 2 - w ** 2, 0.0, None)) - inner @ er).min() - overlap)
+        errs += [rho - d.radius("r", np.array([te - chord]))[0], root[:, 0].max() - te, np.abs(root @ et).max() - 0.003,
+                 np.abs(root @ er - rho).max(), np.abs(inner @ er - (rho - info["rudder_depth"][k])).max()]
+        angles.append(np.degrees(np.arctan2(top[:, 1].mean(), top[:, 2].mean())) % 360)
+    check("4 rudders from 45 deg, tangent: the root touches the hull at the LE (the highest point under it), TE at "
+          "x, thickness; the inner copy at the extrusion depth", errs + [a - (45.0 + 90.0 * k)
+                                                                          for k, a in enumerate(angles)], 0.0, 1e-9)
+    check("no point of the root inside the hull (41 points across the thickness), one touching; the extrusion "
+          "reaches at least the overlap into the hull everywhere, just that at its deepest gap",
+          [min(clear), min(reach)], [0.0, 0.0], 1e-9)
     top = segs["rudders"][1]
     check("the rudder's height points away from the axis: the top loop 100 mm (scale 0.5) further out",
           np.abs(top @ np.array([0.0, np.sin(np.pi / 4), np.cos(np.pi / 4)]) - info["rudder_root"][0] - 0.1).max(),
           0.0, 1e-12)
+    e = d.copy()                                                    # an elliptical middle body: 0.4 high, 0.6 wide
+    e.curves["nose_rp"], e.curves["tail_rp"] = e.curves["nose_r"].copy(), e.curves["tail_r"].copy()
+    e.r, e.rp, e.rpe = 0.2, 0.3, e.re
+    hp = {"design": e, "lines": [np.zeros((2, 3))], "problems": []}
+    pe = XV.Placement(rudder_dx=2.05 - e.length, rudders=4, rudder_angle=45.0, rudder_scale=0.5)
+    segs, info = XV.assemble({"hull": hp, "rudder": FakeRudder.part()}, pe)
+    q_min = []
+    for k in range(4):
+        root = segs["rudders"][2 * k]
+        phi = np.deg2rad(45.0 + 90.0 * k)
+        et = np.array([0.0, -np.cos(phi), np.sin(phi)])
+        dense = np.vstack([root - np.outer(root @ et, et) + np.outer((root @ et) * fi, et)
+                           for fi in np.linspace(-1.0, 1.0, 41)])
+        q_min.append(((dense[:, 1] / 0.3) ** 2 + (dense[:, 2] / 0.2) ** 2).min())
+    check("an elliptical body at 45 deg (the ellipse's own equation): every root point on or outside it, one on it",
+          q_min, 1.0, 1e-9)
 
 
 def test_parts(hull):
@@ -193,10 +220,15 @@ def test_parts(hull):
     segs, info = XV.assemble(parts, pl)
     L = hull.design.length
     front = min(float(p[:, 0].min()) for p in segs["blades"]) - L
-    check("the default placement: the rudder's root TE a quarter D ahead of the blades, its root on the hull at "
-          "the TE's radius (m)", [pl.rudder_dx, info["rudder_root"][0], info["gap"] > 0],
-          [round(min(-hull.design.cap, front - 0.25 * pl.prop_d), 3),
-           hull.design.radius("r", L + pl.rudder_dx)[0], 1], 1e-9)
+    le, te = info["rudder_le"], info["rudder_te"]
+    r_le, r_te = hull.design.radius("r", np.array([le, te]))
+    check("the default placement: the root TE a quarter D ahead of the blades; tangent at the root LE (the largest "
+          "radius under it); extruded by the gap to the TE's radius and 2 % of the chord (m, 0.05 mm)",
+          [pl.rudder_dx, info["rudder_root"][0], info["rudder_depth"][0], info["gap"] > 0],
+          [round(min(-hull.design.cap, front - 0.25 * pl.prop_d), 3), r_le, r_le - r_te + XV.ROOT_OVERLAP * (te - le), 1],
+          5e-5)
+    print(f"       the wind-tunnel rudder on SUBOFF: root {1000 * r_le:.1f} mm from the axis, extruded "
+          f"{1000 * info['rudder_depth'][0]:.1f} mm inwards")
 
 
 def test_gui():
@@ -231,9 +263,22 @@ def test_gui():
         root.update()
         n = {k: len(c.get_segments()) for k, c in app.viewv.col.items()}
         per = n["rudders"] // 4
-        check("the Vehicle tab: hull, blades and hub, 4 rudders; the status ok",
+        check("the Vehicle tab: hull, blades and hub, 4 rudders with their root extrusions; the status ok",
               [n["hull"] > 40, n["blades"] > 20, n["hub"], n["rudders"] == 4 * per, 10 <= per <= XV.LOOPS,
-               app.status.cget("background") == XT.STATUS["ok"][0]], [1, 1, 14, 1, 1, 1], 0)
+               n["roots"], app.status.cget("background") == XT.STATUS["ok"][0]], [1, 1, 14, 1, 1, 4 * 17, 1], 0)
+        reach0 = max(np.hypot(q[:, 1], q[:, 2]).max() for q in app.viewv.col["rudders"]._segments3d)
+        app.switch("rudder")
+        app.span_box.set(f"{1.5 * app.ad.span:.2f}")
+        app.on_span()
+        app.update_views()
+        root.update()
+        reach1 = max(np.hypot(q[:, 1], q[:, 2]).max() for q in app.viewv.col["rudders"]._segments3d)
+        span1 = app.ad.span
+        app.span_box.set(f"{span1 / 1.5:.4f}")
+        app.on_span()
+        app.switch("hull")
+        check("the rudder's full height x1.5 in its panel: the vehicle's rudders reach 1.5 x as far from the root",
+              (reach1 - info0_root(app)) / (reach0 - info0_root(app)), 1.5, 2e-3)
         app.vset["rudders"].set(6)
         app.vset["rudder_angle"].set(90)
         app.vshow.set("stern")
@@ -284,6 +329,12 @@ def test_gui():
         settle(root)
         root.destroy()
         os.chdir(cwd)
+
+
+def info0_root(app):
+    """The first rudder's root distance from the axis in the Vehicle tab (m)."""
+    parts = {k: app._vehicle_part(k) for k in app.kinds if k in app.adapters}
+    return XV.assemble(parts, app.placement)[1]["rudder_root"][0]
 
 
 def settle(root):

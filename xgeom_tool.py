@@ -39,14 +39,21 @@ Vehicle
                             12, evenly spaced around the axis (default 4, a cross);
                             first at: the first one's angle around the axis from the
                             top towards starboard (180 under the stern); scale (1: its
-                            own size, mm to m). Each root sits on the hull: at the
-                            hull's distance from the axis in its direction, the
-                            smallest along the root.
+                            own size, mm to m). Each rudder sits tangent to the hull,
+                            never inside it: its flat root touches the hull at the
+                            highest point under it, and a copy of the root section
+                            extruded inwards (dark orange) closes the gap where the
+                            hull falls away under the root.
                  show       the whole vehicle or its stern (from the start of the tail).
 Left panel (rudder)
     H         the height of the modified region, between its low and high
               bounds (h_min, h_max); h_max can go up to the top horizontal section
               of the stack (z_full - d, shown under 'where').
+    full height
+              the rudder's height from the root to the top of the cap (the
+              extracted rudder's to start with): a new one stretches the whole
+              rudder in height, H, its bounds and the curves' heights with it;
+              saved with the set-up, not a design variable.
     Section control points
               the number of control points of the section's Bezier half-
               section, P0 .. Pn (P0 = (0, 0) the LE and Pn = (1, 0) the sharp TE
@@ -67,10 +74,13 @@ Left panel (blade)
               the blade radius R, the hub radius and the hub height (m; the hub
               is centred at x = 0 and must cover the blade root). A change of
               either radius stretches the distributions over the new span.
-              blades Z: the number of blades, 2 to 12 (the parameter file's to
+              blades Z: the number of blades, 2 to 7 (the parameter file's to
               start with); the clearance check, the propeller tab, the vehicle,
               the CAD's hub sector and the parameter file written follow it. It
-              is saved with the set-up; it is not in the design vector.
+              is saved with the set-up; it is not in the design vector. Blades
+              closer than the clearance (they interfere) give a warning, not a
+              problem: moving the root section (the hub radius) or the root's
+              chord and pitch may make room for them.
     Sections  the sections of the XCAD points file (para.py's, 53 points
               each) and the 3D sections tab: how many, root to tip, and how
               many of them lie from the tip band's r/R to the tip, closer
@@ -134,8 +144,9 @@ STEP. CAD (hull) writes the case (parameter file, design and set-up JSON,
 stations, hydrostatics, section points, check plot) and the STEP. OCC viewer
 opens the last STEP (needs pythonocc-core).
 The bar at the bottom: green ok, amber a build running (the build button counts
-the seconds), red a problem or an error; a design with a problem (e.g. blades
-closer than the clearance) is not built until it is solved.
+the seconds), orange a warning (e.g. blades closer than the clearance; the
+build still runs), red a problem or an error; a design with a problem (e.g. a
+hub too short for the blade root) is not built until it is solved.
 
 Other geometries plug in as adapters with the methods of
 xgeom_rudder.RudderAdapter (registered in ADAPTERS) and a panel function here
@@ -174,7 +185,8 @@ ADAPTERS = {"rudder": ("xgeom_rudder", "RudderAdapter"), "blade": ("xgeom_blade"
 VEHICLE = ("hull", "blade", "rudder")              # the vehicle's components, in the switcher's order
 NAMES = {"hull": "Hull", "blade": "Propeller", "rudder": "Rudder"}
 INK2, RED = "#52514e", "#e34948"
-STATUS = {"ok": ("#dfeedd", "black"), "busy": ("#f6d58e", "black"), "error": ("#c62f2e", "white")}  # bar colours
+STATUS = {"ok": ("#dfeedd", "black"), "busy": ("#f6d58e", "black"), "warn": ("#f0a35e", "black"),
+          "error": ("#c62f2e", "white")}                                                     # bar colours
 VEHICLE_TAB = 2                                    # the notebook's tabs: Design, 3D sections, Vehicle
 
 
@@ -634,6 +646,21 @@ class App:
                 self.schedule_update()
         self.nblades.set(self.ad.params.blades)                      # what is used
 
+    def on_span(self, _event=None):
+        """Rudder: the full height from the Region box."""
+        try:
+            v = float(self.span_box.get())
+        except ValueError:
+            v = None
+        except tk.TclError:                                          # the box is gone (panel rebuilt)
+            return
+        if v is not None and abs(v - self.ad.span) > 5e-3:
+            r = self.guard(lambda: self.ad.set_span(v))
+            if r is not None:
+                self.after_change()
+                self._note = f"full height {self.ad.span:.2f} mm: the rudder stretched by {r:.4g} in height"
+        self.span_box.set(f"{self.ad.span:.2f}")
+
     def on_elliptic(self):
         """Hull: elliptical sections (r' of its own) or circular ones."""
         self.guard(lambda: self.ad.set_elliptic(self.elliptic.get()))
@@ -677,10 +704,10 @@ class App:
                    f"{v:.2f}" if k == "rudder_scale" else f"{v:.3f}")
         self.vshow.set(pl.view)
 
-    def say(self, text, error=False, busy=False):
-        """The status bar: green ok, amber busy (a build running), red a problem
-        or an error."""
-        bg, fg = STATUS["error" if error else "busy" if busy else "ok"]
+    def say(self, text, error=False, busy=False, warn=False):
+        """The status bar: green ok, amber busy (a build running), orange a
+        warning (the build still runs), red a problem or an error."""
+        bg, fg = STATUS["error" if error else "busy" if busy else "warn" if warn else "ok"]
         self.status.configure(text=text, background=bg, foreground=fg)
 
     # ------------------------------------------------------------ views
@@ -713,6 +740,9 @@ class App:
                          error=True)
             elif self._job is not None:
                 self.say(self._job["message"], busy=True)
+            elif pv.get("warnings"):
+                self.say(f"warning ({self.ad.build_label} still possible): " + "; ".join(pv["warnings"])
+                         + (f". {self._note}" if self._note else ""), warn=True)
             else:
                 self.say(self._note or f"ok ({pv['seconds'] * 1e3:.0f} ms)")
             self._note = None
@@ -751,10 +781,13 @@ class App:
         self.canvasv.draw_idle()
         problems = [f"{NAMES[k].lower()}: {q}" for k, part in parts.items() for q in part["problems"]]
         problems += [f"{NAMES[k].lower()} not loaded: {e}" for k, e in self.errors.items()]
+        warnings = [f"{NAMES[k].lower()}: {q}" for k, part in parts.items() for q in part.get("warnings", ())]
         if problems:
             self.say("problem: " + "; ".join(problems), error=True)
         elif self._job is not None:
             self.say(self._job["message"], busy=True)
+        elif warnings:
+            self.say("warning: " + "; ".join(warnings), warn=True)
         else:
             self.say(f"vehicle ok ({(time.time() - t0) * 1e3:.0f} ms)")
 
@@ -835,12 +868,25 @@ class App:
 
 
 def rudder_panel(app):
-    """The rudder's boxes: the region H and the section control points."""
+    """The rudder's boxes: the region H, the full height and the section control points."""
+    import xgeom_rudder as XR
     ad = app.ad
     box = ttk.LabelFrame(app.panel, text="Region")
     box.pack(fill="x", padx=6, pady=4)
     app._header(box)
     app.rows.append(VarRow(app, box, 1, Row("var", "H (mm)", "H", 3)))
+    row = ttk.Frame(box)
+    row.grid(row=2, column=0, columnspan=7, sticky="w", padx=2, pady=(4, 2))
+    ttk.Label(row, text="full height").pack(side="left", padx=(2, 4))
+    app.span_box = ttk.Spinbox(row, from_=round(XR.SPAN_RANGE[0] * ad.span0, 1),
+                               to=round(XR.SPAN_RANGE[1] * ad.span0, 1), increment=1.0, width=8, command=app.on_span)
+    app.span_box.set(f"{ad.span:.2f}")
+    app.span_box.bind("<Return>", app.on_span)
+    app.span_box.bind("<FocusOut>", app.on_span)
+    app.span_box.pack(side="left")
+    ttk.Label(row, text=f"mm, the root to the top of the cap (the extracted rudder's: {ad.span0:.1f} mm); the "
+                        f"whole rudder stretches in height, H and its bounds with it", foreground=INK2,
+              wraplength=430, justify="left").pack(side="left", padx=6)
 
     box = ttk.LabelFrame(app.panel, text="Section control points (pick the curve to edit)")
     box.pack(fill="x", padx=6, pady=4)
@@ -904,8 +950,8 @@ def blade_panel(app):
     app.nblades.bind("<FocusOut>", app.on_blades)
     app.nblades.pack(side="left")
     ttk.Label(row, text=f"the file has {z_file}; the clearance check, the propeller tab, the vehicle and the "
-                        f"CAD's hub sector follow it", foreground=INK2, wraplength=470,
-              justify="left").pack(side="left", padx=6)
+                        f"CAD's hub sector follow it; blades that interfere give a warning", foreground=INK2,
+              wraplength=470, justify="left").pack(side="left", padx=6)
 
     box = ttk.LabelFrame(app.panel, text="Sections (the XCAD points file and the 3D sections tab; 53 points each)")
     box.pack(fill="x", padx=6, pady=4)
