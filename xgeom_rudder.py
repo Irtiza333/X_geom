@@ -440,10 +440,10 @@ class RudderAdapter:
 
 
 class RudderViews:
-    """The Design tab: planform, the selected curve (both with the height on
-    the x axis), and in 3D the sections from the root to H with their control
-    polygons (labelled P0 .. Pn) and the track of each control point along the
-    span."""
+    """The Design tab: planform, the selected curve (both as the rudder
+    stands: x, or the curve's value, across and the height up), and in 3D the
+    sections from the root to H with their control polygons (labelled P0 ..
+    Pn) and the track of each control point along the span."""
 
     def __init__(self, adapter, fig):
         self.a = adapter
@@ -464,15 +464,15 @@ class RudderViews:
         self.sec_lines = [ax.plot([], [], "-", color=GRID, lw=0.8)[0] for _ in range(12)]
         self.le_line, = ax.plot([], [], "-", color=BLUE, lw=2.0, label="LE")
         self.le_poly, = ax.plot([], [], "o--", color=BLUE, lw=0.8, ms=5, mfc="white")
-        self.h_line = ax.axvline(0.0, color=RED, ls=":", lw=1)
-        self.bound_lines = [ax.axvline(0.0, color=INK2, ls="-.", lw=0.8) for _ in range(2)]   # h_min, h_max
-        self.h_text = ax.text(0.0, 0.99, "H", transform=ax.get_xaxis_transform(), ha="right", va="top",
+        self.h_line = ax.axhline(0.0, color=RED, ls=":", lw=1)
+        self.bound_lines = [ax.axhline(0.0, color=INK2, ls="-.", lw=0.8) for _ in range(2)]   # h_min, h_max
+        self.h_text = ax.text(0.5, 0.0, "H", transform=ax.get_yaxis_transform(), ha="center", va="bottom",
                               color=RED, fontsize=8)
         self.prob_text = ax.text(0.02, 0.98, "", transform=ax.transAxes, va="top", ha="left", color=RED, fontsize=8)
-        ax.set_xlabel("y, height (mm)")
-        ax.set_ylabel("x (mm)")
+        ax.set_xlabel("x (mm)")
+        ax.set_ylabel("y, height (mm)")
         ax.set_aspect("equal", adjustable="box")
-        ax.legend(loc="best", fontsize=7)
+        ax.legend(loc="upper center", fontsize=7)                 # between the LE and the TE line
         ax.set_title("planform", loc="left", fontsize=10)
 
         ax = self.ax_curve
@@ -484,8 +484,8 @@ class RudderViews:
         self.c_fixed, = ax.plot([], [], "o", color=BLUE, ms=6, mfc="white", label="held")
         self.c_pinned, = ax.plot([], [], "s", color=RED, ms=6, mfc="white", label="pinned at H")
         self.c_labels = []
-        self.c_h = ax.axvline(0.0, color=RED, ls=":", lw=1)
-        ax.set_xlabel("y, height (mm)")
+        self.c_h = ax.axhline(0.0, color=RED, ls=":", lw=1)
+        ax.set_ylabel("y, height (mm)")
         ax.legend(loc="best", fontsize=7)
 
     def _points(self, d, curve):
@@ -506,20 +506,20 @@ class RudderViews:
         a, o, d = self.a, self.a.orig, pv["design"]
         yy, cv = pv["yy"], pv["curves"]
         m = o.y_rows <= o.z_top + 1e-9                       # the original (its full height may have changed)
-        self.o_le.set_data(o.y_rows[m], o.x_le_rows[m])
-        self.o_te.set_data(o.y_rows[m], o.x_te_rows[m])
-        # planform, the height along x
-        self.le_line.set_data(yy, cv["LE"])
+        self.o_le.set_data(o.x_le_rows[m], o.y_rows[m])
+        self.o_te.set_data(o.x_te_rows[m], o.y_rows[m])
+        # planform, as the rudder stands: x across, the height up
+        self.le_line.set_data(cv["LE"], yy)
         le = d.curve("LE")
-        self.le_poly.set_data(le.ctrl[:, 0], le.ctrl[:, 1])
+        self.le_poly.set_data(le.ctrl[:, 1], le.ctrl[:, 0])
         ys = np.linspace(0.0, d.H, len(self.sec_lines))
         for ln, y, xl in zip(self.sec_lines, ys, np.interp(ys, yy, cv["LE"])):
-            ln.set_data([y, y], [xl, o.x_te([y])[0]])
-        self.h_line.set_xdata([d.H, d.H])
-        self.h_text.set_position((d.H, 0.99))
+            ln.set_data([xl, o.x_te([y])[0]], [y, y])
+        self.h_line.set_ydata([d.H, d.H])
+        self.h_text.set_position((0.5, d.H))
         self.h_text.set_text(f"H = {d.H:.1f} ")
         for ln, key in zip(self.bound_lines, ("h_min", "h_max")):
-            ln.set_xdata([a.settings[key]] * 2)
+            ln.set_ydata([a.settings[key]] * 2)
         self.prob_text.set_text("\n".join(p[:90] for p in pv["problems"][:4]))
         self.ax_plan.relim()
         self.ax_plan.autoscale_view()
@@ -528,37 +528,39 @@ class RudderViews:
         top = a.settings["h_max"]                            # the curve plot shows heights up to h_max
         if curve == "LE":
             keep = o.y_rows <= top
-            self.c_data.set_data(o.y_rows[keep], o.x_le_rows[keep])
+            self.c_data.set_data(o.x_le_rows[keep], o.y_rows[keep])
             self.c_orig.set_data([], [])
-            ax.set_ylabel("x of the LE (mm)")
+            ax.set_xlabel("x of the LE (mm)")
         else:
             yd, vd = o.data[curve]
-            self.c_data.set_data(yd[yd <= top], vd[yd <= top])
+            self.c_data.set_data(vd[yd <= top], yd[yd <= top])
             yz = np.linspace(0.0, top, 160)
-            self.c_orig.set_data(yz, o.value(curve, yz))
-            ax.set_ylabel(f"{curve[-1]} of P{curve[1:-1]} (fraction of the sharp chord)")
-        self.c_new.set_data(yy, cv[curve])
+            self.c_orig.set_data(o.value(curve, yz), yz)
+            ax.set_xlabel(f"{curve[-1]} of P{curve[1:-1]} (fraction of the sharp chord)")
+        self.c_new.set_data(cv[curve], yy)                   # as the rudder stands: the value across, the height up
         pts, P = self._points(d, curve)
-        self.c_poly.set_data(pts[:, 0], pts[:, 1])
+        self.c_poly.set_data(pts[:, 1], pts[:, 0])
         for key, ln in (("free", self.c_free), ("fixed", self.c_fixed), ("pinned", self.c_pinned)):
-            ln.set_data(P[key][:, 0], P[key][:, 1])
+            ln.set_data(P[key][:, 1], P[key][:, 0])
         for t in self.c_labels:
             t.remove()
-        x_hi = 1.05 * top
-        ax.set_xlim(-0.03 * top, x_hi)
-        self.c_h.set_xdata([d.H, d.H])
+        y_hi = 1.05 * top
+        ax.set_ylim(-0.03 * top, y_hi)
+        self.c_h.set_ydata([d.H, d.H])
         ax.set_title(f"curve {curve}" + ("" if curve == "LE" else f": {curve[-1]} of P{curve[1:-1]}")
                      + " against the height", loc="left", fontsize=10)
-        shown = np.concatenate([ln.get_ydata() for ln in (self.c_data, self.c_orig, self.c_new, self.c_poly)
-                                if len(ln.get_ydata())])
+        shown = np.concatenate([ln.get_xdata() for ln in (self.c_data, self.c_orig, self.c_new, self.c_poly)
+                                if len(ln.get_xdata())])
         lo, hi = float(shown.min()), float(shown.max())
         pad = max(0.08 * (hi - lo), 0.5 if curve == "LE" else 0.005)    # a flat curve still gets a readable range
-        ax.set_ylim(lo - pad, hi + pad)
-        ax.ticklabel_format(axis="y", useOffset=False)
-        self.c_labels = []                   # near the right edge to the left, near the top below the point
+        ax.set_xlim(lo - pad, hi + pad)
+        ax.ticklabel_format(axis="x", useOffset=False)
+        from matplotlib.ticker import MaxNLocator
+        ax.xaxis.set_major_locator(MaxNLocator(5))           # the values' long labels side by side
+        self.c_labels = []                   # near the top below the point, near the right edge to its left
         for k, (y, v) in enumerate(pts):
-            right, high = y > 0.8 * x_hi, v > hi - 0.15 * (hi - lo + 2 * pad)
-            self.c_labels.append(ax.annotate(f"C{k}", (y, v), textcoords="offset points", fontsize=8, color=BLUE,
+            high, right = y > 0.8 * y_hi, v > hi - 0.15 * (hi - lo + 2 * pad)
+            self.c_labels.append(ax.annotate(f"C{k}", (v, y), textcoords="offset points", fontsize=8, color=BLUE,
                                              xytext=(-6 if right else 6, -6 if high else 4),
                                              ha="right" if right else "left", va="top" if high else "bottom"))
         self._draw_sections(pv, curve)

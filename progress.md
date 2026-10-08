@@ -122,19 +122,19 @@ XGeom: rudder parametrization, propeller blades and hulls. Updated 8 Oct 2026.
   the axis, touching at one point); the full rudder height not fixed by the example; at most 7 blades, and only
   a warning when blades interfere (the hub radius moves the root section).
 - Vehicle CAD (SUBOFF, the wind-tunnel rudder x 4, the MSc propeller at D 0.254 m): one valid solid, V 0.70195
-  m^3 (the hull 0.69921); it lies on the Vehicle tab's lines. About 3 min in the cloud: the propeller's own CAD
-  75 s, the rest 45 s (the fuse 20 s). Checked in the cloud through a pythonocc stand-in over cadquery-ocp; not
-  yet on the user's machine. In the cloud each panel's build button builds its own component; the user saw only
-  the rudder built (8 Oct 2026), not reproduced: the button is now tied to its component, named after it, kept
-  in view, and the log records each build.
+  m^3 (the hull 0.69921); it lies on the Vehicle tab's lines. On the user's machine (pythonocc-core, 8 Oct 2026)
+  the same, in 126 s (the fuse 15 s); in the cloud (a pythonocc stand-in over cadquery-ocp) about 3 min. In the
+  cloud each panel's build button builds its own component; the user saw only the rudder built (8 Oct 2026), not
+  reproduced: the button is now tied to its component, named after it, kept in view, and the log records each
+  build.
 - Blade count (the MSc blade as fitted): Z 2 to 7 pass the clearance check (25 mm; 29.6 mm apart at 7) and the
   hub sector. Checked without OCC (the hub sector's grids); the CAD with Z other than 5 is still to be built on the
   user's machine.
 
 ## Next steps
 
-- Vehicle: the Vehicle CAD on the user's machine (pythonocc-core); the placement is not loaded back yet (the
-  set-up JSON records it); the sail and the fins; blended wing bodies later.
+- Vehicle: the placement is not loaded back yet (the set-up JSON records it); the sail and the fins; blended wing
+  bodies later.
 - Review the blade in the tool: default segments, orders and free variables (`blade_control.py`); camber and
   rake fit poorly as 2 segments.
 - Optimisation: sample a saved set-up (`load_design_space`, `load_blade_space`, `Initial_sampling.py`), screen
