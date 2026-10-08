@@ -119,7 +119,58 @@ class FakeRudder:
     def part():
         t = np.linspace(0.0, 2.0 * np.pi, 41)
         loops = [np.column_stack((50.0 - 50.0 * np.cos(t), np.full_like(t, y), 6.0 * np.sin(t))) for y in (0.0, 200.0)]
-        return {"loops": loops, "root_x": (0.0, 100.0), "problems": []}
+        return {"loops": loops, "root": loops[0], "root_x": (0.0, 100.0), "problems": []}
+
+
+def frame(phi):
+    """ex, er (away from the axis at phi) and et (the rudder's thickness) of a rudder at phi (rad)."""
+    return (np.array([1.0, 0.0, 0.0]), np.array([0.0, np.sin(phi), np.cos(phi)]),
+            np.array([0.0, -np.cos(phi), np.sin(phi)]))
+
+
+def gaps_along(pts, eh, outside, reach=0.05):
+    """Independent of xgeom_vehicle: how far each point moves along -eh before it is inside the hull
+    (outside(p) True outside it), 0 for a point already inside; bisection over [0, reach]."""
+    out = []
+    for p in pts:
+        if not outside(p):
+            out.append(0.0)
+            continue
+        lo, hi = 0.0, reach
+        for _ in range(80):
+            mid = 0.5 * (lo + hi)
+            lo, hi = (mid, hi) if outside(p - mid * eh) else (lo, mid)
+        out.append(0.5 * (lo + hi))
+    return np.array(out)
+
+
+def check_rudders(name, segs, info, angles, te, chord, height, radii):
+    """Each rudder (the FakeRudder plate): its root's LE and TE on the hull in its half-plane (radii(x, phi): the
+    hull's r and r' there), a chord apart, the TE at x; its height along the normal to the root chord in that
+    half-plane (the pitch, the root chord's angle to the axis); the inner copy at the largest gap under the
+    root (found here by bisection) plus the overlap, wholly inside the hull."""
+    errs, inside = [], []
+    for k, phi in enumerate(angles):
+        root, top, inner = segs["rudders"][2 * k], segs["rudders"][2 * k + 1], segs["roots"][17 * k]
+        ex, er, et = frame(phi)
+        le, tp = root[0], root[20]                                  # the plate's LE (t = 0) and TE (t = pi)
+
+        def q(p):                                                   # > 1 outside the hull's section at p's x
+            r, rp = radii(p[0])
+            return (p[1] / rp) ** 2 + (p[2] / r) ** 2
+
+        rho_le, rho_te = le @ er, tp @ er
+        ec = (tp - le) / chord
+        eh = -(ec @ er) * ex + (ec @ ex) * er
+        gap = gaps_along(root, eh, lambda p: q(p) > 1.0).max()
+        depth = gap + XV.ROOT_OVERLAP * chord
+        errs += [q(le) - 1.0, q(tp) - 1.0, le @ et, tp @ et, tp[0] - te, np.linalg.norm(tp - le) - chord,
+                 np.abs(top - root - height * eh).max(),
+                 info["rudder_pitch"][k] - np.degrees(np.arctan2(rho_le - rho_te, tp[0] - le[0])),
+                 info["rudder_gap"][k] - gap, np.abs(inner - (root - depth * eh)).max()]
+        inside.append(max(q(p) for p in inner) < 1.0)
+    check(name, errs + [all(inside) - 1.0], 0.0, 1e-9)
+    return [info["rudder_pitch"][k] for k in range(len(angles))]
 
 
 def test_vehicle(hull):
@@ -142,8 +193,8 @@ def test_vehicle(hull):
     segs, info = XV.assemble(parts, pl)
     tops = segs["rudders"][1::2]                                    # the loop at y = 200 of each rudder
     angles = [np.degrees(np.arctan2(t[:, 1].mean(), t[:, 2].mean())) % 360 for t in tops]
-    check("6 rudders, the first at 30 deg: 360/6 apart, each root on the hull",
-          [len(tops)] + [a - (30.0 + 60.0 * k) for k, a in enumerate(angles)] + [len(info["rudder_root"])],
+    check("6 rudders, the first at 30 deg: 360/6 apart, each on the hull",
+          [len(tops)] + [a - (30.0 + 60.0 * k) for k, a in enumerate(angles)] + [len(info["rudder_pitch"])],
           [6] + [0.0] * 6 + [6], 1e-9)
     pl.rudders, pl.rudder_angle, pl.rudder_scale = 4, 45.0, 0.5
     segs, info = XV.assemble(parts, pl)
@@ -153,49 +204,52 @@ def test_vehicle(hull):
           [tip[0], np.hypot(tip[1], tip[2]), np.arctan2(tip[2], tip[1]) % (2 * np.pi),
            np.abs(segs["hub"][0][:, 1:]).max()],
           [L + pl.prop_dx, s * 1.0, np.deg2rad(90.0 + 120.0), s * 0.4], 1e-12)
-    te, chord = L + pl.rudder_dx, 0.05                              # the plate at scale 0.5: chord 50 mm
-    overlap = XV.ROOT_OVERLAP * chord
-    errs, angles, clear, reach = [], [], [], []
-    for k in range(4):
-        root, top = segs["rudders"][2 * k], segs["rudders"][2 * k + 1]
-        inner = segs["roots"][17 * k]                               # the root section's inner copy
-        phi = np.deg2rad(45.0 + 90.0 * k)
-        er, et = np.array([0.0, np.sin(phi), np.cos(phi)]), np.array([0.0, -np.cos(phi), np.sin(phi)])
-        rho = info["rudder_root"][k]
-        f = np.linspace(-1.0, 1.0, 41)                              # across the thickness, finer than the placement
-        dense = np.vstack([root - np.outer(root @ et, et) + np.outer((root @ et) * fi, et) for fi in f])
-        clear.append((np.hypot(dense[:, 1], dense[:, 2]) - d.radius("r", dense[:, 0])).min())
-        w, x = inner @ et, inner[:, 0]
-        reach.append((np.sqrt(np.clip(d.radius("r", x) ** 2 - w ** 2, 0.0, None)) - inner @ er).min() - overlap)
-        errs += [rho - d.radius("r", np.array([te - chord]))[0], root[:, 0].max() - te, np.abs(root @ et).max() - 0.003,
-                 np.abs(root @ er - rho).max(), np.abs(inner @ er - (rho - info["rudder_depth"][k])).max()]
-        angles.append(np.degrees(np.arctan2(top[:, 1].mean(), top[:, 2].mean())) % 360)
-    check("4 rudders from 45 deg, tangent: the root touches the hull at the LE (the highest point under it), TE at "
-          "x, thickness; the inner copy at the extrusion depth", errs + [a - (45.0 + 90.0 * k)
-                                                                          for k, a in enumerate(angles)], 0.0, 1e-9)
-    check("no point of the root inside the hull (41 points across the thickness), one touching; the extrusion "
-          "reaches at least the overlap into the hull everywhere, just that at its deepest gap",
-          [min(clear), min(reach)], [0.0, 0.0], 1e-9)
-    top = segs["rudders"][1]
-    check("the rudder's height points away from the axis: the top loop 100 mm (scale 0.5) further out",
-          np.abs(top @ np.array([0.0, np.sin(np.pi / 4), np.cos(np.pi / 4)]) - info["rudder_root"][0] - 0.1).max(),
-          0.0, 1e-12)
+
+    def round_hull(x):
+        r = d.radius("r", np.array([x]))[0]
+        return r, r
+
+    phis = [np.deg2rad(45.0 + 90.0 * k) for k in range(4)]          # the plate at scale 0.5: chord 50, 100 mm high
+    p0 = check_rudders("4 rudders from 45 deg (TE at the start of the cap): root LE and TE on the hull, a chord "
+                       "apart; height square to the root chord; extruded by the largest gap + overlap, inside",
+                       segs, info, phis, L + pl.rudder_dx, 0.05, 0.1, round_hull)
+    tops = segs["rudders"][1::2]
+    check("each in its own half-plane (45 + 90 k deg), the four pitched alike on the round hull",
+          [np.degrees(np.arctan2(t[:, 1].mean(), t[:, 2].mean())) % 360 - (45.0 + 90.0 * k) for k, t in enumerate(tops)]
+          + [p - p0[0] for p in p0], 0.0, 1e-9)
+    pl.rudder_dx = -0.6
+    segs, info = XV.assemble(parts, pl)
+    p1 = check_rudders("moved forward along the tail (TE at L - 0.6 m): on the hull again, pitched to the slope there",
+                       segs, info, phis, L - 0.6, 0.05, 0.1, round_hull)
+    pl.rudder_dx = 2.05 - L
+    segs, info = XV.assemble(parts, pl)
+    p2 = check_rudders("on the parallel middle body: on the hull, its sides 3 mm out over the curve",
+                       segs, info, phis, 2.05, 0.05, 0.1, round_hull)
+    check("the pitch follows the hull: changed along the tail, 0 on the middle body, where "
+          "the gap is the thickness's over the curve, r* - sqrt(r*^2 - 3 mm^2)",
+          [abs(p1[0] - p0[0]) > 1.0, p2[0], info["rudder_gap"][0] - (d.r - np.sqrt(d.r ** 2 - 0.003 ** 2))],
+          [1, 0, 0], 1e-9)
+    print(f"       pitch {p0[0]:.2f} deg (TE at the start of the cap), {p1[0]:.2f} deg (L - 0.6 m), "
+          f"{p2[0]:.2f} deg (middle body)")
     e = d.copy()                                                    # an elliptical middle body: 0.4 high, 0.6 wide
     e.curves["nose_rp"], e.curves["tail_rp"] = e.curves["nose_r"].copy(), e.curves["tail_r"].copy()
     e.r, e.rp, e.rpe = 0.2, 0.3, e.re
     hp = {"design": e, "lines": [np.zeros((2, 3))], "problems": []}
+
+    def ellipse(x):
+        return e.radius("r", np.array([x]))[0], e.radius("rp", np.array([x]))[0]
+
     pe = XV.Placement(rudder_dx=2.05 - e.length, rudders=4, rudder_angle=45.0, rudder_scale=0.5)
     segs, info = XV.assemble({"hull": hp, "rudder": FakeRudder.part()}, pe)
-    q_min = []
-    for k in range(4):
-        root = segs["rudders"][2 * k]
-        phi = np.deg2rad(45.0 + 90.0 * k)
-        et = np.array([0.0, -np.cos(phi), np.sin(phi)])
-        dense = np.vstack([root - np.outer(root @ et, et) + np.outer((root @ et) * fi, et)
-                           for fi in np.linspace(-1.0, 1.0, 41)])
-        q_min.append(((dense[:, 1] / 0.3) ** 2 + (dense[:, 2] / 0.2) ** 2).min())
-    check("an elliptical body at 45 deg (the ellipse's own equation): every root point on or outside it, one on it",
-          q_min, 1.0, 1e-9)
+    pm = check_rudders("an elliptical body (0.4 high, 0.6 wide), its middle, 4 rudders from 45 deg: on it (by the "
+                       "ellipse's own equation)", segs, info, phis, 2.05, 0.05, 0.1, ellipse)
+    pe.rudder_dx, pe.rudder_angle = -0.3, 30.0
+    segs, info = XV.assemble({"hull": hp, "rudder": FakeRudder.part()}, pe)
+    pt = check_rudders("its tail (TE at L - 0.3 m), 4 rudders from 30 deg: each on it in its own half-plane",
+                       segs, info, [np.deg2rad(30.0 + 90.0 * k) for k in range(4)], e.length - 0.3, 0.05, 0.1, ellipse)
+    check("the elliptical body: pitch 0 on its middle; on its tail each rudder pitched to the slope under it "
+          "(30 and 120 deg differ, 30 and 210 deg alike)", [max(abs(p) for p in pm), abs(pt[0] - pt[1]) > 0.1,
+                                                         pt[0] - pt[2], pt[1] - pt[3]], [0, 1, 0, 0], 1e-9)
 
 
 def test_parts(hull):
@@ -220,15 +274,29 @@ def test_parts(hull):
     segs, info = XV.assemble(parts, pl)
     L = hull.design.length
     front = min(float(p[:, 0].min()) for p in segs["blades"]) - L
-    le, te = info["rudder_le"], info["rudder_te"]
-    r_le, r_te = hull.design.radius("r", np.array([le, te]))
-    check("the default placement: the root TE a quarter D ahead of the blades; tangent at the root LE (the largest "
-          "radius under it); extruded by the gap to the TE's radius and 2 % of the chord (m, 0.05 mm)",
-          [pl.rudder_dx, info["rudder_root"][0], info["rudder_depth"][0], info["gap"] > 0],
-          [round(min(-hull.design.cap, front - 0.25 * pl.prop_d), 3), r_le, r_le - r_te + XV.ROOT_OVERLAP * (te - le), 1],
-          5e-5)
-    print(f"       the wind-tunnel rudder on SUBOFF: root {1000 * r_le:.1f} mm from the axis, extruded "
-          f"{1000 * info['rudder_depth'][0]:.1f} mm inwards")
+    d = hull.design
+    a, ec, eh, et = info["rudder_frames"][0]
+    root, sc = rp["root"], pl.rudder_scale / 1000.0
+    xa, y0 = rp["root_x"][0], float(root[:, 1].mean())
+    whole = a + np.outer(sc * (root[:, 0] - xa), ec) + np.outer(sc * (root[:, 1] - y0), eh) + np.outer(sc * root[:, 2], et)
+    chord = sc * (rp["root_x"][1] - rp["root_x"][0])
+    x_le, x_te = info["rudder_x_le"][0], info["rudder_x_te"]
+    r_le, r_te = d.radius("r", np.array([x_le, x_te]))
+    gap = gaps_along(whole, eh, lambda p: np.hypot(p[1], p[2]) > d.radius("r", np.array([p[0]]))[0]).max()
+    inner = segs["roots"][0]
+    inside = bool((np.hypot(inner[:, 1], inner[:, 2]) < d.radius("r", inner[:, 0])).all())
+    tip = a + chord * ec
+    check("the default placement: the root TE a quarter D ahead of the blades; the wind-tunnel rudder's root LE and "
+          "TE on SUBOFF, a root chord apart, pitched to the line between them; extruded by the largest gap (found "
+          "here) + 2 % of the chord, inside the hull; clear of the blades",
+          [pl.rudder_dx, np.hypot(a[1], a[2]) - r_le, np.hypot(tip[1], tip[2]) - r_te, tip[0] - x_te,
+           info["rudder_pitch"][0] - np.degrees(np.arctan2(r_le - r_te, x_te - x_le)), info["rudder_gap"][0] - gap,
+           info["rudder_depth"][0] - gap - XV.ROOT_OVERLAP * chord, inside, info["gap"] > 0],
+          [round(min(-d.cap, front - 0.25 * pl.prop_d), 3), 0, 0, 0, 0, 0, 0, 1, 1], 1e-9)
+    print(f"       the wind-tunnel rudder on SUBOFF: root LE at x {x_le:.4f} m, {1000 * r_le:.1f} mm from the axis; "
+          f"TE at x {x_te:.4f} m, {1000 * r_te:.1f} mm; pitched {info['rudder_pitch'][0]:.2f} deg; extruded "
+          f"{1000 * info['rudder_depth'][0]:.1f} mm (largest gap {1000 * gap:.1f} mm); {1000 * info['gap']:.0f} mm "
+          f"clear of the blades")
 
 
 def test_gui():
@@ -266,19 +334,20 @@ def test_gui():
         check("the Vehicle tab: hull, blades and hub, 4 rudders with their root extrusions; the status ok",
               [n["hull"] > 40, n["blades"] > 20, n["hub"], n["rudders"] == 4 * per, 10 <= per <= XV.LOOPS,
                n["roots"], app.status.cget("background") == XT.STATUS["ok"][0]], [1, 1, 14, 1, 1, 4 * 17, 1], 0)
-        reach0 = max(np.hypot(q[:, 1], q[:, 2]).max() for q in app.viewv.col["rudders"]._segments3d)
+        h0 = rudder_height(app, per)
         app.switch("rudder")
-        app.span_box.set(f"{1.5 * app.ad.span:.2f}")
+        span0 = app.ad.span
+        app.span_box.set(f"{1.5 * span0:.2f}")
         app.on_span()
         app.update_views()
         root.update()
-        reach1 = max(np.hypot(q[:, 1], q[:, 2]).max() for q in app.viewv.col["rudders"]._segments3d)
+        h1 = rudder_height(app, per)
         span1 = app.ad.span
-        app.span_box.set(f"{span1 / 1.5:.4f}")
+        app.span_box.set(f"{span0:.5f}")
         app.on_span()
         app.switch("hull")
-        check("the rudder's full height x1.5 in its panel: the vehicle's rudders reach 1.5 x as far from the root",
-              (reach1 - info0_root(app)) / (reach0 - info0_root(app)), 1.5, 2e-3)
+        check("the rudder's full height x1.5 in its panel: the vehicle's rudders 1.5 x as high along their pitched "
+              "height", [h1 / h0 - span1 / span0, abs(span1 / span0 - 1.5) < 1e-4], [0, 1], 1e-9)
         app.vset["rudders"].set(6)
         app.vset["rudder_angle"].set(90)
         app.vshow.set("stern")
@@ -292,6 +361,12 @@ def test_gui():
         check("placement: 6 rudders from 90 deg, the stern; 13 refused (the box shows 6)",
               [app.placement.rudders, app.placement.rudder_angle, app.placement.view == "stern", n6 == 6 * per,
                refused13], [6, 90.0, 1, 1, 1], 0)
+        dx = app.placement.rudder_dx
+        app.vset["rudder_dx"].set(0.05)                             # the root TE behind the hull's end: refused
+        app.on_vehicle()
+        check("a root TE off the hull (x - L above 0) is refused (red), the box shows the x in use",
+              [app.status.cget("background") == XT.STATUS["error"][0], app.placement.rudder_dx - dx,
+               float(app.vset["rudder_dx"].get()) - dx], [1, 0, 0], 1e-12)
         app.switch("blade")
         n_sec = len(app._vehicle_part("blade")["sections"])
         app.nblades.set(7)
@@ -331,10 +406,12 @@ def test_gui():
         os.chdir(cwd)
 
 
-def info0_root(app):
-    """The first rudder's root distance from the axis in the Vehicle tab (m)."""
+def rudder_height(app, per):
+    """The first rudder's height in the Vehicle tab (m): how far its drawn loops (the first `per` of the
+    collection) reach from its root LE along its pitched height (its frame from xgeom_vehicle.assemble)."""
     parts = {k: app._vehicle_part(k) for k in app.kinds if k in app.adapters}
-    return XV.assemble(parts, app.placement)[1]["rudder_root"][0]
+    a, ec, eh, et = XV.assemble(parts, app.placement)[1]["rudder_frames"][0]
+    return max(float(((np.asarray(q) - a) @ eh).max()) for q in app.viewv.col["rudders"]._segments3d[:per])
 
 
 def settle(root):

@@ -68,10 +68,11 @@ XGeom: rudder parametrization, propeller blades and hulls. Updated 8 Oct 2026.
   default half the hull's depth); the rudder root's TE (x - L, default the start of the cap, a quarter D clear of
   the blades), the number of rudders (1 to 12, evenly spaced around the axis; default 4, a cross), the first
   one's angle around the axis (default 180 deg, under the stern), a scale (default 1, mm to m). Each rudder sits
-  tangent to the hull, never inside it: its flat root touches the hull at the highest point under it (every point
-  of the rudder, across its thickness, tested against the hull's elliptical sections), and a copy of the root
-  section extruded inwards by the largest gap under the root plus 2 % of the root chord closes the joint. The
-  whole vehicle or the stern.
+  on the hull and follows its slope: the root's TE on the hull at the x set, its LE on the hull one root chord
+  ahead along the hull's profile at the rudder's angle, the rudder pitched to that line (again whenever it is
+  moved or scaled, or the hull changes); a copy of the root section extruded inwards along the rudder's height
+  by the largest gap under the root (its thickness over the curved hull, a concave profile under the chord) plus
+  2 % of the root chord closes the joint. The whole vehicle or the stern.
 - **Checks**: `_rudder_modify_test.py`, `_xgeom_tool_test.py`, `_xgeom_blade_test.py`, `_xgeom_hull_test.py`,
   `_airfoils_test.py`, `_hull_test.py`, `_hull_modify_test.py`, `_section_fit_test.py`, `_rudder_param_test.py`
   and `_tip_cap_test.py` pass (the window checks with `--gui`).
@@ -102,11 +103,14 @@ XGeom: rudder parametrization, propeller blades and hulls. Updated 8 Oct 2026.
 - Vehicle: choices (user, 8 Oct 2026): one window with the hull, propeller and rudder and a Vehicle tab; the
   placement by a few settings, the rudder under the stern by default; any number of rudders, evenly spaced
   around the axis; the number of blades chosen in the propeller panel. The wind-tunnel rudder at scale 1 and the
-  MSc propeller at D 0.254 m on SUBOFF: the rudder's root TE 97 mm ahead of the end, 64 mm clear of the blades;
-  tangent to the hull at the root LE, 60.8 mm from the axis, the root extruded 34.6 mm inwards (a 31.0 mm gap at
-  the TE). Choices (user, 8 Oct 2026, later): the rudder tangent to the hull, the gap under its flat root closed by
-  the root section extruded inwards; the full rudder height not fixed by the example; at most 7 blades, and only a
-  warning when blades interfere (the hub radius moves the root section).
+  MSc propeller at D 0.254 m on SUBOFF: the rudder's root TE 97 mm ahead of the end (x 4.259 m, 29.8 mm from the
+  axis), its LE at x 4.081 m (60.1 mm), pitched 9.7 deg; the root extruded 11.6 mm inwards (the largest gap
+  8.0 mm: the tail is concave under the root); 61 mm clear of the blades. With the TE 0.45 m from the end the
+  pitch is 19.0 deg (the tail convex there: the root dips up to 0.5 mm into the hull). Choices (user, 8 Oct
+  2026, later): the gap under the flat root closed by the root section extruded inwards; the rudder pitched to the
+  hull's slope, the root's LE and TE both on the hull, following it when moved (it had been kept parallel to
+  the axis, touching at one point); the full rudder height not fixed by the example; at most 7 blades, and only
+  a warning when blades interfere (the hub radius moves the root section).
 - Blade count (the MSc blade as fitted): Z 2 to 7 pass the clearance check (25 mm; 29.6 mm apart at 7) and the
   hub sector. Checked without OCC (the hub sector's grids); the CAD with Z other than 5 is still to be built on the
   user's machine.

@@ -33,17 +33,20 @@ Vehicle
                             the end of the hull (m, negative forward; default 0);
                             D: its diameter in the vehicle, the design scaled to it
                             (default half the hull's depth or breadth, the larger)
-                 rudder     root TE at x - L: the root's trailing edge from the end of
-                            the hull (default the start of the cap, a quarter of the
-                            propeller's D clear of the blades); rudders: how many, 1 to
-                            12, evenly spaced around the axis (default 4, a cross);
-                            first at: the first one's angle around the axis from the
-                            top towards starboard (180 under the stern); scale (1: its
-                            own size, mm to m). Each rudder sits tangent to the hull,
-                            never inside it: its flat root touches the hull at the
-                            highest point under it, and a copy of the root section
-                            extruded inwards (dark orange) closes the gap where the
-                            hull falls away under the root.
+                 rudder     root TE at x - L: where the root's trailing edge sits on
+                            the hull, from its end (m, -L to 0; default the start of
+                            the cap, a quarter of the propeller's D clear of the
+                            blades); rudders: how many, 1 to 12, evenly spaced around
+                            the axis (default 4, a cross); first at: the first one's
+                            angle around the axis from the top towards starboard (180
+                            under the stern); scale (1: its own size, mm to m). Each
+                            rudder sits on the hull and follows its slope: the root's
+                            TE on the hull at x, its LE on the hull one root chord
+                            ahead, the rudder pitched to match (again whenever it is
+                            moved or scaled, or the hull changes); a copy of the root
+                            section extruded inwards along the rudder's height (dark
+                            orange) closes the gaps the flat root leaves on the curved
+                            hull.
                  show       the whole vehicle or its stern (from the start of the tail).
 Left panel (rudder)
     H         the height of the modified region, between its low and high
@@ -680,6 +683,10 @@ class App:
         n_max = self._xv().MAX_RUDDERS
         if new is not None and (new["prop_d"] <= 0.0 or new["rudder_scale"] <= 0.0 or not 1 <= new["rudders"] <= n_max):
             self.say(f"the propeller's D and the rudder's scale are positive; 1 to {n_max} rudders", error=True)
+            new = None
+        L = self.adapters["hull"].design.length if "hull" in self.adapters else None
+        if new is not None and L is not None and not -L <= new["rudder_dx"] <= 0.0:
+            self.say(f"the rudder's root TE sits on the hull: x - L from {-L:.3f} to 0 m", error=True)
             new = None
         if new is not None:
             new["rudder_angle"] %= 360.0

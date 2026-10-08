@@ -10,9 +10,9 @@ Placement (Placement, the Vehicle tab's settings):
                    the hull: x - L (m, negative forward); default 0, the end
     prop_d         the propeller's diameter in the vehicle (m): the blade design is scaled to it; default half the
                    hull's depth or breadth, the larger
-    rudder_dx      the rudder root's trailing edge from the end of the hull: x - L (m); default the end of the tail
-                   (the start of the cap; with no cap 5 % of L ahead of the end), further forward if the blades
-                   reach there: a quarter of the propeller's diameter clear of them
+    rudder_dx      where the rudder root's trailing edge sits on the hull, from its end: x - L (m, -L to 0);
+                   default the end of the tail (the start of the cap; with no cap 5 % of L ahead of the end),
+                   further forward if the blades reach there: a quarter of the propeller's diameter clear of them
     rudder_angle   the first rudder's, around the axis from the top towards starboard (deg): 0 above, 90 to
                    starboard, 180 under the stern (default)
     rudders        how many, 1 to MAX_RUDDERS (12), evenly spaced around the axis (360/N deg apart); default 4,
@@ -21,11 +21,14 @@ Placement (Placement, the Vehicle tab's settings):
     view           "vehicle" the whole of it, "stern" from the start of the tail
 The propeller's frame (para.py's) has x downstream, as the hull's, so it is moved and scaled only. The rudder's
 frame (x chordwise from the LE, y the height from the root, z the thickness) is turned so that its height points
-away from the axis at the angle. Each rudder sits tangent to the hull, never inside it: its flat root is lifted
-until it touches the hull at the highest point under it (place_rudder; every point of the rudder stays outside
-the hull's elliptical sections, surface_height). Where the hull falls away under the flat root (a tapering
-tail), a copy of the root section is extruded inwards, along the rudder's height towards the axis, by the
-largest gap plus ROOT_OVERLAP of the root chord, so the rudder meets the hull with no opening.
+away from the axis at its angle, and pitched in that half-plane so that its root follows the hull (place_rudder):
+the root's TE sits on the hull at the x set and its LE on the hull one root chord ahead, along the hull's profile
+at the rudder's angle (root_on_hull). The pitch, the angle of the root chord to the axis, is the hull's slope
+under the root; it follows whenever the rudder is moved along x or scaled, or the hull changes. The flat root
+still leaves gaps where the hull curves away under it (across its thickness, and along the chord where the
+profile is concave): a copy of the root section is extruded inwards, along the rudder's height, by the largest
+of them plus ROOT_OVERLAP of the root chord (root_gaps), so the rudder meets the hull with no opening. Where the
+profile is convex the root dips a little into the hull between its LE and TE.
 """
 
 from __future__ import annotations
@@ -95,16 +98,17 @@ def blade_part(ad, every=BLADE_EVERY):
 def rudder_part(ad, n=LOOPS, every=2):
     """The rudder (mm, its working frame: x chordwise, y the height, z the thickness): n of the loops of its
     3D sections tab (modified below H, the cut, the original above with the tip and the cap), evenly from the
-    root to the top, every other point; the root's x range (the lowest loop); the design's problems."""
+    root to the top, every other point; the whole root loop (the lowest) and its x range; the design's
+    problems."""
     import rudder_modify as RM
     d, s = ad.design, ad.settings
     problems = RM.design_problems(d, ad.orig, s["n_sections"], s["te_radius_mm"])
     sk = ad.skeleton(problems)
     loops = sorted(sk["modified"] + sk["cut"] + sk["unchanged"], key=lambda lp: float(lp[:, 1].mean()))
+    root = loops[0]
     keep = np.unique(np.linspace(0, len(loops) - 1, min(n, len(loops))).round().astype(int))
     loops = [np.vstack((loops[i][::every], loops[i][:1])) for i in keep]
-    root = loops[0]
-    return {"design": d, "loops": loops, "root_x": (float(root[:, 0].min()), float(root[:, 0].max())),
+    return {"design": d, "loops": loops, "root": root, "root_x": (float(root[:, 0].min()), float(root[:, 0].max())),
             "problems": problems}
 
 
@@ -141,40 +145,110 @@ def surface_height(design, x, w, phi):
     return np.where((r > 0.0) & (rp > 0.0) & (disc >= 0.0), s, np.nan)
 
 
-def place_rudder(design, loops, scale, shift, phi):
-    """One rudder at the angle phi (rad), tangent to the hull: (its loops in the hull's frame (m), the root
-    extrusion's lines, info). loops are the rudder's (mm, its frame), the lowest the root; scale is m per mm,
-    shift the hull's x of the rudder frame's x = 0.
+def root_on_hull(design, x_te, chord, phi, n=400):
+    """The root chord's ends on the hull, in the half-plane of a rudder at the angle phi (rad): the TE on the
+    hull's profile there (surface_distance) at x_te (m), the LE the first point ahead of it along the profile a
+    chord (m) away (n steps from the TE, then Brent's method). Returns (x_le, rho_le, rho_te), rho the distance
+    from the axis. ValueError when x_te is off the hull or the hull ahead of it is shorter than the chord."""
+    from scipy.optimize import brentq
+    if not 0.0 <= x_te <= design.length:
+        raise ValueError(f"the rudder's root TE at x {x_te:.4g} m is off the hull (x 0 to {design.length:.4g} m)")
 
-    Every point of the loops, across its thickness (THICKNESS_FRACTIONS of its z, the chord line included), is
-    tested against surface_height: the root's distance from the axis rho is the smallest that keeps them all on
-    or outside the hull, so the rudder touches the hull at one place. The root section is then copied and
-    extruded inwards by the largest gap under it plus ROOT_OVERLAP of the root chord: the inner copy and lines
-    joining the two at every few points."""
+    def prof(x):
+        return surface_distance(design, np.atleast_1d(np.asarray(x, dtype=float)), phi)
+
+    rho_te = float(prof(x_te)[0])
+
+    def f(x):
+        return (x_te - x) ** 2 + (prof(x) - rho_te) ** 2 - chord ** 2
+
+    xs = np.linspace(x_te, max(x_te - 1.001 * chord, 0.0), n + 1)    # a little past a chord: a flat profile's LE
+    k = np.flatnonzero(f(xs) >= 0.0)
+    if not len(k):
+        raise ValueError(f"the rudder's root chord ({1000 * chord:.1f} mm) is longer than the hull ahead of its TE")
+    x_le = brentq(lambda x: float(f(x)[0]), xs[k[0]], xs[k[0] - 1], xtol=1e-14)
+    return x_le, float(prof(x_le)[0]), rho_te
+
+
+def root_gaps(design, pts, phi, eh, n=64, iterations=32):
+    """The gap under each point (rows, the hull's frame, m) of a rudder at phi (rad), along -eh (its height,
+    inwards): the distance to the hull's surface (surface_height) for a point outside the hull, 0 for one on or
+    inside it, NaN where the line meets no hull before the axis. The first crossing among n steps, then
+    bisection."""
+    er = np.array([0.0, np.sin(phi), np.cos(phi)])
+    et = np.array([0.0, -np.cos(phi), np.sin(phi)])
+    x0, rho0, w = pts[:, 0], pts @ er, pts @ et
+    hx, hr = float(eh[0]), float(eh @ er)
+
+    def g(t, i):                       # > 0 while the point moved by t is outside the hull (no hull: outside)
+        t = np.asarray(t, dtype=float)
+        if t.ndim == 2:
+            v = rho0[i, None] - t * hr - surface_height(design, x0[i, None] - t * hx, w[i, None], phi)
+        else:
+            v = rho0[i] - t * hr - surface_height(design, x0[i] - t * hx, w[i], phi)
+        return np.where(np.isnan(v), np.inf, v)
+
+    allp = np.arange(len(pts))
+    t = np.linspace(0.0, 1.0, n + 1)[None, :] * (np.maximum(rho0, 0.0) / hr)[:, None]
+    inside = g(t, allp) < 0.0
+    first = np.where(inside.any(axis=1), inside.argmax(axis=1), -1)
+    gaps = np.full(len(pts), np.nan)
+    gaps[first == 0] = 0.0
+    i = np.flatnonzero(first > 0)
+    lo, hi = t[i, first[i] - 1], t[i, first[i]]
+    for _ in range(iterations):
+        mid = 0.5 * (lo + hi)
+        out = g(mid, i) >= 0.0
+        lo, hi = np.where(out, mid, lo), np.where(out, hi, mid)
+    gaps[i] = 0.5 * (lo + hi)
+    return gaps
+
+
+def place_rudder(design, loops, scale, x_te, phi, root=None):
+    """One rudder at the angle phi (rad) on the hull: (its loops in the hull's frame (m), the root extrusion's
+    lines, info). loops are the rudder's (mm, its frame), the lowest the root; root the whole root loop (mm;
+    default loops[0]); scale is m per mm; x_te the hull's x of the root's TE (m).
+
+    The root chord (from the root's LE to its TE, the extreme x of the root, at z = 0) goes onto the hull's
+    profile in the rudder's half-plane (root_on_hull): ec along it, eh square to it in that plane and pointing
+    away from the axis (the rudder's height), et the thickness. The pitch is the angle of the root chord to the
+    axis, positive when the hull tapers aft (the rudder then leans aft). The root section is then copied and
+    extruded inwards along eh by the largest gap under it (root_gaps) plus ROOT_OVERLAP of the root chord: the
+    inner copy and lines joining the two at every few points. info: x_le, rho_le, rho_te, pitch (deg), gap and
+    depth (m), dip (m, how far the root lies inside the hull at most, across its thickness), overhang (the
+    fraction of the root with no hull under it), frame (the root LE a, ec, eh, et)."""
+    root = loops[0] if root is None else np.asarray(root, dtype=float)
     er = np.array([0.0, np.sin(phi), np.cos(phi)])
     et = np.array([0.0, -np.cos(phi), np.sin(phi)])
     ex = np.array([1.0, 0.0, 0.0])
-    y0 = float(loops[0][:, 1].mean())                       # the root's height in the rudder frame
-    f = THICKNESS_FRACTIONS
-    pts = np.vstack(loops)
-    x = (shift + scale * pts[:, 0])[:, None] + 0.0 * f[None, :]
-    w = scale * pts[:, 2][:, None] * f[None, :]
-    lift = (scale * (pts[:, 1] - y0))[:, None] + 0.0 * f[None, :]
-    h = surface_height(design, x, w, phi) - lift
-    root = loops[0]
-    xr = (shift + scale * root[:, 0])[:, None] + 0.0 * f[None, :]
-    hr = surface_height(design, xr, scale * root[:, 2][:, None] * f[None, :], phi)
-    chord = scale * float(np.ptp(root[:, 0]))
-    on_hull = bool(np.isfinite(h).any())
-    rho = float(np.nanmax(h)) if on_hull else 0.0
-    depth = float(np.nanmax(rho - hr)) + ROOT_OVERLAP * chord if np.isfinite(hr).any() else 0.0
-    placed = [np.outer(shift + scale * lp[:, 0], ex) + np.outer(rho + scale * (lp[:, 1] - y0), er)
-              + np.outer(scale * lp[:, 2], et) for lp in loops]
+    xa, xb = float(root[:, 0].min()), float(root[:, 0].max())
+    y0 = float(root[:, 1].mean())                           # the root's height in the rudder frame
+    chord = scale * (xb - xa)
+    x_le, rho_le, rho_te = root_on_hull(design, x_te, chord, phi)
+    a = x_le * ex + rho_le * er                             # the root's LE, on the hull
+    ec = ((x_te - x_le) * ex + (rho_te - rho_le) * er) / chord
+    eh = ((rho_le - rho_te) * ex + (x_te - x_le) * er) / chord
+
+    def place(lp):
+        return (a + np.outer(scale * (lp[:, 0] - xa), ec) + np.outer(scale * (lp[:, 1] - y0), eh)
+                + np.outer(scale * lp[:, 2], et))
+
+    placed = [place(lp) for lp in loops]
+    whole = place(root)
+    gaps = root_gaps(design, whole, phi, eh)
+    gap = float(np.nanmax(gaps)) if np.isfinite(gaps).any() else 0.0
+    depth = gap + ROOT_OVERLAP * chord
     base = placed[0]
-    inner = base - depth * er
+    inner = base - depth * eh
     lines = [inner] + [np.array([base[i], inner[i]]) for i in np.linspace(0, len(base) - 1, 16, dtype=int)]
-    info = {"rho": rho, "depth": depth, "gap": depth - ROOT_OVERLAP * chord, "on_hull": on_hull,
-            "overhang": float(np.mean(~np.isfinite(hr).all(axis=1)))}
+    f = THICKNESS_FRACTIONS
+    w = whole @ et
+    h = surface_height(design, whole[:, 0, None] + 0.0 * f[None, :], w[:, None] * f[None, :], phi)
+    inside = h - (whole @ er)[:, None]
+    info = {"x_le": x_le, "rho_le": rho_le, "rho_te": rho_te,
+            "pitch": float(np.degrees(np.arctan2(rho_le - rho_te, x_te - x_le))), "gap": gap, "depth": depth,
+            "dip": max(0.0, float(np.nanmax(inside))) if np.isfinite(inside).any() else 0.0,
+            "overhang": float(np.mean(np.isnan(surface_height(design, whole[:, 0], w, phi)))), "frame": (a, ec, eh, et)}
     return placed, lines, info
 
 
@@ -223,18 +297,24 @@ def assemble(parts, pl):
     ru = parts.get("rudder")
     if ru:
         s = pl.rudder_scale / 1000.0
-        xa, xb = ru["root_x"]
-        shift = L + pl.rudder_dx - s * xb                     # the hull's x of the rudder frame's x = 0
-        placed = []
+        x_te = L + pl.rudder_dx                               # the hull's x of the root's TE
+        placed, first = [], None
         for k in range(int(pl.rudders)):
-            loops, lines, pi = place_rudder(d, ru["loops"], s, shift, np.deg2rad(pl.rudder_angle + 360.0 * k / pl.rudders))
+            phi = np.deg2rad(pl.rudder_angle + 360.0 * k / pl.rudders)
+            if first is not None and d.axisymmetric:          # a round hull: the first rudder turned about x
+                turn = _turn_x(first[3] - phi)
+                loops, lines = [p @ turn for p in first[0]], [p @ turn for p in first[1]]
+                pi = dict(first[2], frame=tuple(v @ turn for v in first[2]["frame"]))
+            else:
+                loops, lines, pi = place_rudder(d, ru["loops"], s, x_te, phi, ru.get("root"))
+                first = first or (loops, lines, pi, phi)
             segs["rudders"] += loops
             segs["roots"] += lines
             placed.append(pi)
-        info.update(rudder_le=shift + s * xa, rudder_te=shift + s * xb, rudder_root=[q["rho"] for q in placed],
-                    rudder_depth=[q["depth"] for q in placed], rudder_gap=[q["gap"] for q in placed],
-                    rudder_on_hull=all(q["on_hull"] for q in placed),
-                    rudder_overhang=max(q["overhang"] for q in placed))
+        info.update(rudder_x_te=x_te, rudder_overhang=max(q["overhang"] for q in placed),
+                    rudder_frames=[q["frame"] for q in placed])
+        info.update({f"rudder_{k}": [q[k] for q in placed]
+                     for k in ("x_le", "rho_le", "rho_te", "pitch", "gap", "depth", "dip")})
     if segs["blades"] and segs["rudders"]:                     # the rudders' aft end inside the propeller's radius
         front = min(float(p[:, 0].min()) for p in segs["blades"])
         q = np.vstack(segs["rudders"])
@@ -299,22 +379,27 @@ class VehicleView:
         if "prop_x" in info:
             lines.append(f"propeller (blue): {info['blades']} blades, D {info['prop_d']:.3f} m (the design's "
                          f"{info['design_d']:.3g} m x {info['prop_scale']:.3f}), plane at x {info['prop_x']:.3f} m")
-        if "rudder_te" in info:
-            n = len(info["rudder_root"])
+        if "rudder_x_te" in info:
+            n = len(info["rudder_pitch"])
 
-            def mm(v):
-                v = 1000.0 * np.array(v)
-                return f"{v[0]:.1f}" if np.ptp(v) < 0.05 else f"{v.min():.1f} to {v.max():.1f}"
+            def rng(v, k, digits):
+                v, fmt = k * np.asarray(v, dtype=float), f"{{:.{digits}f}}"
+                return (fmt.format(v[0]) if np.ptp(v) < 0.5 * 10.0 ** -digits
+                        else f"{fmt.format(v.min())} to {fmt.format(v.max())}")
             where = (", ".join(f"{(pl.rudder_angle + 360.0 * k / n) % 360:g}" for k in range(n)) + " deg" if n <= 4
                      else f"{pl.rudder_angle % 360:g} deg and every {360.0 / n:.4g} deg from there")
-            lines.append(f"{n} rudder{'s' if n > 1 else ''} (orange): root from x {info['rudder_le']:.3f} to "
-                         f"{info['rudder_te']:.3f} m, tangent to the hull at {where}, {mm(info['rudder_root'])} mm "
-                         f"from the axis")
-            lines.append(f"root section extruded {mm(info['rudder_depth'])} mm inwards (dark orange): the gap under "
-                         f"the flat root, {mm(info['rudder_gap'])} mm, and {100 * ROOT_OVERLAP:g} % of the chord "
-                         f"into the hull" + ("" if info["rudder_overhang"] == 0 else
-                                             f"; {100 * info['rudder_overhang']:.0f} % of the root has no hull "
-                                             f"under it"))
+            dip = max(info["rudder_dip"])
+            lines.append(f"{n} rudder{'s' if n > 1 else ''} (orange) at {where}, on the hull: root LE at x "
+                         f"{rng(info['rudder_x_le'], 1, 3)} m, {rng(info['rudder_rho_le'], 1000, 1)} mm from the axis; "
+                         f"TE at x {info['rudder_x_te']:.3f} m, {rng(info['rudder_rho_te'], 1000, 1)} mm")
+            lines.append(f"pitched {rng(info['rudder_pitch'], 1, 1)} deg to the axis: the hull's slope under the root, "
+                         f"also when moved" + (f"; the root dips up to {1000 * dip:.1f} mm into the hull"
+                                               if dip >= 5e-5 else ""))
+            lines.append(f"root section extruded {rng(info['rudder_depth'], 1000, 1)} mm inwards (dark orange): the "
+                         f"largest gap under the root, {rng(info['rudder_gap'], 1000, 1)} mm, and "
+                         f"{100 * ROOT_OVERLAP:g} % of the chord into the hull"
+                         + ("" if info["rudder_overhang"] == 0 else
+                            f"; {100 * info['rudder_overhang']:.0f} % of the root has no hull under it"))
             gap = info.get("gap")
             if gap is not None:
                 lines.append(f"rudder{'s' if n > 1 else ''} to the blades (within their radius): "
