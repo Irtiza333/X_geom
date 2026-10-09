@@ -2,8 +2,9 @@
 xgeom_vehicle.py
 
 The vehicle in the XGeom design tool (xgeom_tool.py, its Vehicle tab): the hull (xgeom_hull) with the propeller
-(xgeom_blade) and the rudder (xgeom_rudder) mounted at its stern, each drawn from its adapter's design as it
-stands. The frame is the hull's: x from the nose aft (m), y to starboard, z up.
+(xgeom_blade) and the rudder (xgeom_rudder) mounted at its stern, the fins and the pair of wings (xgeom_wing) on
+it, each drawn from its adapter's design as it stands. The frame is the hull's: x from the nose aft (m), y to
+starboard, z up.
 
 Placement (Placement, the Vehicle tab's settings):
     prop_dx        the propeller plane (the middle of the hub, where the blades sit) on the axis, from the end of
@@ -15,9 +16,20 @@ Placement (Placement, the Vehicle tab's settings):
                    further forward if the blades reach there: a quarter of the propeller's diameter clear of them
     rudder_angle   the first rudder's, around the axis from the top towards starboard (deg): 0 above, 90 to
                    starboard, 180 under the stern (default)
-    rudders        how many, 1 to MAX_RUDDERS (12), evenly spaced around the axis (360/N deg apart); default 4,
-                   a cross with one under the stern
+    rudders        how many, 0 (none) to MAX_RUDDERS (12), evenly spaced around the axis (360/N deg apart); default
+                   4, a cross with one under the stern
     rudder_scale   the rudder (mm) to the hull's metres: 1 keeps its size (default)
+    fin_x          where the fins' root LE sits on the hull (m from the nose); default a tenth of the way along the
+                   middle body
+    fins           how many, 0 (none) to MAX_RUDDERS, evenly spaced around the axis from fin_angle (deg, as
+                   rudder_angle; default 1 at 0, on top)
+    fin_scale      the fin (mm) to the hull's metres (default 1)
+    wing_x         where the wings' root LE sits on the hull (m from the nose); default a quarter of the way along
+                   the middle body
+    wings          2 (the pair) or 0 (none)
+    wing_angle     the starboard wing's angle around the axis from the top (deg, 0 to 180; default 90, level); the
+                   port wing is its mirror image (y to -y): the same dihedral, camber and pitch on both sides
+    wing_scale     the wing (mm) to the hull's metres (default 1)
     view           "vehicle" the whole of it, "stern" from the start of the tail
 The propeller's frame (para.py's) has x downstream, as the hull's, so it is moved and scaled only. The rudder's
 frame (x chordwise from the LE, y the height from the root, z the thickness) is turned so that its height points
@@ -29,6 +41,11 @@ still leaves gaps where the hull curves away under it (across its thickness, and
 profile is concave): a copy of the root section is extruded inwards, along the rudder's height, by the largest
 of them plus ROOT_OVERLAP of the root chord (root_gaps), so the rudder meets the hull with no opening. Where the
 profile is convex the root dips a little into the hull between its LE and TE.
+Fins and wings sit on the hull the same way, their frame (x chordwise, y the span, z across, positive on the
+cambered side) as the rudder's, the root's LE on the hull at the x set and its TE one root chord aft along the
+profile (root_from_le); their own pitch (the root section's) comes on top of the hull's slope. A wing's z points
+up for any angle between 0 and 180 deg, so the starboard wing's camber and pitch are a wing's; the port wing is
+its mirror image.
 """
 
 from __future__ import annotations
@@ -38,18 +55,23 @@ from dataclasses import dataclass
 import numpy as np
 
 import hull_modify as HM
-from xgeom_common import BLUE, GREY, INK2, ORANGE, fit_box, keep_fitted
+from xgeom_common import AQUA, BLUE, GREY, INK2, ORANGE, fit_box, keep_fitted
 from xgeom_hull import short_ticks
 
 EXTRUSION = "#a8461c"            # the rudders' root extrusions, a darker orange
+VIOLET = "#7d52c6"               # the fins
 COLLECTIONS = (("hull", GREY, 0.5), ("hub", INK2, 0.8), ("blades", BLUE, 0.6), ("rudders", ORANGE, 0.6),
-               ("roots", EXTRUSION, 0.8))
+               ("roots", EXTRUSION, 0.8), ("fins", VIOLET, 0.6), ("fin_roots", "#4a2d82", 0.8),
+               ("wings", AQUA, 0.6), ("wing_roots", "#0b5e43", 0.8))
 ROOT_OVERLAP = 0.02              # the root extrusion reaches this fraction of the root chord into the hull
 THICKNESS_FRACTIONS = np.linspace(-1.0, 1.0, 9)    # across each rudder point's thickness, the chord line included
 LOOPS = 30                       # rudder loops drawn, evenly from the root to the cap
 MAX_RUDDERS = 12
 BLADE_EVERY = 4                  # every 4th section of the XCAD points file (and the last) per blade
-OWNS = {"hull": ("hull",), "blade": ("blades", "hub"), "rudder": ("rudders", "roots")}   # a component's lines
+OWNS = {"hull": ("hull",), "blade": ("blades", "hub"), "rudder": ("rudders", "roots"), "fin": ("fins", "fin_roots"),
+        "wing": ("wings", "wing_roots")}                                                    # a component's lines
+COUNTS = {"rudder": "rudders", "fin": "fins", "wing": "wings"}   # the placement's count of each appendage
+PLACED = ("x_le", "x_te", "rho_le", "rho_te", "pitch", "gap", "depth", "dip")   # per appendage, from place_rudder
 
 
 @dataclass
@@ -60,6 +82,14 @@ class Placement:
     rudder_angle: float = 180.0
     rudders: int = 4
     rudder_scale: float = 1.0
+    fin_x: float = 1.0
+    fins: int = 1
+    fin_angle: float = 0.0
+    fin_scale: float = 1.0
+    wing_x: float = 1.5
+    wings: int = 2
+    wing_angle: float = 90.0
+    wing_scale: float = 1.0
     view: str = "vehicle"
 
 
@@ -112,7 +142,19 @@ def rudder_part(ad, n=LOOPS, every=2):
             "problems": problems}
 
 
-PARTS = {"hull": hull_part, "blade": blade_part, "rudder": rudder_part}
+def wing_part(ad, n=LOOPS):
+    """A wing or a fin (mm, its frame: x chordwise, y the span, z across): n of its sections evenly from the
+    root to the tip, the root section whole, its x range; the design's problems."""
+    import wing_modify as WM
+    d, p = ad.design, ad.params
+    problems, warnings = WM.design_checks(d, p)
+    loops = list(WM.section_loops(d, p, np.linspace(0.0, 1.0, n), 31))
+    root = WM.section_loops(d, p, [0.0])[0]
+    return {"design": d, "loops": loops, "root": root, "root_x": (float(root[:, 0].min()), float(root[:, 0].max())),
+            "problems": problems, "warnings": warnings}
+
+
+PARTS = {"hull": hull_part, "blade": blade_part, "rudder": rudder_part, "fin": wing_part, "wing": wing_part}
 
 
 # --------------------------------------------------------------------------
@@ -170,6 +212,30 @@ def root_on_hull(design, x_te, chord, phi, n=400):
     return x_le, float(prof(x_le)[0]), rho_te
 
 
+def root_from_le(design, x_le, chord, phi, n=400):
+    """root_on_hull from the other end: the LE on the hull's profile at x_le (m), the TE the first point aft of
+    it along the profile a chord away. Returns (x_te, rho_le, rho_te). ValueError when x_le is off the hull or
+    the hull aft of it is shorter than the chord."""
+    from scipy.optimize import brentq
+    if not 0.0 <= x_le <= design.length:
+        raise ValueError(f"the root LE at x {x_le:.4g} m is off the hull (x 0 to {design.length:.4g} m)")
+
+    def prof(x):
+        return surface_distance(design, np.atleast_1d(np.asarray(x, dtype=float)), phi)
+
+    rho_le = float(prof(x_le)[0])
+
+    def f(x):
+        return (x - x_le) ** 2 + (prof(x) - rho_le) ** 2 - chord ** 2
+
+    xs = np.linspace(x_le, min(x_le + 1.001 * chord, design.length), n + 1)
+    k = np.flatnonzero(f(xs) >= 0.0)
+    if not len(k):
+        raise ValueError(f"the root chord ({1000 * chord:.1f} mm) is longer than the hull aft of its LE")
+    x_te = brentq(lambda x: float(f(x)[0]), xs[k[0] - 1], xs[k[0]], xtol=1e-14)
+    return x_te, rho_le, float(prof(x_te)[0])
+
+
 def root_gaps(design, pts, phi, eh, n=64, iterations=32):
     """The gap under each point (rows, the hull's frame, m) of a rudder at phi (rad), along -eh (its height,
     inwards): the distance to the hull's surface (surface_height) for a point outside the hull, 0 for one on or
@@ -204,18 +270,19 @@ def root_gaps(design, pts, phi, eh, n=64, iterations=32):
     return gaps
 
 
-def place_rudder(design, loops, scale, x_te, phi, root=None):
-    """One rudder at the angle phi (rad) on the hull: (its loops in the hull's frame (m), the root extrusion's
-    lines, info). loops are the rudder's (mm, its frame), the lowest the root; root the whole root loop (mm;
-    default loops[0]); scale is m per mm; x_te the hull's x of the root's TE (m).
+def place_rudder(design, loops, scale, x, phi, root=None, lead=False):
+    """One rudder (or fin, or wing) at the angle phi (rad) on the hull: (its loops in the hull's frame (m), the
+    root extrusion's lines, info). loops are the rudder's (mm, its frame), the lowest the root; root the whole
+    root loop (mm; default loops[0]); scale is m per mm; x the hull's x of the root's TE (m), or with lead of
+    its LE (root_from_le).
 
     The root chord (from the root's LE to its TE, the extreme x of the root, at z = 0) goes onto the hull's
     profile in the rudder's half-plane (root_on_hull): ec along it, eh square to it in that plane and pointing
     away from the axis (the rudder's height), et the thickness. The pitch is the angle of the root chord to the
     axis, positive when the hull tapers aft (the rudder then leans aft). The root section is then copied and
     extruded inwards along eh by the largest gap under it (root_gaps) plus ROOT_OVERLAP of the root chord: the
-    inner copy and lines joining the two at every few points. info: x_le, rho_le, rho_te, pitch (deg), gap and
-    depth (m), dip (m, how far the root lies inside the hull at most, across its thickness), overhang (the
+    inner copy and lines joining the two at every few points. info: x_le, x_te, rho_le, rho_te, pitch (deg), gap
+    and depth (m), dip (m, how far the root lies inside the hull at most, across its thickness), overhang (the
     fraction of the root with no hull under it), frame (the root LE a, ec, eh, et)."""
     root = loops[0] if root is None else np.asarray(root, dtype=float)
     er = np.array([0.0, np.sin(phi), np.cos(phi)])
@@ -224,7 +291,12 @@ def place_rudder(design, loops, scale, x_te, phi, root=None):
     xa, xb = float(root[:, 0].min()), float(root[:, 0].max())
     y0 = float(root[:, 1].mean())                           # the root's height in the rudder frame
     chord = scale * (xb - xa)
-    x_le, rho_le, rho_te = root_on_hull(design, x_te, chord, phi)
+    if lead:
+        x_le = x
+        x_te, rho_le, rho_te = root_from_le(design, x, chord, phi)
+    else:
+        x_te = x
+        x_le, rho_le, rho_te = root_on_hull(design, x, chord, phi)
     a = x_le * ex + rho_le * er                             # the root's LE, on the hull
     ec = ((x_te - x_le) * ex + (rho_te - rho_le) * er) / chord
     eh = ((rho_le - rho_te) * ex + (x_te - x_le) * er) / chord
@@ -245,7 +317,7 @@ def place_rudder(design, loops, scale, x_te, phi, root=None):
     w = whole @ et
     h = surface_height(design, whole[:, 0, None] + 0.0 * f[None, :], w[:, None] * f[None, :], phi)
     inside = h - (whole @ er)[:, None]
-    info = {"x_le": x_le, "rho_le": rho_le, "rho_te": rho_te,
+    info = {"x_le": x_le, "x_te": x_te, "rho_le": rho_le, "rho_te": rho_te,
             "pitch": float(np.degrees(np.arctan2(rho_le - rho_te, x_te - x_le))), "gap": gap, "depth": depth,
             "dip": max(0.0, float(np.nanmax(inside))) if np.isfinite(inside).any() else 0.0,
             "overhang": float(np.mean(np.isnan(surface_height(design, whole[:, 0], w, phi)))), "frame": (a, ec, eh, et)}
@@ -268,7 +340,65 @@ def default_placement(parts):
         front = pl.prop_dx + pl.prop_d / b["diameter"] * min(float(sec[:, 0].min()) for sec in b["sections"])
         te = min(te, front - 0.25 * pl.prop_d)
     pl.rudder_dx = round(te, 3)
+    j = d.joins                                               # off the joins of the hull's parts (vehicle_cad)
+    pl.fin_x = round(float(j[1] + 0.1 * (j[2] - j[1])), 3)
+    pl.wing_x = round(float(j[1] + 0.25 * (j[2] - j[1])), 3)
     return pl
+
+
+def placement_problem(pl, length):
+    """What is wrong with a placement (a Placement, or a dict of some of its fields) for a hull of this length
+    (m), or None."""
+    get = pl.get if isinstance(pl, dict) else lambda k: getattr(pl, k, None)
+    for k in ("prop_d", "rudder_scale", "fin_scale", "wing_scale"):
+        if get(k) is not None and not get(k) > 0.0:
+            return "the propeller's D and the scales are positive"
+    for k in ("rudders", "fins"):
+        if get(k) is not None and not 0 <= get(k) <= MAX_RUDDERS:
+            return f"0 to {MAX_RUDDERS} rudders or fins (0: none)"
+    if get("wings") is not None and get("wings") not in (0, 2):
+        return "wings: 2 (the pair) or 0 (none)"
+    if get("rudder_dx") is not None and not -length <= get("rudder_dx") <= 0.0:
+        return f"the rudder's root TE sits on the hull: x - L from {-length:.3f} to 0 m"
+    for k, what in (("fin_x", "fins'"), ("wing_x", "wings'")):
+        if get(k) is not None and not 0.0 <= get(k) <= length:
+            return f"the {what} root LE sits on the hull: x from 0 to {length:.3f} m"
+    if get("wing_angle") is not None and not 0.0 < get("wing_angle") < 180.0:
+        return "the starboard wing's angle lies between 0 and 180 deg (the port wing mirrors it)"
+    return None
+
+
+def active(parts, pl):
+    """The components the placement puts on the vehicle: the hull and the propeller, an appendage when its
+    count is not 0."""
+    return [k for k in parts if k not in COUNTS or getattr(pl, COUNTS[k]) > 0]
+
+
+def _ring(d, part, scale, x, n, angle, lead):
+    """n copies of an appendage evenly around the axis from angle (deg), each on the hull (place_rudder; a
+    round hull: the first turned about x). Returns (loops, lines, the infos)."""
+    loops_all, lines_all, placed, first = [], [], [], None
+    for k in range(int(n)):
+        phi = np.deg2rad(angle + 360.0 * k / n)
+        if first is not None and d.axisymmetric:
+            turn = _turn_x(first[3] - phi)
+            loops, lines = [p @ turn for p in first[0]], [p @ turn for p in first[1]]
+            pi = dict(first[2], frame=tuple(v @ turn for v in first[2]["frame"]))
+        else:
+            loops, lines, pi = place_rudder(d, part["loops"], scale, x, phi, part.get("root"), lead)
+            first = first or (loops, lines, pi, phi)
+        loops_all += loops
+        lines_all += lines
+        placed.append(pi)
+    return loops_all, lines_all, placed
+
+
+def _record(info, kind, placed):
+    """An appendage's place_rudder infos in the view's info: <kind>_frames, <kind>_<q> lists (PLACED),
+    <kind>_overhang the largest."""
+    info[f"{kind}_frames"] = [q["frame"] for q in placed]
+    info[f"{kind}_overhang"] = max(q["overhang"] for q in placed)
+    info.update({f"{kind}_{k}": [q[k] for q in placed] for k in PLACED})
 
 
 def assemble(parts, pl):
@@ -276,7 +406,8 @@ def assemble(parts, pl):
     what the view's text says (info)."""
     d = parts["hull"]["design"]
     L = d.length
-    segs = {"hull": list(parts["hull"]["lines"]), "hub": [], "blades": [], "rudders": [], "roots": []}
+    segs = {k: [] for k, _, _ in COLLECTIONS}
+    segs["hull"] = list(parts["hull"]["lines"])
     info = {"length": L}
     b = parts.get("blade")
     if b:
@@ -295,26 +426,27 @@ def assemble(parts, pl):
                                          [x0 + 0.5 * hh, hr * np.sin(a), hr * np.cos(a)]]))
         info.update(prop_x=x0, prop_scale=s, prop_d=pl.prop_d, design_d=b["diameter"], blades=b["blades"])
     ru = parts.get("rudder")
-    if ru:
-        s = pl.rudder_scale / 1000.0
+    if ru and pl.rudders > 0:
         x_te = L + pl.rudder_dx                               # the hull's x of the root's TE
-        placed, first = [], None
-        for k in range(int(pl.rudders)):
-            phi = np.deg2rad(pl.rudder_angle + 360.0 * k / pl.rudders)
-            if first is not None and d.axisymmetric:          # a round hull: the first rudder turned about x
-                turn = _turn_x(first[3] - phi)
-                loops, lines = [p @ turn for p in first[0]], [p @ turn for p in first[1]]
-                pi = dict(first[2], frame=tuple(v @ turn for v in first[2]["frame"]))
-            else:
-                loops, lines, pi = place_rudder(d, ru["loops"], s, x_te, phi, ru.get("root"))
-                first = first or (loops, lines, pi, phi)
-            segs["rudders"] += loops
-            segs["roots"] += lines
-            placed.append(pi)
-        info.update(rudder_x_te=x_te, rudder_overhang=max(q["overhang"] for q in placed),
-                    rudder_frames=[q["frame"] for q in placed])
-        info.update({f"rudder_{k}": [q[k] for q in placed]
-                     for k in ("x_le", "rho_le", "rho_te", "pitch", "gap", "depth", "dip")})
+        loops, lines, placed = _ring(d, ru, pl.rudder_scale / 1000.0, x_te, pl.rudders, pl.rudder_angle, False)
+        segs["rudders"] += loops
+        segs["roots"] += lines
+        _record(info, "rudder", placed)
+        info["rudder_x_te"] = x_te
+    fi = parts.get("fin")
+    if fi and pl.fins > 0:
+        loops, lines, placed = _ring(d, fi, pl.fin_scale / 1000.0, pl.fin_x, pl.fins, pl.fin_angle, True)
+        segs["fins"] += loops
+        segs["fin_roots"] += lines
+        _record(info, "fin", placed)
+    wi = parts.get("wing")
+    if wi and pl.wings > 0:                                   # the starboard wing and its mirror image
+        loops, lines, pi = place_rudder(d, wi["loops"], pl.wing_scale / 1000.0, pl.wing_x, np.deg2rad(pl.wing_angle),
+                                        wi.get("root"), lead=True)
+        mirror = np.diag([1.0, -1.0, 1.0])
+        segs["wings"] += loops + [p @ mirror for p in loops]
+        segs["wing_roots"] += lines + [p @ mirror for p in lines]
+        _record(info, "wing", [pi])
     if segs["blades"] and segs["rudders"]:                     # the rudders' aft end inside the propeller's radius
         front = min(float(p[:, 0].min()) for p in segs["blades"])
         q = np.vstack(segs["rudders"])
@@ -327,9 +459,15 @@ def assemble(parts, pl):
 # The view
 # --------------------------------------------------------------------------
 
+def _rng(v, k, digits):
+    """The values v times k as one number, or as 'lowest to highest' when they differ at these digits."""
+    v, fmt = k * np.asarray(v, dtype=float), f"{{:.{digits}f}}"
+    return fmt.format(v[0]) if np.ptp(v) < 0.5 * 10.0 ** -digits else f"{fmt.format(v.min())} to {fmt.format(v.max())}"
+
+
 class VehicleView:
-    """The Vehicle tab's 3D view: the hull grey, the propeller blue with its hub, the rudders orange; the
-    component being edited thicker."""
+    """The Vehicle tab's 3D view: the hull grey, the propeller blue with its hub, the rudders orange, the fins
+    violet, the wings green; the component being edited thicker."""
 
     def __init__(self, fig):
         from mpl_toolkits.mplot3d.art3d import Line3DCollection
@@ -379,13 +517,9 @@ class VehicleView:
         if "prop_x" in info:
             lines.append(f"propeller (blue): {info['blades']} blades, D {info['prop_d']:.3f} m (the design's "
                          f"{info['design_d']:.3g} m x {info['prop_scale']:.3f}), plane at x {info['prop_x']:.3f} m")
+        rng = _rng
         if "rudder_x_te" in info:
             n = len(info["rudder_pitch"])
-
-            def rng(v, k, digits):
-                v, fmt = k * np.asarray(v, dtype=float), f"{{:.{digits}f}}"
-                return (fmt.format(v[0]) if np.ptp(v) < 0.5 * 10.0 ** -digits
-                        else f"{fmt.format(v.min())} to {fmt.format(v.max())}")
             where = (", ".join(f"{(pl.rudder_angle + 360.0 * k / n) % 360:g}" for k in range(n)) + " deg" if n <= 4
                      else f"{pl.rudder_angle % 360:g} deg and every {360.0 / n:.4g} deg from there")
             dip = max(info["rudder_dip"])
@@ -404,6 +538,19 @@ class VehicleView:
             if gap is not None:
                 lines.append(f"rudder{'s' if n > 1 else ''} to the blades (within their radius): "
                              + (f"{1000 * gap:.0f} mm clear" if gap >= 0 else f"{-1000 * gap:.0f} mm overlap in x"))
+        if "fin_frames" in info:
+            n = len(info["fin_pitch"])
+            where = (", ".join(f"{(pl.fin_angle + 360.0 * k / n) % 360:g}" for k in range(n)) + " deg" if n <= 4
+                     else f"{pl.fin_angle % 360:g} deg and every {360.0 / n:.4g} deg from there")
+            lines.append(f"{n} fin{'s' if n > 1 else ''} (violet) at {where}: root LE at x {rng(info['fin_x_le'], 1, 3)} "
+                         f"m, TE at x {rng(info['fin_x_te'], 1, 3)} m, pitched {rng(info['fin_pitch'], 1, 1)} deg with "
+                         f"the hull; root extruded {rng(info['fin_depth'], 1000, 1)} mm")
+        if "wing_frames" in info:
+            a = pl.wing_angle
+            lines.append(f"wings (green) at {a:g} and {360 - a:g} deg (port: the mirror image): root LE at x "
+                         f"{info['wing_x_le'][0]:.3f} m, TE at x {info['wing_x_te'][0]:.3f} m, pitched "
+                         f"{info['wing_pitch'][0]:.1f} deg with the hull; root extruded "
+                         f"{1000 * info['wing_depth'][0]:.1f} mm")
         lines.append("the component being edited is drawn thicker; drag to turn")
         self.text.set_text("\n".join(lines))
         return info

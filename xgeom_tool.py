@@ -5,8 +5,8 @@ XGeom design tool: set up a geometry's design space with sliders and see the
 shape change live. The build button writes the case and its CAD; OCC viewer
 shows the solid.
 
-    python xgeom_tool.py                    the vehicle: hull, propeller and rudder in one
-                                            window (the rudder alone where xgeom_hull.py is
+    python xgeom_tool.py                    the vehicle: hull, propeller, rudder, fin and wing in
+                                            one window (the rudder alone where xgeom_hull.py is
                                             not there, as in the Rudder folder)
     python xgeom_tool.py rudder             the rudder alone
     python xgeom_tool.py rudder --space outputs/modified/gui_design_space.json
@@ -17,18 +17,20 @@ shows the solid.
     python xgeom_tool.py blade --space outputs/blade/gui_design_space.json
     python xgeom_tool.py hull               the hull of suboff_hull_params.dat
     python xgeom_tool.py hull --params my_hull.dat
+    python xgeom_tool.py wing               the wing of wing_params.dat (fin: fin_params.dat)
+    python xgeom_tool.py fin --params my_fin.dat
     python xgeom_tool.py vehicle --params my_hull.dat --space outputs/blade/gui_design_space.json
-                                            the vehicle: --params (a hull's or a blade's) and
-                                            --space as often as needed, each goes to its
-                                            component
+                                            the vehicle: --params (a hull's, a blade's, a wing's
+                                            or a fin's) and --space as often as needed, each
+                                            goes to its component
 
 Vehicle
-    Component    the hull, the propeller or the rudder: its left panel and its
-                 Design and 3D sections tabs, as when it is alone; each keeps its
-                 state while another is shown.
-    Vehicle tab  the hull with the propeller and the rudder mounted at its stern
-                 (xgeom_vehicle.py) as their designs stand; the component being
-                 edited is drawn thicker. Placement:
+    Component    the hull, the propeller, the rudder, the fin or the wing: its left
+                 panel and its Design and 3D sections tabs, as when it is alone; each
+                 keeps its state while another is shown.
+    Vehicle tab  the hull with the propeller and the rudder mounted at its stern, the
+                 fins and the pair of wings on it (xgeom_vehicle.py), as their designs
+                 stand; the component being edited is drawn thicker. Placement:
                  propeller  plane at x - L: the middle of the hub on the axis, from
                             the end of the hull (m, negative forward; default 0);
                             D: its diameter in the vehicle, the design scaled to it
@@ -36,8 +38,8 @@ Vehicle
                  rudder     root TE at x - L: where the root's trailing edge sits on
                             the hull, from its end (m, -L to 0; default the start of
                             the cap, a quarter of the propeller's D clear of the
-                            blades); rudders: how many, 1 to 12, evenly spaced around
-                            the axis (default 4, a cross); first at: the first one's
+                            blades); rudders: how many, 0 (none) to 12, evenly spaced
+                            around the axis (default 4, a cross); first at: the first one's
                             angle around the axis from the top towards starboard (180
                             under the stern); scale (1: its own size, mm to m). Each
                             rudder sits on the hull and follows its slope: the root's
@@ -47,6 +49,19 @@ Vehicle
                             section extruded inwards along the rudder's height (dark
                             orange) closes the gaps the flat root leaves on the curved
                             hull.
+                 fins       root LE at x: where the root's leading edge sits on the
+                            hull (m from the nose; default a tenth of the way along the
+                            middle body); fins: how many, 0 to 12, evenly spaced around
+                            the axis (default 1); first at (default 0, on top); scale.
+                            Each sits on the hull as a rudder does, its TE one root
+                            chord aft of its LE along the hull, pitched to the hull's
+                            slope (its own pitch on top), its root extruded inwards.
+                 wings      root LE at x as the fins' (default a quarter of the way
+                            along the middle body); wings: 2 (the pair) or 0 (none);
+                            at: the starboard wing's angle around the axis from the top
+                            (0 to 180 deg; default 90, level); the port wing is its
+                            mirror image (y to -y): the same dihedral, camber and pitch
+                            on both sides; scale.
                  show       the whole vehicle or its stern (from the start of the tail).
                  Vehicle CAD  every component's own case and CAD (as its own button
                             writes them, the case named in the left panel), then the
@@ -54,9 +69,11 @@ Vehicle
                             (vehicle_cad.py): outputs/vehicle/<case>_vehicle.step (one
                             solid, mm, the hull's frame), <case>_vehicle_parts.step (the
                             parts placed, not fused) and <case>_vehicle.json (the
-                            placement). Each rudder is its lofted XCAD solid with the
-                            root extrusion; the propeller its blades, closed at the root
-                            on the hub cylinder, and the hub. A few minutes (the
+                            placement). Each rudder, fin and wing is its lofted XCAD
+                            solid with the root extrusion (standing 0.2 mm off the hull
+                            on it, so that the fuse is clean); the propeller its blades,
+                            closed at the root on the hub cylinder, and the hub. A
+                            component whose count is 0 is not built. A few minutes (the
                             propeller's CAD takes most); needs pythonocc-core.
 Left panel (rudder)
     H         the height of the modified region, between its low and high
@@ -122,6 +139,21 @@ Left panel (hull)
               and its control values; the two control points at the middle body
               are pinned (r* with zero slope there). A new number of control
               points refits the curve as for the blade.
+Left panel (wing, fin)
+    Parameter file
+              the wing's (or fin's) spanwise table (wing_modify.py: the span, the
+              airfoil by name, the pitch axis, and per row the chord, sweep, rake
+              (dihedral), pitch, t/c and f/c). Load and Save as for the blade.
+    Span and sections
+              the span (mm; the curves stretch over it); the sections of the XCAD
+              file (evenly from the root to the flat tip); change points: how many
+              Bezier points along the chord change the thickness and the camber
+              line (0 to 8; their curves dt and dc; more of them keep the shape).
+    Distributions
+              pick chord, sweep, rake, pitch, thickness or camber, or a change dt1
+              .. dc8, to edit its curve over the span, 1 or 2 segments as the
+              blade's. The root's sweep and rake are pinned at 0: the root's LE is
+              the origin.
 Each variable:  free | name | low | slider | high | value | where
     free      ticked: a design variable within low .. high; unticked: held
     d         the position of a control point, as the fraction d of the span
@@ -130,8 +162,10 @@ Each variable:  free | name | low | slider | high | value | where
     dx        rudder LE control point: x offset from the original LE, mm (negative forward)
     value     rudder: a section coordinate, fraction of the sharp chord;
               blade: the distribution's value (P/D, c/D, t/c, f/c, deg, rake/D);
-              hull: a lengths or a radius (m), an exponent or a CST coefficient
-    where     rudder: the height; blade: r/R; hull: the x it sits at (m)
+              hull: a lengths or a radius (m), an exponent or a CST coefficient;
+              wing, fin: mm, deg, t/c, f/c, a change in fractions of the chord
+    where     rudder: the height; blade: r/R; hull: the x it sits at (m); wing,
+              fin: y along the span (mm), the planform area for the span
 Right panel
     Design       rudder: planform, the picked curve against the original, and in
                  3D five sections from the root to H with their control polygons
@@ -139,26 +173,31 @@ Right panel
                  expanded outline, the picked curve against the parameter file,
                  and in 3D the blade as the CAD builds it. Hull: the half-profiles
                  of the whole hull, the picked curve's part against the parameter
-                 file, and the hull in 3D. The blade's and the hull's 2D plots
-                 have r/R and x across; the rudder's are drawn as it stands (x, or
-                 the curve's value, across and the height up). Drag the 3D view to
-                 turn it.
+                 file, and the hull in 3D. Wing, fin: planform, front view, the
+                 picked curve against the parameter file, the wing in 3D and its
+                 sections over the chord (dotted: without the changes). The
+                 blade's and the hull's 2D plots have r/R and x across; the
+                 rudder's, the wing's and the fin's are drawn as the rudder stands
+                 (x, or the curve's value, across and the height or span up). Drag
+                 the 3D view to turn it.
     3D sections  the whole rudder as its sections: modified (blue), the cut at H
                  (red), unchanged (grey); all blades of the propeller; the hull's
-                 sections by part.
+                 sections by part; the wing's or fin's XCAD sections.
 Save set-up writes the design space as it stands (every variable with its value,
 bounds and free flag, each curve's control points and order, the settings and
 input files) to <output folder>/<case>_design_space.json; rudder_modify.
-load_design_space, blade_modify.load_blade_space or hull_modify.load_hull_space
-reads it for the optimiser, --space for the tool.
+load_design_space, blade_modify.load_blade_space, hull_modify.load_hull_space or
+wing_modify.load_wing_space reads it for the optimiser, --space for the tool.
 The build button builds the component of its panel (in the vehicle its text
 names it): XCAD (rudder) writes the case to the output folder (XCAD file, section
 table, design and the same set-up JSON), lofts the XCAD file into a solid and
 writes it as STEP. CAD (blade) writes the case (parameter file, XCAD points,
 design and set-up JSON) and the DRDC five-surface blade with the hub sector as
 IGES and STEP. CAD (hull) writes the case (parameter file, design and set-up
-JSON, stations, hydrostatics, section points, check plot) and the STEP. OCC
-viewer opens the last STEP (needs pythonocc-core). Every build's outcome (and
+JSON, stations, hydrostatics, section points, check plot) and the STEP. CAD
+(wing, fin) writes the case (parameter file, XCAD file, sections table, design
+and set-up JSON, check plot) to outputs/wing or outputs/fin and the loft of the
+XCAD file as STEP. OCC viewer opens the last STEP (needs pythonocc-core). Every build's outcome (and
 the error of a failed one) is added to outputs/xgeom_tool_log.txt.
 The bar at the bottom: green ok, amber a build running (the build button counts
 the seconds), orange a warning (e.g. blades closer than the clearance; the
@@ -198,9 +237,11 @@ from matplotlib.figure import Figure                                 # noqa: E40
 from xgeom_common import Row                                         # noqa: E402
 
 ADAPTERS = {"rudder": ("xgeom_rudder", "RudderAdapter"), "blade": ("xgeom_blade", "BladeAdapter"),
-            "hull": ("xgeom_hull", "HullAdapter")}
-VEHICLE = ("hull", "blade", "rudder")              # the vehicle's components, in the switcher's order
-NAMES = {"hull": "Hull", "blade": "Propeller", "rudder": "Rudder"}
+            "hull": ("xgeom_hull", "HullAdapter"), "wing": ("xgeom_wing", "WingAdapter"),
+            "fin": ("xgeom_wing", "FinAdapter")}
+VEHICLE = ("hull", "blade", "rudder", "fin", "wing")   # the vehicle's components, in the switcher's order
+NAMES = {"hull": "Hull", "blade": "Propeller", "rudder": "Rudder", "fin": "Fin", "wing": "Wing"}
+COUNTS = ("rudders", "fins", "wings")              # the Vehicle tab's whole numbers
 INK2, RED = "#52514e", "#e34948"
 STATUS = {"ok": ("#dfeedd", "black"), "busy": ("#f6d58e", "black"), "warn": ("#f0a35e", "black"),
           "error": ("#c62f2e", "white")}                                                     # bar colours
@@ -226,7 +267,7 @@ def file_kind(path):
             return json.load(fh).get("geometry")
     with open(path) as fh:
         first = fh.readline().lower()
-    return "hull" if "hull" in first else "blade" if "blade" in first else None
+    return next((k for k in ("hull", "blade", "fin", "wing") if k in first), None)
 
 
 class VarRow:
@@ -449,12 +490,21 @@ class App:
         bar = ttk.Frame(tab)
         bar.pack(fill="x", side="top", padx=6, pady=(6, 2))
         num = dict(from_=-100.0, to=100.0, increment=0.005, width=8)
-        rows = (("Propeller", (("prop_dx", "plane at x - L (m)", num),
+        angle = dict(from_=-360.0, to=720.0, increment=15.0, width=6)
+        scale = dict(from_=0.01, to=100.0, increment=0.05, width=6)
+        count = dict(from_=0, to=XV.MAX_RUDDERS, increment=1, width=4)
+        rows = [("Propeller", (("prop_dx", "plane at x - L (m)", num),
                                ("prop_d", "D (m)", dict(num, from_=0.001))), "show"),
-                ("Rudder", (("rudder_dx", "root TE at x - L (m)", num),
-                            ("rudders", "rudders", dict(from_=1, to=XV.MAX_RUDDERS, increment=1, width=4)),
-                            ("rudder_angle", "first at (deg)", dict(from_=-360.0, to=720.0, increment=15.0, width=6)),
-                            ("rudder_scale", "scale", dict(from_=0.01, to=100.0, increment=0.05, width=6))), None))
+                ("Rudder", (("rudder_dx", "root TE at x - L (m)", num), ("rudders", "rudders", count),
+                            ("rudder_angle", "first at (deg)", angle), ("rudder_scale", "scale", scale)), None)]
+        if "fin" in self.kinds:
+            rows.append(("Fin", (("fin_x", "root LE at x (m)", dict(num, from_=0.0)), ("fins", "fins", count),
+                                 ("fin_angle", "first at (deg)", angle), ("fin_scale", "scale", scale)), None))
+        if "wing" in self.kinds:
+            rows.append(("Wing", (("wing_x", "root LE at x (m)", dict(num, from_=0.0)),
+                                  ("wings", "wings", dict(count, to=2, increment=2)),
+                                  ("wing_angle", "at (deg)", dict(angle, from_=1.0, to=179.0)),
+                                  ("wing_scale", "scale", scale)), None))
         self.vset = {}
         for r, (title, items, extra) in enumerate(rows):
             ttk.Label(bar, text=title, font=("TkDefaultFont", 10, "bold")).grid(row=r, column=0, sticky="w")
@@ -694,6 +744,30 @@ class App:
                 self._note = f"full height {self.ad.span:.2f} mm: the rudder stretched by {r:.4g} in height"
         self.span_box.set(f"{self.ad.span:.2f}")
 
+    def on_wing_sections(self, _event=None):
+        """Wing, fin: the number of sections and of change points from the Span and sections box."""
+        ad = self.ad
+        try:
+            n, k = int(self.wsec["sections"].get()), int(self.wsec["changes"].get())
+        except ValueError:
+            n = k = None
+        except tk.TclError:                                          # the box is gone (panel rebuilt)
+            return
+        if n is not None and n != ad.settings["sections"]:
+            if self.guard(lambda: ad.set_sections(n) or True):
+                self.refresh_labels()
+                self.schedule_update()
+        if k is not None and k != ad.design.changes:
+            msg = self.guard(lambda: ad.set_changes(k))
+            if isinstance(msg, str):                                  # the curves changed: a new panel
+                if self.curve.get() not in ad.names:
+                    self.curve.set(ad.names[0])
+                self.after_change(structure=True)
+                self._note = f"{k} change points: {msg}"
+                return
+        self.wsec["sections"].set(ad.settings["sections"])           # what is used
+        self.wsec["changes"].set(ad.design.changes)
+
     def on_elliptic(self):
         """Hull: elliptical sections (r' of its own) or circular ones."""
         self.guard(lambda: self.ad.set_elliptic(self.elliptic.get()))
@@ -705,21 +779,18 @@ class App:
         if pl is None:
             return
         try:
-            new = {k: float(self.vset[k].get()) for k in ("prop_dx", "prop_d", "rudder_dx", "rudder_angle",
-                                                          "rudder_scale")}
-            new["rudders"] = int(float(self.vset["rudders"].get()))
+            new = {k: int(float(sb.get())) if k in COUNTS else float(sb.get()) for k, sb in self.vset.items()}
         except (ValueError, tk.TclError):
             new = None
-        n_max = self._xv().MAX_RUDDERS
-        if new is not None and (new["prop_d"] <= 0.0 or new["rudder_scale"] <= 0.0 or not 1 <= new["rudders"] <= n_max):
-            self.say(f"the propeller's D and the rudder's scale are positive; 1 to {n_max} rudders", error=True)
-            new = None
-        L = self.adapters["hull"].design.length if "hull" in self.adapters else None
-        if new is not None and L is not None and not -L <= new["rudder_dx"] <= 0.0:
-            self.say(f"the rudder's root TE sits on the hull: x - L from {-L:.3f} to 0 m", error=True)
+        L = self.adapters["hull"].design.length if "hull" in self.adapters else float("inf")
+        problem = None if new is None else self._xv().placement_problem(new, L)
+        if problem:
+            self.say(problem, error=True)
             new = None
         if new is not None:
-            new["rudder_angle"] %= 360.0
+            for k in ("rudder_angle", "fin_angle"):
+                if k in new:
+                    new[k] %= 360.0
             new["view"] = self.vshow.get()
             if any(getattr(pl, k) != v for k, v in new.items()):
                 for k, v in new.items():
@@ -737,8 +808,8 @@ class App:
         pl = self.placement
         for k, sb in self.vset.items():
             v = getattr(pl, k)
-            sb.set(f"{v:d}" if k == "rudders" else f"{v:g}" if k == "rudder_angle" else
-                   f"{v:.2f}" if k == "rudder_scale" else f"{v:.3f}")
+            sb.set(f"{v:d}" if k in COUNTS else f"{v:g}" if k.endswith("_angle") else
+                   f"{v:.2f}" if k.endswith("_scale") else f"{v:.3f}")
         self.vshow.set(pl.view)
 
     def say(self, text, error=False, busy=False, warn=False):
@@ -816,6 +887,7 @@ class App:
             self._fill_vehicle()
         self.viewv.update(parts, self.placement, self.kind)
         self.canvasv.draw_idle()
+        parts = {k: parts[k] for k in XV.active(parts, self.placement)}      # on the vehicle (a count above 0)
         problems = [f"{NAMES[k].lower()}: {q}" for k, part in parts.items() for q in part["problems"]]
         problems += [f"{NAMES[k].lower()} not loaded: {e}" for k, e in self.errors.items()]
         warnings = [f"{NAMES[k].lower()}: {q}" for k, part in parts.items() for q in part.get("warnings", ())]
@@ -870,13 +942,14 @@ class App:
             if "hull" not in self.adapters:
                 raise RuntimeError("the vehicle needs the hull: " + self.errors.get("hull", "not loaded"))
             parts = {k: self._vehicle_part(k) for k in self.kinds if k in self.adapters}
+            if self.placement is None:
+                self.placement = XV.default_placement(parts)
+            placement = dataclasses.replace(self.placement)
+            parts = {k: parts[k] for k in XV.active(parts, placement)}       # a component whose count is 0: none
             problems = [f"{NAMES[k].lower()}: {q}" for k, part in parts.items() for q in part["problems"]]
             if problems:
                 self.say(f"{label}: the vehicle cannot be built: " + problems[0], error=True)
                 return
-            if self.placement is None:
-                self.placement = XV.default_placement(parts)
-            placement = dataclasses.replace(self.placement)
             info = XV.assemble(parts, placement)[1]
             case = self.case.get().strip() or "gui"
             tasks = {k: self.adapters[k].build_task(case) for k in parts}   # the designs as they are now
@@ -1146,7 +1219,67 @@ def hull_panel(app):
         app._pick(grid, i // 2, i % 2, c, text)
 
 
-PANELS = {"rudder": rudder_panel, "blade": blade_panel, "hull": hull_panel}
+def wing_panel(app):
+    """The wing's (or the fin's) boxes: the parameter file, the span and the sections, the distributions and
+    the section changes."""
+    import airfoils
+    import wing_modify as WM
+    ad = app.ad
+    p = ad.params
+    box = ttk.LabelFrame(app.panel, text="Parameter file")
+    box.pack(fill="x", padx=6, pady=4)
+    ttk.Label(box, text=os.path.relpath(p.path, HERE) if p.path.startswith(HERE) else p.path,
+              wraplength=560).pack(anchor="w", padx=4)
+    symmetric = WM.base_shape(p.airfoil, p.camber_xc)[2]["symmetric"]
+    ttk.Label(box, text=f"span {p.span:g} mm, {len(p.eta)} rows, pitch axis at {p.ref_xc:g} of the chord; airfoil "
+                        f"{airfoils.describe(p.airfoil)}"
+                        + (f" (symmetric: f/c scales the NACA 4-digit camber line, its maximum at {p.camber_xc:g} c)"
+                           if symmetric else "") + (f"; {p.changes} change points" if p.changes else ""),
+              foreground=INK2, wraplength=560).pack(anchor="w", padx=4)
+    row = ttk.Frame(box)
+    row.pack(fill="x", pady=3)
+    ttk.Button(row, text="Load ...", command=app.on_load_params).pack(side="left", padx=4)
+    ttk.Button(row, text="Save ...", command=app.on_save_params).pack(side="left")
+    ttk.Label(row, text="the design as a parameter file", foreground=INK2).pack(side="left", padx=6)
+
+    box = ttk.LabelFrame(app.panel, text="Span and sections (the curves stretch over the span)")
+    box.pack(fill="x", padx=6, pady=4)
+    app._header(box)
+    specs = ad.global_rows()
+    for r, spec in enumerate(specs, start=1):
+        app.rows.append(VarRow(app, box, r, spec))
+    row = ttk.Frame(box)
+    row.grid(row=len(specs) + 1, column=0, columnspan=7, sticky="w", padx=2, pady=(4, 2))
+    app.wsec = {}
+    for key, text, kw in (("sections", "sections", dict(from_=3, to=401, width=5)),
+                          ("changes", "change points", dict(from_=0, to=WM.MAX_CHANGES, width=4))):
+        ttk.Label(row, text=text).pack(side="left", padx=(4, 2))
+        sb = ttk.Spinbox(row, command=app.on_wing_sections, **kw)
+        sb.pack(side="left")
+        sb.bind("<Return>", app.on_wing_sections)
+        sb.bind("<FocusOut>", app.on_wing_sections)
+        app.wsec[key] = sb
+    app.wsec["sections"].set(ad.settings["sections"])
+    app.wsec["changes"].set(ad.design.changes)
+    app.sec_info = ttk.Label(box, foreground=INK2, wraplength=560, justify="left")
+    app.sec_info.grid(row=len(specs) + 2, column=0, columnspan=7, sticky="w", padx=4)
+
+    box = ttk.LabelFrame(app.panel, text="Distributions and section changes (pick the curve to edit)")
+    box.pack(fill="x", padx=6, pady=4)
+    grid = ttk.Frame(box)
+    grid.pack(fill="x", padx=4, pady=2)
+    for i, c in enumerate(WM.CURVES):
+        app._pick(grid, i // 3, i % 3, c, f"{c}  {WM.UNITS[c]}")
+    k = ad.design.changes
+    if k:
+        ttk.Label(grid, text="changes along the chord:", foreground=INK2).grid(row=2, column=0, columnspan=3,
+                                                                              sticky="w", pady=(4, 0))
+        for i in range(1, k + 1):
+            app._pick(grid, 2 + i, 0, f"dt{i}", f"dt{i}  thickness")
+            app._pick(grid, 2 + i, 1, f"dc{i}", f"dc{i}  camber")
+
+
+PANELS = {"rudder": rudder_panel, "blade": blade_panel, "hull": hull_panel, "wing": wing_panel, "fin": wing_panel}
 
 
 def main():
@@ -1157,7 +1290,8 @@ def main():
     ap.add_argument("--space", action="append", default=[],
                     help="a <case>_design_space.json to start from (the vehicle: one per component)")
     ap.add_argument("--params", action="append", default=[],
-                    help="the blade's or the hull's parameter file to start from (the vehicle: either, or both)")
+                    help="the blade's, the hull's, the wing's or the fin's parameter file to start from (the "
+                         "vehicle: any of them)")
     args = ap.parse_args()
     if args.geometry == "vehicle" and not available("hull"):
         ap.error("the vehicle needs xgeom_hull.py (the X_geom folder)")

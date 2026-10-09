@@ -11,16 +11,25 @@ y to starboard, z up).
                root extrusion's depth (extended_rudder: the prism's sides and end sewn on in place of the root
                face); each rudder is a copy turned, pitched, scaled and moved so that its root LE sits at the
                vehicle's root LE, its chord along ec, its height along eh and its thickness along et (rudder_trsf)
+    fin, wing  the same from their own STEP solids (wing_modify.write_cad, the same XCAD frame with the span as
+               the height); the port wing is the starboard one mirrored in the plane y = 0 (mirrored)
     propeller  the blade's five DRDC faces (the propeller's STEP: blade_modify.write_cad, X_CAD_new) sewn and
                closed at the root by the piece of the hub cylinder inside the root ring (blade_solid); Z copies
                around the axis fused with the hub cylinder (the hub radius and height: propeller_solid); scaled to
                the vehicle's D and moved to the propeller plane
+Each rudder, fin and wing stands ROOT_LIFT_MM off the hull on its root extrusion (lifted along its height,
+the extrusion that much longer, its inner end where the Vehicle tab has it): where the root lies on the
+hull (along the whole chord on the middle body) the hull would otherwise touch the edge between the root
+extrusion and the lofted faces, and the fuse comes out invalid. The hull now meets the extrusion's side
+walls only. A root LE or TE right on a join of the hull's faces (the ends of the middle body, the start of
+the cap) can leave that part unfused (the report then counts separate solids): moving it a millimetre
+along the hull mends it.
 The placed parts are written as <case>_vehicle_parts.step, read back (they fuse about three times faster so) and
 fused (BRepAlgoAPI_Fuse with a fuzzy value, then ShapeUpgrade_UnifySameDomain); parts that do not touch stay
 separate solids of the result (counted in the report).
 
-run_vehicle (the tool's button) runs each component's own build, writes <case>_vehicle_setup.json (the three
-STEP files and the placement in numbers) and builds the vehicle from it in a process of its own, so the window
+run_vehicle (the tool's button) runs each component's own build, writes <case>_vehicle_setup.json (the
+components' STEP files and the placement in numbers) and builds the vehicle from it in a process of its own, so the window
 stays responsive through the fuse:
 
     python vehicle_cad.py outputs/vehicle/<case>_vehicle_setup.json      the vehicle again from that file
@@ -47,6 +56,7 @@ import xcad_loft as XL
 
 FUZZY_MM = 1.0e-3                  # the fuse's fuzzy value: the sewing tolerance of the blade and the rudder
 SEW_MM = 1.0e-3
+ROOT_LIFT_MM = 0.2                 # each appendage this far off the hull on its root extrusion (the docstring)
 
 
 # --------------------------------------------------------------------------
@@ -193,6 +203,15 @@ def rudder_trsf(frame, scale, xa, y0):
     return m, t
 
 
+def mirrored(shape):
+    """A copy of the shape mirrored in the plane y = 0 (y to -y)."""
+    gp_Trsf, gp_Ax2, gp_Pnt, gp_Dir = XL._occ("gp", "gp_Trsf", "gp_Ax2", "gp_Pnt", "gp_Dir")
+    BRepBuilderAPI_Transform = XL._occ("BRepBuilderAPI", "BRepBuilderAPI_Transform")
+    tr = gp_Trsf()
+    tr.SetMirror(gp_Ax2(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 1.0, 0.0)))
+    return BRepBuilderAPI_Transform(shape, tr, True).Shape()
+
+
 # --------------------------------------------------------------------------
 # The propeller
 # --------------------------------------------------------------------------
@@ -263,21 +282,29 @@ def solid_report(shape):
     return len(_shapes(shape, "SOLID")), is_valid(shape), volume(shape)
 
 
-def place_parts(hull, rudder, propeller, setup):
-    """The parts placed in the vehicle (mm, the hull's frame), by name: 'hull'; 'rudder 1' .. with their root
-    prisms; 'propeller'. rudder: the rudder's solid (XCAD frame, mm); propeller: propeller_solid's (the blade
-    frame, mm); setup: vehicle_setup's placement numbers. A part that is None is left out."""
+def place_parts(hull, rudder, propeller, setup, fin=None, wing=None):
+    """The parts placed in the vehicle (mm, the hull's frame), by name: 'hull'; 'rudder 1' .., 'fin 1' .. and
+    'wing starboard', 'wing port' with their root prisms; 'propeller'. rudder, fin, wing: their solids (XCAD
+    frame, mm); propeller: propeller_solid's (the blade frame, mm); setup: vehicle_setup's placement numbers. A
+    part that is None is left out."""
     out = {}
     if hull is not None:
         out["hull"] = hull
-    ru = setup.get("rudder")
-    if rudder is not None and ru:
-        cache = {}
-        for k, (frame, depth) in enumerate(zip(ru["frames"], ru["depth"])):
-            d = round(1000.0 * depth / ru["scale"], 9)                # the extrusion in the rudder's own mm
+    for kind, solid in (("rudder", rudder), ("fin", fin), ("wing", wing)):
+        rec = setup.get(kind)
+        if solid is None or not rec:
+            continue
+        cache, lift = {}, float(setup.get("root_lift_mm", 0.0))
+        for k, (frame, depth) in enumerate(zip(rec["frames"], rec["depth"])):
+            d = round((1000.0 * depth + lift) / rec["scale"], 9)      # the extrusion in the part's own mm
             if d not in cache:
-                cache[d] = extended_rudder(rudder, d)
-            out[f"rudder {k + 1}"] = transformed(cache[d], *rudder_trsf(frame, ru["scale"], ru["xa"], ru["y0"]))
+                cache[d] = extended_rudder(solid, d)
+            m, t = rudder_trsf(frame, rec["scale"], rec["xa"], rec["y0"])
+            placed = transformed(cache[d], m, t + lift * np.asarray(frame[2], dtype=float))
+            if rec.get("mirror"):
+                out[f"{kind} starboard"], out[f"{kind} port"] = placed, mirrored(placed)
+            else:
+                out[f"{kind} {k + 1}"] = placed
     pr = setup.get("propeller")
     if propeller is not None and pr:
         out["propeller"] = transformed(propeller, pr["scale"] * np.eye(3), [1000.0 * pr["x"], 0.0, 0.0])
@@ -312,28 +339,37 @@ def build_vehicle(out_dir, case, placed):
             "seconds": time.time() - t0}
 
 
-ORDER = ("hull", "rudder", "blade")                 # the components' builds, the quick ones first
-NAMES = {"hull": "hull", "rudder": "rudder", "blade": "propeller"}
+ORDER = ("hull", "rudder", "fin", "wing", "blade")  # the components' builds, the quick ones first
+NAMES = {"hull": "hull", "rudder": "rudder", "fin": "fin", "wing": "wing", "blade": "propeller"}
+APPENDAGES = {"rudder": ("rudder_angle", "rudder_scale"), "fin": ("fin_angle", "fin_scale"),
+              "wing": ("wing_angle", "wing_scale")}
 
 
 def vehicle_setup(case, steps, parts, info, placement):
     """What the vehicle's CAD needs, in numbers (JSON): the case, the components' STEP files (steps, by kind),
-    the placement, and as xgeom_vehicle.assemble has them the rudders' frames, root extrusions and root LE in
-    their own frame, and the propeller's plane, scale, blades and hub (mm in its own frame)."""
+    the placement, and as xgeom_vehicle.assemble has them the rudders', fins' and wings' frames, root
+    extrusions and root LE in their own frame (the wing: the starboard one, 'mirror' for its port copy), and the
+    propeller's plane, scale, blades and hub (mm in its own frame)."""
     out = {"case": case, "written": time.strftime("%d %b %Y %H:%M"),
            "units": "mm, the hull's frame (x aft from the nose, y to starboard, z up)",
            "steps": {NAMES[k]: os.path.abspath(v) for k, v in steps.items()},
-           "placement": dataclasses.asdict(placement)}
-    ru = parts.get("rudder")
-    if "rudder" in steps and ru is not None and "rudder_frames" in info:
-        root = np.asarray(ru["root"], dtype=float)
-        n = len(info["rudder_frames"])
-        out["rudder"] = {"xa": float(root[:, 0].min()), "y0": float(root[:, 1].mean()),
-                         "scale": float(placement.rudder_scale),
-                         "frames": [[np.asarray(v, dtype=float).tolist() for v in f] for f in info["rudder_frames"]],
-                         "depth": [float(v) for v in info["rudder_depth"]], "x_te": float(info["rudder_x_te"]),
-                         "angle_deg": [(placement.rudder_angle + 360.0 * k / n) % 360.0 for k in range(n)],
-                         **{q: [float(v) for v in info[f"rudder_{q}"]] for q in ("x_le", "rho_le", "rho_te", "pitch")}}
+           "placement": dataclasses.asdict(placement), "root_lift_mm": ROOT_LIFT_MM}
+    for kind, (angle_key, scale_key) in APPENDAGES.items():
+        part = parts.get(kind)
+        if kind not in steps or part is None or f"{kind}_frames" not in info:
+            continue
+        root = np.asarray(part["root"], dtype=float)
+        frames = info[f"{kind}_frames"]
+        n, a0 = len(frames), getattr(placement, angle_key)
+        rec = {"xa": float(root[:, 0].min()), "y0": float(root[:, 1].mean()), "scale": float(getattr(placement, scale_key)),
+               "frames": [[np.asarray(v, dtype=float).tolist() for v in f] for f in frames],
+               "depth": [float(v) for v in info[f"{kind}_depth"]],
+               "angle_deg": [(a0 + 360.0 * k / n) % 360.0 for k in range(n)],
+               **{q: [float(v) for v in info[f"{kind}_{q}"]] for q in ("x_le", "rho_le", "rho_te", "pitch")}}
+        rec["x_te"] = float(info["rudder_x_te"]) if kind == "rudder" else [float(v) for v in info[f"{kind}_x_te"]]
+        if kind == "wing":
+            rec["mirror"] = True                                      # the port wing: y to -y
+        out[kind] = rec
     b = parts.get("blade")
     if "blade" in steps and b is not None and "prop_x" in info:
         out["propeller"] = {"x": float(info["prop_x"]), "d": float(info["prop_d"]),
@@ -348,7 +384,8 @@ def build_from_setup(setup, out_dir, progress=print):
     case, steps = setup["case"], setup["steps"]
     progress("the parts as solids")
     hull = _shapes(XL.read_step(steps["hull"]), "SOLID")[0]
-    rudder = _shapes(XL.read_step(steps["rudder"]), "SOLID")[0] if "rudder" in steps and "rudder" in setup else None
+    solid = {k: _shapes(XL.read_step(steps[k]), "SOLID")[0] if k in steps and k in setup else None
+             for k in APPENDAGES}
     propeller = None
     pr = setup.get("propeller")
     if "propeller" in steps and pr:
@@ -356,7 +393,7 @@ def build_from_setup(setup, out_dir, progress=print):
         blade = blade_solid(XL.read_step(steps["propeller"]), pr["hub_radius_mm"])
         propeller = propeller_solid(blade, pr["blades"], pr["hub_radius_mm"], pr["hub_height_mm"])
     progress("the parts placed")
-    placed = place_parts(hull, rudder, propeller, setup)
+    placed = place_parts(hull, solid["rudder"], propeller, setup, solid["fin"], solid["wing"])
     progress(f"the fuse of {len(placed)} parts")
     out = build_vehicle(out_dir, case, placed)
     rec = dict(setup, parts=out["parts"], solids=out["solids"], valid=out["valid"], volume_mm3=out["volume"],

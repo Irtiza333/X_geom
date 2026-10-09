@@ -1,6 +1,6 @@
 # Progress
 
-XGeom: rudder parametrization, propeller blades and hulls. Updated 8 Oct 2026.
+XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 9 Oct 2026.
 
 ## Achieved
 
@@ -49,7 +49,22 @@ XGeom: rudder parametrization, propeller blades and hulls. Updated 8 Oct 2026.
   design as a station table and as JSON, the set-up, stations, hydrostatics, section points, check plot, and
   STEP (one NURBS face per part: the profile B-spline times the rational circle, so sections are exact
   ellipses).
-- **Design tool** (`xgeom_tool.py` with `xgeom_rudder.py`, `xgeom_blade.py` or `xgeom_hull.py`, `xgeom_common.py`,
+- **Wing and fin** (`wing_modify.py`, `wing_params.dat`, `fin_params.dat`): a wing or a fin starts from a parameter
+  file (the span, the airfoil by name, the pitch axis, and per span fraction eta the chord, sweep (x of the LE),
+  rake (z of the LE: the dihedral), pitch (twist), t/c and f/c; optional change columns). Sections: the named
+  airfoil (its thickness with the TE closed, and its camber line; a symmetric airfoil gets the NACA 4-digit camber
+  line, its maximum at `camber_xc`) scaled to t/c and f/c, plus Bezier changes of the thickness and the camber line
+  (Bernstein polynomials of degree k + 1 along the chord, zero at the LE and the TE; k = 3 change points by
+  default, 0 to 8), pitched about the pitch axis (0.25 c by default) and moved by sweep and rake. Design
+  variables: the span (the curves stretch over it) and each distribution and change as a Bezier curve over eta
+  (1 or 2 segments as the blade's; 4 control points, 3 for the changes), the root's sweep and rake pinned at 0.
+  Output (`outputs/wing`, `outputs/fin`): the design as a parameter file and JSON, the set-up, the XCAD file (41
+  sections, 61 points per side), the sections table, the check plot, and the loft of the XCAD file as STEP (the
+  tip flat for now). Example wing: span 200 mm, chord 120 to 70 mm, LE swept 28 mm, 3 deg dihedral, pitch 2 to
+  -1 deg, NACA 2412 thinned to t/c 0.10 and f/c 0.015 at the tip. Example fin: span 220 mm, chord 300 to 220 mm,
+  LE swept 50 mm, NACA 0015.
+- **Design tool** (`xgeom_tool.py` with `xgeom_rudder.py`, `xgeom_blade.py`, `xgeom_hull.py` or `xgeom_wing.py`,
+  `xgeom_common.py`,
   `xcad_loft.py`): sliders for every variable with bounds and free/held flags, the number of control points per
   curve, live 2D and 3D views, Save set-up for the optimiser, the CAD build, OCC viewer. Blade: Load and Save
   parameter files, blade and hub, the number of blades Z (2 to 7, the file's to start with; the clearance check,
@@ -57,33 +72,43 @@ XGeom: rudder parametrization, propeller blades and hulls. Updated 8 Oct 2026.
   in the design vector; blades closer than the clearance give a warning, the CAD is still built), the XCAD
   sections, 1 or 2 segments per curve. Rudder: H and the full height. Hull: Load and Save parameter
   files, the lengths and radii, elliptical sections on or off (r' with radii and curves of its own), each curve's
-  exponent and control values. The build button builds its own panel's component (in the vehicle named after it:
-  CAD hull, CAD propeller, XCAD rudder) and stays in view under the panel; every build's outcome, and a failed
+  exponent and control values. Wing and fin: Load and Save parameter files, the span, the XCAD sections and the
+  change points, 1 or 2 segments per curve; planform, front view, the picked curve, the wing in 3D and its sections
+  over the chord. The build button builds its own panel's component (in the vehicle named after it: CAD hull, CAD
+  propeller, XCAD rudder, CAD fin, CAD wing) and stays in view under the panel; every build's outcome, and a failed
   one's error, goes to `outputs/xgeom_tool_log.txt`. Status bar: green ok, amber while a build runs, orange a
   warning (the build still runs), red for a problem or an error.
   2D plots, in the tool and in the case check plots: the blade's and the hull's have r/R and x across; the
   rudder's planform and curves are drawn as the rudder stands, x (or the curve's value) across and the height up
-  (user, 8 Oct 2026).
+  (user, 8 Oct 2026); the wing's and the fin's the same way, the span up.
 - **Vehicle** (`xgeom_vehicle.py`; `python xgeom_tool.py` in X_geom, the rudder alone in the Rudder folder): one
-  window switching between the hull, propeller and rudder panels (each as when alone, each keeping its state),
-  and a Vehicle tab with the hull, the propeller and the rudder at the stern as their designs stand. Placement:
+  window switching between the hull, propeller, rudder, fin and wing panels (each as when alone, each keeping its
+  state), and a Vehicle tab with them all as their designs stand. Placement:
   the propeller plane on the axis (x - L, default the end) and its D in the vehicle (the blade scaled to it,
   default half the hull's depth); the rudder root's TE (x - L, default the start of the cap, a quarter D clear of
-  the blades), the number of rudders (1 to 12, evenly spaced around the axis; default 4, a cross), the first
+  the blades), the number of rudders (0 to 12, evenly spaced around the axis; default 4, a cross), the first
   one's angle around the axis (default 180 deg, under the stern), a scale (default 1, mm to m). Each rudder sits
   on the hull and follows its slope: the root's TE on the hull at the x set, its LE on the hull one root chord
   ahead along the hull's profile at the rudder's angle, the rudder pitched to that line (again whenever it is
   moved or scaled, or the hull changes); a copy of the root section extruded inwards along the rudder's height
   by the largest gap under the root (its thickness over the curved hull, a concave profile under the chord) plus
-  2 % of the root chord closes the joint. The whole vehicle or the stern. Vehicle CAD (`vehicle_cad.py`): each
+  2 % of the root chord closes the joint. Fins (0 to 12 around the axis; default 1, on top, a tenth of the way
+  along the middle body) and the wing pair (wings 2 or 0; the starboard wing's angle 0 to 180 deg, default 90,
+  level; a quarter of the way along the middle body) sit the same way, their root's LE on the hull at the x set
+  (m from the nose) and the TE one root chord aft along the hull, pitched to the hull's slope (their own pitch on
+  top), the root extruded inwards; the port wing is the starboard one's mirror image (y to -y): the same
+  dihedral, camber and pitch. A count of 0 leaves that component off the vehicle and out of its CAD. The whole
+  vehicle or the stern. Vehicle CAD (`vehicle_cad.py`): each
   component's own case and CAD as its own button writes them, then the parts as solids (the hull's STEP; the
-  rudder's loft with the root extrusion sewn on in place of its root face, placed for each rudder; the blade's
+  rudder's, fin's and wing's loft with the root extrusion sewn on in place of its root face, placed for each
+  copy and standing 0.2 mm off the hull on it, the port wing mirrored; the blade's
   five DRDC faces closed at the root by the hub cylinder inside the root ring, Z copies fused with the hub
   cylinder, scaled and moved), placed as the tab shows them and fused, in a process of its own (the window
   stays responsive): `outputs/vehicle/<case>_vehicle.step` (one solid, mm, the hull's frame),
   `<case>_vehicle_parts.step` (the parts placed, not fused), `<case>_vehicle.json` and `<case>_vehicle_setup.json`
   (`python vehicle_cad.py <setup>` builds the vehicle again from it).
 - **Checks**: `_rudder_modify_test.py`, `_xgeom_tool_test.py`, `_xgeom_blade_test.py`, `_xgeom_hull_test.py`,
+  `_xgeom_wing_test.py`,
   `_airfoils_test.py`, `_hull_test.py`, `_hull_modify_test.py`, `_section_fit_test.py`, `_rudder_param_test.py`
   and `_tip_cap_test.py` pass (the window checks with `--gui`).
 
@@ -127,14 +152,26 @@ XGeom: rudder parametrization, propeller blades and hulls. Updated 8 Oct 2026.
   cloud each panel's build button builds its own component; the user saw only the rudder built (8 Oct 2026), not
   reproduced: the button is now tied to its component, named after it, kept in view, and the log records each
   build.
+- Wing and fin: the example files fit exactly (their distributions are polynomials); an elliptical chord (120 to 60 mm) fits
+  within 0.03 mm at 4 control points. The loft is one valid solid of 4 faces (the two sides, the flat root and
+  tip), its volume the sections' within 3e-4. Choices (user, 8 Oct 2026): a wing or fin starts from a parameter
+  file (example files given); sections a named airfoil with Bezier changes along the chord, each change a curve
+  over the span; wings a mirrored pair at a chosen x and angle, fins like the rudders, both on the hull's slope
+  with the root extrusion; wing tips after this step.
+- Vehicle CAD with 2 fins and the wing pair at 70 deg on SUBOFF (cloud): one valid solid. The fuse came out
+  invalid wherever a root lay along the hull (a wing on the middle body: the hull grazes the edge between the
+  root extrusion and the loft) until each appendage stood 0.2 mm off the hull on its extrusion; a fin's root LE
+  exactly on a join of the hull's faces (the start of the middle body) stayed unfused, so the defaults avoid the
+  joins.
 - Blade count (the MSc blade as fitted): Z 2 to 7 pass the clearance check (25 mm; 29.6 mm apart at 7) and the
   hub sector. Checked without OCC (the hub sector's grids); the CAD with Z other than 5 is still to be built on the
   user's machine.
 
 ## Next steps
 
-- Vehicle: the placement is not loaded back yet (the set-up JSON records it); the sail and the fins; blended wing
-  bodies later.
+- Wings and fins: the tips (next; user, 8 Oct 2026), then a check on the user's machine of the wing, the fin and
+  the vehicle with them (pythonocc-core).
+- Vehicle: the placement is not loaded back yet (the set-up JSON records it); blended wing bodies later.
 - Review the blade in the tool: default segments, orders and free variables (`blade_control.py`); camber and
   rake fit poorly as 2 segments.
 - Optimisation: sample a saved set-up (`load_design_space`, `load_blade_space`, `Initial_sampling.py`), screen
