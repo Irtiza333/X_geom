@@ -6,11 +6,17 @@ blade code. Set the file, the settings and the designs below, then run
 
     python blade_control.py
 
-1. PARAMS is read (the radial table and the globals, see blade_modify) and each
-   distribution (pitch, chord, thickness, camber, skew, rake) is fitted with a
-   Bezier curve over r/R of 1 or 2 segments (SEGMENTS): the starting design,
-   with the blade radius D/2, the hub radius root r/R x D/2 and the file's hub
-   height (hub_new.DEFAULT_HUB_HEIGHT when it gives none).
+1. PARAMS is read (the radial table and the globals, see blade_modify). Its
+   '# vary <name> Y|N [low high]' lines say what changes: each distribution
+   (pitch, chord, thickness, camber, skew, rake) flagged Y is fitted with a
+   Bezier curve over r/R of 1 or 2 segments (SEGMENTS) whose variables are
+   free, within low .. high when given; one flagged N stays exactly as the file
+   has it; radius, hub_radius, hub_height flagged Y are free too. The starting
+   design has the blade radius D/2, the hub radius root r/R x D/2 and the
+   file's hub height (hub_new.DEFAULT_HUB_HEIGHT when it gives none). A file
+   with no vary line: every distribution fitted, FREE below free.
+   Nothing flagged Y: only the original blade is written (case "original",
+   with its CAD); cases() is not used.
 2. Each case in cases() is a design: change the curves (control values,
    positions, weights) or the blade's radius, hub radius and hub height to
    change the blade.
@@ -20,6 +26,8 @@ blade code. Set the file, the settings and the designs below, then run
      <case>_xcad_m.dat       the blade points for XCAD (para.py's sections, 53
                              points each, at settings.sections stations)
      <case>_design.json      the curves, their difference from the file, the checks
+     <case>_design_space.json
+                             the design space (load_blade_space reads it)
      <case>_check.png        the distributions against the file
    and with cad on: <case>.iges (the DRDC five surfaces and the hub sector,
    X_CAD_new.py) and <case>.step (the same shape).
@@ -60,8 +68,8 @@ settings = BladeSettings( # SET PARAMETERS HERE
 SEGMENTS = {}
 # 1-segment curves: number of control points - 1 (not named: 5)
 ORDERS = {}
-# the distributions (and globals "radius", "hub_radius", "hub_height") the design tool starts with as design
-# variables
+# the distributions (and globals "radius", "hub_radius", "hub_height") free when PARAMS has no vary line (with
+# vary lines, the ones flagged Y)
 FREE = ("pitch", "chord")
 
 
@@ -88,16 +96,25 @@ if __name__ == "__main__":
           f"{params.section_path()}")
     for c, (e, rel) in BM.fit_report(params, design).items():
         cu = design.curves[c]
+        if cu.segments == 0:
+            print(f"  {c:9s} as the file has it (vary N)")
+            continue
         form = "2 segments" if cu.segments == 2 else f"1 segment, {cu.order + 1} control points"
         print(f"  {c:9s} {form}: largest difference from the file {e:.2e} {BM.UNITS[c]} "
               f"({100 * rel:.2f} % of its range)")
-    space = BM.BladeSpace(params, design, free=FREE)
+    space = BM.file_space(params, design, FREE)
+    free = BM.vary_free(params)
+    print("changed: " + (", ".join(free) if free else "nothing (every vary line N): the original blade only")
+          if free is not None else f"no vary line in {PARAMS}: FREE ({', '.join(FREE)})")
+    out = BM.outside_bounds(space, design)
+    if out:
+        print("note: the file's blade lies outside the ranges of " + ", ".join(out))
     cad = s.cad and importlib.util.find_spec("OCC") is not None
     if s.cad and not cad:
         print("no pythonocc-core here: the cases are written without the CAD")
     st = {"clearance_mm": s.clearance_mm, "sections": s.sections, "tip_band": s.tip_band,
           "tip_sections": s.tip_sections, "hub": s.hub}
-    for name, d in cases(design).items():
+    for name, d in (cases(design) if free != () else {"original": design}).items():
         res = BM.write_case(OUT_DIR, name, d, params, space, settings=st, plot=s.plot,
                             cad=cad and not BM.design_problems(d, params, s.clearance_mm, hub=s.hub))
         print(f"\n{name}: {res['sections']} sections, blades {res['clearance_mm']:.1f} mm apart"

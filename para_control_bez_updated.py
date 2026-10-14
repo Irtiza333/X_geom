@@ -30,6 +30,17 @@ APPLY_COUPLED_CONSTRAINTS = False
 # 1) chord_p1y_norm + chord_y4_norm <= CHORD_SUM_MAX_NORM
 # 2) pitch_p4x_norm - pitch_p7y_norm <= PITCH_DIFF_MAX_NORM
 
+# para_control: 0 = the original blade (Pitch and ChordLength unchanged), 2 = chord only, 3 = pitch only,
+# 7 = both
+PARA_CONTROL_FLAGS = (0, 2, 3, 7)
+MAX_PITCH = 1.4      # P4's pitch is p1y + (max_pitch - p1y) * pitch_con[1]
+
+
+def para_control_flag(pitch, chord):
+    """para_control from Y/N (True/False) for pitch and chord: both 7, chord only 2, pitch only 3, neither 0
+    (the original blade)."""
+    return {(True, True): 7, (False, True): 2, (True, False): 3, (False, False): 0}[(bool(pitch), bool(chord))]
+
 
 def para_control_bez_updated(
     Pitch,
@@ -43,6 +54,7 @@ def para_control_bez_updated(
     constraint_mode="reject",   # "reject" or "project"
     return_reject_info=False,
     apply_coupled_constraints=None,
+    max_pitch=MAX_PITCH,
 ):
     """
     Parametric control using rational Bézier curves with optional coupled-constraint handling.
@@ -54,9 +66,12 @@ def para_control_bez_updated(
     R_values : array_like
         Fixed normalized radial positions.
     para_control : int
-        2 = chord only, 3 = pitch only, 7 = both.
+        0 = the original blade: Pitch and ChordLength come back unchanged and
+        pitch_con, chord_con are not used; 2 = chord only, 3 = pitch only,
+        7 = both (PARA_CONTROL_FLAGS; para_control_flag gives it from Y/N for
+        pitch and chord).
     pitch_con, chord_con : array_like
-        Design/control variables.
+        Design/control variables (a placeholder for one that is not used).
     case_id : any, optional
         Identifier for the design/case being evaluated.
     reject_log : list, optional
@@ -70,6 +85,9 @@ def para_control_bez_updated(
         When True, enforce chord_sum and pitch_diff coupled limits.
         When False, only per-variable bounds apply (no projection or rejection).
         When None, use module-level APPLY_COUPLED_CONSTRAINTS.
+    max_pitch : float, optional
+        The cap of P4's pitch: y4 = p1y + (max_pitch - p1y) * pitch_con[1]
+        (default MAX_PITCH, 1.4).
 
     Returns
     -------
@@ -80,6 +98,8 @@ def para_control_bez_updated(
 
     if constraint_mode not in {"reject", "project"}:
         raise ValueError("constraint_mode must be 'reject' or 'project'")
+    if para_control not in PARA_CONTROL_FLAGS:
+        raise ValueError("para_control must be 0 (the original blade), 2 (chord), 3 (pitch) or 7 (both)")
 
     use_coupled = (
         APPLY_COUPLED_CONSTRAINTS
@@ -108,6 +128,14 @@ def para_control_bez_updated(
         reject_info["details"][name] = detail_dict
         if constraint_mode == "reject":
             reject_info["rejected"] = True
+
+    # -------------------------
+    # The original blade
+    # -------------------------
+    if para_control == 0:
+        if return_reject_info:
+            return Pitch, ChordLength, chord_con_points, pitch_con_points, reject_info
+        return Pitch, ChordLength, chord_con_points, pitch_con_points
 
     # -------------------------
     # Chord Control
@@ -198,7 +226,6 @@ def para_control_bez_updated(
     if para_control == 3 or para_control == 7:
         pitch_R1 = R_values[0]
         pitch_R7 = R_values[-1]
-        max_pitch = 1.4
 
         # Variables (pitch)
         pitch_p1y = pitch_con[0]

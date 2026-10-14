@@ -1,6 +1,6 @@
 # Progress
 
-XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 9 Oct 2026.
+XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 14 Oct 2026.
 
 ## Achieved
 
@@ -26,6 +26,25 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   its polynomials at 61 stations from `x_blade_new.R_VALUES[0]` (r/R 0.18), hub height 0.625 m (hub_new's).
   XCAD sections (53 points each): their number and how many lie in the tip band, closer together towards the tip
   (default 56, 14 from r/R 0.93, evenly spaced below); the clearance check keeps x_blade_new's stations.
+- **What varies, from the parameter file**: vary lines `# vary <name> Y|N [low high]` for pitch, chord,
+  thickness, camber, skew, rake, radius, hub_radius and hub_height. Y: a design variable (a distribution as a
+  fitted Bezier curve, its variables free; low high bound its control values, or the radius or height); N: kept
+  as the file has it (a distribution exactly, the cubic spline through its rows, `FileCurve`, no variables); a
+  name not listed is N (the reader, `blade_vary.py`, uses the standard library only). Nothing Y: `blade_control.py`
+  writes only the case `original` and its CAD. A file with no vary line: every distribution fitted, `FREE` free,
+  as before. `msc_blade_params.dat`: pitch and chord Y. The
+  same file drives the MSc pipeline: `para_control_bez_updated.py` takes para_control 0 (the original blade: pitch
+  and chord unchanged), 2 (chord), 3 (pitch) or 7 (both), and the cap of P4's pitch (max_pitch, 1.4);
+  `x_blade.py`, `x_blade_new.py`, `X_CAD_new.X_CAD_from_design` and `cad_worker.py` pass both on.
+  `Initial_sampling.py` reads `BLADE_PARAMS` (`msc_blade_params.dat`): pitch and chord Y or N give para_control;
+  a range bounds pitch p1y, p7y and max_pitch, or chord p1y and y4 (the positions, fractions and weights keep the
+  code's bounds); only the flagged parameters' variables are sampled and written (pitch's 6, then chord's 5);
+  nothing Y: the original blade's CAD only (case 0, `geometry/original`).
+- **Pipeline folder** (`Prop_hull`, the CFX campaign: `gp_infill_from_training_data.py`, `run_campaign.py`, mesh,
+  CFX and training scripts): the files it shares with X_geom are kept identical. `Initial_sampling.py` has
+  Prop_hull's campaign changes (`--round r` runs infill mode for round r; case number 100 x round + row,
+  `pipeline_config.case_id`; resumable from the accepted file) and X_geom's vary lines; `pipeline_config.py` is
+  Prop_hull's (`DATA_DIR` Training_3d). Prop_hull also holds `blade_vary.py` and `msc_blade_params.dat`.
 - **Airfoils** (`airfoils.py`, `airfoils/`): the UIUC Airfoil Coordinates Database offline (1,665 Selig-format
   files, `airfoils/index.dat` lists them) and the NACA 4- and 5-digit equations for NACA names without a file. A
   parameter file names its section by `# airfoil <name>` (for example naca2416, clarky) instead of
@@ -70,7 +89,8 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   parameter files, blade and hub, the number of blades Z (2 to 7, the file's to start with; the clearance check,
   the propeller views, the CAD's hub sector, the parameter file written and the set-up follow it; a setting, not
   in the design vector; blades closer than the clearance give a warning, the CAD is still built), the XCAD
-  sections, 1 or 2 segments per curve. Rudder: H and the full height. Hull: Load and Save parameter
+  sections, 1 or 2 segments per curve or the file's own ("file": the vary line N, "(file)" in the picker; Save
+  writes vary lines for the design as it stands). Rudder: H and the full height. Hull: Load and Save parameter
   files, the lengths and radii, elliptical sections on or off (r' with radii and curves of its own), each curve's
   exponent and control values. Wing and fin: Load and Save parameter files, the span, the XCAD sections and the
   change points, 1 or 2 segments per curve; planform, front view, the picked curve, the wing in 3D and its sections
@@ -166,6 +186,16 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
 - Blade count (the MSc blade as fitted): Z 2 to 7 pass the clearance check (25 mm; 29.6 mm apart at 7) and the
   hub sector. Checked without OCC (the hub sector's grids); the CAD with Z other than 5 is still to be built on the
   user's machine.
+- para_control 0: in this repo only the old `para_control.py` had an explicit 0 branch; `para_control_bez.py` and
+  `para_control_bez_updated.py` took 2, 3 and 7 from the first push (14 Sep 2026) and `x_blade.py` fixed 7.
+  Choices (user, 14 Oct 2026): 0 back as the original blade; Y/N flags in the parameter file, read by both the
+  XGeom blade and the MSc pipeline; a flag's bounds as a value range. Every line N: `Initial_sampling.py` writes
+  `geometry/original/sample_blade0.iges` (8 faces; 204 s in the cloud), `blade_control.py` the case `original`.
+- Prop_hull synced (user, 14 Oct 2026): it had changed `Initial_sampling.py` and `pipeline_config.py` (11 Oct);
+  X_geom had changed the vary lines, para_control 0, `para.py` and `blade_surface_new.py` (airfoil by name). The
+  merged `Initial_sampling.py` runs a round in infill mode (cloud, the CAD left out: cases 100 to 102, resumed
+  without repeats). The GP script keeps its own copy of the bounds and 11 variables: ranges on the vary lines,
+  or pitch or chord alone, are not yet seen by it.
 
 ## Next steps
 
@@ -175,7 +205,8 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
 - Review the blade in the tool: default segments, orders and free variables (`blade_control.py`); camber and
   rake fit poorly as 2 segments.
 - Optimisation: sample a saved set-up (`load_design_space`, `load_blade_space`, `Initial_sampling.py`), screen
-  designs with the problem checks, couple to CFD.
+  designs with the problem checks, couple to CFD. `Initial_sampling.py` varies pitch and chord only (x_blade_new's
+  form); other parameters flagged Y are reported, not sampled.
 - Rudder: the tip tilt and cap parameters into the design space; more cap loops if the cap ripples matter.
 - Open items: section-fit bounds (X2 on its bound) and an LE-radius constraint; plain-named rudder outputs are
   overwritten by runs at other heights; Fig. 5 of the plan still labels the tip y = 218.07.

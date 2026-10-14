@@ -17,6 +17,10 @@ Parameter file (.dat; '#' header, np.loadtxt reads the table):
     # root_r         0.18
     # hub_height_m   0.625
     # section_table  airfoil_data_fixed.csv          (or:  # airfoil  naca2416)
+    # vary  pitch       Y  0.6  1.4                   (optional: what changes, below)
+    # vary  chord       Y
+    # vary  thickness   N
+    ...
     # r/R  P/D  c/D  t/c  f/c  skew_deg  rake/D
     0.18000000  1.24135133  0.24524880  0.21585422  0.03041617  0.27575388  0.00001628
     ...
@@ -44,6 +48,17 @@ Parameter file (.dat; '#' header, np.loadtxt reads the table):
                    MaxThickness and MaxCamber)
     skew_deg       skew angle, deg
     rake/D         rake over the diameter
+    vary           which parameters change, one line each: '# vary <name> Y|N [low high]'
+                   (blade_vary.py) with <name> one of pitch, chord, thickness, camber, skew, rake (the
+                   distributions), radius, hub_radius, hub_height (m). Y: a design
+                   variable; low high (optional) the range of its values (every control
+                   value of a distribution, in its units), else default_bounds. N: as the
+                   file has it, a distribution exactly (its cubic spline, FileCurve), a
+                   radius or height held. A name not listed is N. A file with no vary
+                   line: every distribution a fitted Bezier curve and blade_control.FREE
+                   free, as before. Nothing Y: the original blade (blade_control.py writes
+                   it and its CAD only). x_blade_new's pipeline (Initial_sampling.py)
+                   reads the same lines for pitch and chord (para_control).
 
 Between the rows a distribution is the cubic spline through them: the file's
 shape, the reference the design is compared with.
@@ -63,12 +78,14 @@ a change of either radius stretches the curves over the new span. A curve has
     position u4, the fractions d1 (P2 = P3 from P4 towards the root) and d2
     (P5 = P6 from P4 towards the tip), the weights w23 and w56, the values v1
     (root), v4 (P4) and v7 (tip).
+  as the file (FileCurve, vary N): the file's cubic spline over the span, no
+    design variables.
 fit_design fits the curves to the file (positions, weights and values by least
-squares).
+squares); with vary lines only the distributions flagged Y.
 
     params = read_params("msc_blade_params.dat")
-    design, residuals = fit_design(params)                  # every curve 2 segments
-    space = BladeSpace(params, design, free=("pitch", "chord"))
+    design, residuals = fit_design(params)                  # Y curves 2 segments, N as the file
+    space = file_space(params, design)                       # the Y parameters free within their ranges
     x0, bounds = space.to_vector(design), space.bounds      # for the optimiser
     d = space.to_design(x)
     problems = design_problems(d, params)
@@ -96,10 +113,10 @@ from scipy.interpolate import CubicSpline
 from scipy.optimize import least_squares
 from scipy.spatial import cKDTree
 
+from blade_vary import CURVES, GLOBAL_SLOTS, VARY_NAMES, Vary, read_vary   # the names; the vary lines
 from hub_new import DEFAULT_HUB_HEIGHT
 from rudder_modify import Bezier, fit_values, fractions_from_heights, heights_from_fractions, law_basis
 
-CURVES = ("pitch", "chord", "thickness", "camber", "skew", "rake")
 COLUMNS = ("r/R", "P/D", "c/D", "t/c", "f/c", "skew_deg", "rake/D")
 UNITS = dict(zip(CURVES, ("P/D", "c/D", "t/c", "f/c", "deg", "rake/D")))
 DESCRIPTIONS = {
@@ -111,7 +128,6 @@ DESCRIPTIONS = {
     "rake": "rake over the diameter, rake/D",
 }
 GLOBALS = ("diameter_m", "blades", "root_r", "hub_height_m", "section_table", "airfoil")
-GLOBAL_SLOTS = ("radius", "hub_radius", "hub_height")      # the blade's own design variables, m
 DEFAULT_SEGMENTS = 2              # each curve 2 segments (para_control_bez_updated) unless set otherwise
 DEFAULT_ORDER = 5                 # 1 segment: 6 control points
 D_BOUNDS = (0.01, 0.99)           # 1 segment: the position fractions d, in the fit and the design space
@@ -145,6 +161,7 @@ class BladeParams:
     path: str = ""                # the file it was read from ("" when made here)
     hub_height: float = None      # m; None: not in the file (HUB_HEIGHT)
     airfoil: str = None           # an airfoil by name instead of a section table
+    vary: dict = None             # name -> Vary for every VARY_NAMES; None: the file has no vary line
 
     def rows(self):
         """The table rows from the root to the tip; a root between two rows gets
@@ -210,6 +227,19 @@ def _extended(spline, r0, r1):
     return fn
 
 
+def vary_free(params):
+    """The names flagged Y in the parameter file; None when it has no vary line."""
+    if params.vary is None:
+        return None
+    return tuple(n for n in VARY_NAMES if params.vary[n].on)
+
+
+def vary_bounds(params):
+    """{name: (low, high)} of the parameters flagged Y with a range (BladeSpace bounds: a curve's values, or
+    the slot)."""
+    return {n: (v.lo, v.hi) for n, v in (params.vary or {}).items() if v.on and v.lo is not None}
+
+
 def read_params(path):
     """The BladeParams of a parameter file (see the module docstring)."""
     head = {}
@@ -239,7 +269,7 @@ def read_params(path):
     hub_h = float(head["hub_height_m"]) if "hub_height_m" in head else None
     params = BladeParams(float(head["diameter_m"]), int(head["blades"]), root, head.get("section_table", ""), r,
                          {c: tab[:, i + 1] for i, c in enumerate(CURVES)}, os.path.abspath(path), hub_h,
-                         head.get("airfoil"))
+                         head.get("airfoil"), read_vary(path) or None)
     if params.airfoil:
         try:
             params.section_path()                    # the airfoil exists; its table is made
@@ -258,8 +288,9 @@ def with_blades(params, blades):
 
 
 def write_params(path, params, notes=()):
-    """Write a parameter file (read_params reads it back). A section table
-    given by an absolute path is written relative to the new file's folder."""
+    """Write a parameter file (read_params reads it back), its vary lines when
+    it has them. A section table given by an absolute path is written relative
+    to the new file's folder."""
     table = params.section_table
     if os.path.isabs(table) and os.path.exists(table):
         try:
@@ -273,8 +304,15 @@ def write_params(path, params, notes=()):
               f"# root_r         {params.root_r:.10g}"]
     if params.hub_height is not None:
         lines.append(f"# hub_height_m   {params.hub_height:.10g}")
-    lines += [f"# airfoil        {params.airfoil}" if params.airfoil else f"# section_table  {table}",
-              "# " + "  ".join(COLUMNS)]
+    lines.append(f"# airfoil        {params.airfoil}" if params.airfoil else f"# section_table  {table}")
+    if params.vary is not None:
+        lines.append("# Y/N per parameter: Y changes it (a design variable; low high, optional: the range of its "
+                     "values), N keeps it as this file has it")
+        for n in VARY_NAMES:
+            v = params.vary.get(n, Vary(False))
+            lines.append(f"# vary  {n:<11s} {'Y' if v.on else 'N'}"
+                         + (f"  {v.lo:.10g}  {v.hi:.10g}" if v.lo is not None else ""))
+    lines.append("# " + "  ".join(COLUMNS))
     for i, r in enumerate(params.r):
         row = [r] + [params.values[c][i] for c in CURVES]
         lines.append("  ".join(f"{_clean(v):.8f}" for v in row))
@@ -295,18 +333,22 @@ def cosine_stations(r0, r1, n=61):
     return r0 + (r1 - r0) * 0.5 * (1.0 - np.cos(np.pi * np.linspace(0.0, 1.0, int(n))))
 
 
-def msc_params(n=61):
+MSC_VARY = {n: Vary(n in ("pitch", "chord")) for n in VARY_NAMES}   # msc_blade_params.dat: pitch and chord change
+
+
+def msc_params(n=61, vary=None):
     """The MSc blade as the pipeline builds it (the polynomials of x_blade_new.py,
     D = 1.4 m, 5 blades, the root at R_VALUES[0], hub_new's hub height)
     tabulated at n cosine-clustered stations: the cubic splines through them
-    follow the polynomials to 6e-6 of each distribution's range."""
+    follow the polynomials to 6e-6 of each distribution's range. vary: the
+    vary lines (msc_blade_params.dat has MSC_VARY), default none."""
     import x_blade_new as XB
     root = float(XB.R_VALUES[0])
     r = cosine_stations(root, 1.0, n)
     fns = {"pitch": XB.BASE_PITCH, "chord": XB.BASE_CHORD, "thickness": XB.BASE_MAX_THICKNESS,
            "camber": XB.BASE_MAX_CAMBER, "skew": XB.BASE_SKEW_ANGLE, "rake": XB.BASE_RAKE}
     return BladeParams(1.4, 5, root, "airfoil_data_fixed.csv", r, {c: np.asarray(fns[c](r)) for c in CURVES},
-                       hub_height=HUB_HEIGHT)
+                       hub_height=HUB_HEIGHT, vary=copy.deepcopy(vary))
 
 
 # --------------------------------------------------------------------------
@@ -446,13 +488,62 @@ class TwoSegmentCurve:
         return dataclasses.replace(self, v1=self.v1 * f, v4=self.v4 * f, v7=self.v7 * f)
 
 
+@dataclass
+class FileCurve:
+    """A distribution as the parameter file has it (vary N): the cubic spline
+    through its rows (r/R, value), root first, the rows' positions taken as
+    fractions of the span, so a change of either radius stretches it as any
+    curve. No design variables."""
+    r: np.ndarray
+    v: np.ndarray
+    segments = 0
+    order = 0
+
+    @staticmethod
+    def keys_of(order=0):
+        return []
+
+    def keys(self):
+        return []
+
+    def get(self, key):
+        raise KeyError(f"a distribution as the file has it has no variable {key}")
+
+    def key(self):
+        return (0, np.asarray(self.r, dtype=float).tobytes(), np.asarray(self.v, dtype=float).tobytes())
+
+    def radii(self, r0, r1):
+        """The rows' r/R on the span r0 .. r1."""
+        r = np.asarray(self.r, dtype=float)
+        return r0 + (r - r[0]) / (r[-1] - r[0]) * (r1 - r0)
+
+    def ctrl(self, r0, r1):
+        """The rows (r/R, value) on the span r0 .. r1."""
+        return np.column_stack((self.radii(r0, r1), self.v))
+
+    def weights(self):
+        return np.ones(len(self.r))
+
+    def scaled(self, f):
+        """The curve with its values times f."""
+        return FileCurve(np.array(self.r, dtype=float), np.asarray(self.v, dtype=float) * f)
+
+    def prop(self, r0, r1):
+        """The spline as a function of r/R on the span r0 .. r1 (linear beyond it); on the file's own span the
+        same function as BladeParams.spline."""
+        return _extended(CubicSpline(self.radii(r0, r1), np.asarray(self.v, dtype=float)), r0, r1)
+
+
 CURVE_TYPES = {1: BladeCurve, 2: TwoSegmentCurve}
 
 
 def curve_at(curve, r0, r1, r):
     """A curve's values at the r/R in r (clipped to [r0, r1]), any array shape:
-    each segment is solved for the parameter where it passes r."""
+    each segment is solved for the parameter where it passes r (a FileCurve:
+    its spline)."""
     r = np.clip(np.asarray(r, dtype=float), r0, r1)
+    if curve.segments == 0:
+        return np.asarray(curve.prop(r0, r1)(r), dtype=float).reshape(r.shape)
     flat = r.ravel()
     out = np.empty(flat.size)
     left = np.ones(flat.size, dtype=bool)
@@ -500,11 +591,15 @@ class BladeDesign:
         """The distribution as a function of r/R (any array shape), as para.py and
         BladeSurface take them: a cubic spline through the curve at N_SAMPLES
         evenly spaced r/R, continued linearly beyond the root and the tip."""
-        key = (self.r0, self.r1, self.curves[name].key())
+        cu = self.curves[name]
+        key = (self.r0, self.r1, cu.key())
         fn = _PROPS.get(key)
         if fn is None:
-            rr = np.linspace(self.r0, self.r1, N_SAMPLES)
-            fn = _extended(CubicSpline(rr, self.at(name, rr)), self.r0, self.r1)
+            if cu.segments == 0:                    # as the file has it: its own spline
+                fn = cu.prop(self.r0, self.r1)
+            else:
+                rr = np.linspace(self.r0, self.r1, N_SAMPLES)
+                fn = _extended(CubicSpline(rr, self.at(name, rr)), self.r0, self.r1)
             if len(_PROPS) > 200:
                 _PROPS.clear()
             _PROPS[key] = fn
@@ -600,7 +695,10 @@ def fit_two_segment(r, v, r0, r1):
 
 
 def fit_form(r, v, r0, r1, segments, order=DEFAULT_ORDER):
-    """fit_two_segment (segments 2) or fit_curve of the order (segments 1)."""
+    """fit_two_segment (segments 2), fit_curve of the order (segments 1), or
+    the data as it is (segments 0: a FileCurve through it)."""
+    if int(segments) == 0:
+        return FileCurve(np.array(r, dtype=float), np.array(v, dtype=float)), np.zeros(len(r))
     if int(segments) == 2:
         return fit_two_segment(r, v, r0, r1)
     if int(segments) != 1:
@@ -612,14 +710,18 @@ def fit_design(params, orders=None, segments=None):
     """The file's blade as a design: radius D/2, hub radius root r/R x R, the
     hub height of the file (default HUB_HEIGHT), and each distribution's rows
     from the root to the tip fitted by a curve of segments[name] segments
-    (default DEFAULT_SEGMENTS; 1 segment of orders[name], default DEFAULT_ORDER).
-    Returns (design, {curve: residuals at the rows})."""
+    (default DEFAULT_SEGMENTS; 1 segment of orders[name], default DEFAULT_ORDER;
+    0: as the file has it, a FileCurve). A file with vary lines: the
+    distributions flagged N as the file has them, those flagged Y fitted (1 or
+    2 segments). Returns (design, {curve: residuals at the rows})."""
     orders, segments = dict(orders or {}), dict(segments or {})
     r, vals = params.rows()
     curves, res = {}, {}
     for c in CURVES:
-        curves[c], res[c] = fit_form(r, vals[c], r[0], r[-1], segments.get(c, DEFAULT_SEGMENTS),
-                                     orders.get(c, DEFAULT_ORDER))
+        seg = int(segments.get(c, DEFAULT_SEGMENTS))
+        if params.vary is not None:
+            seg = (seg if seg in (1, 2) else DEFAULT_SEGMENTS) if params.vary[c].on else 0
+        curves[c], res[c] = fit_form(r, vals[c], r[0], r[-1], seg, orders.get(c, DEFAULT_ORDER))
     radius = 0.5 * params.diameter
     hub_h = HUB_HEIGHT if params.hub_height is None else params.hub_height
     return BladeDesign(radius, float(r[0]) * radius, float(hub_h), float(r[-1]), curves), res
@@ -628,9 +730,11 @@ def fit_design(params, orders=None, segments=None):
 def refit_curve(design, name, order=None, segments=None, n_samples=None):
     """The design with curve `name` fitted again to its present shape: in
     another form (segments 1 or 2) or, 1 segment, at another order (default:
-    the curve's own, DEFAULT_ORDER coming from 2 segments)."""
+    the curve's own, DEFAULT_ORDER coming from 2 segments or the file's)."""
     cur = design.curves[name]
     seg = cur.segments if segments is None else int(segments)
+    if seg == 0:
+        raise ValueError("the file's own distribution comes from the parameter file: refit_to_file")
     if order is None:
         order = cur.order if cur.segments == 1 else DEFAULT_ORDER
     n = n_samples or (121 if seg == 2 else 401)
@@ -642,8 +746,9 @@ def refit_curve(design, name, order=None, segments=None, n_samples=None):
 
 def refit_to_file(params, design, name, segments, order=DEFAULT_ORDER):
     """The design with curve `name` fitted again to the parameter file's rows,
-    as segments (1: of the order) segments; the file's span mapped onto the
-    design's (fractions of the span, as a change of the radii does)."""
+    as segments (1: of the order) segments, or as the file has it (segments
+    0); the file's span mapped onto the design's (fractions of the span, as a
+    change of the radii does)."""
     r, vals = params.rows()
     rd = design.r0 + (r - r[0]) / (r[-1] - r[0]) * (design.r1 - design.r0)
     out = design.copy()
@@ -703,8 +808,9 @@ class BladeSpace:
     The slots: the globals radius, hub_radius, hub_height (m), then curve by
     curve (CURVES order) its own: 1 segment d1 .. d(m-1) (the fractions that
     place the inner control points), v0 (root) .. vm (tip); 2 segments v1, d1,
-    w23, u4, v4, d2, w56, v7. Names "radius", "pitch.d1", "pitch.v0", ... The
-    curves' forms (segments, order) are the design's.
+    w23, u4, v4, d2, w56, v7; a distribution as the file has it (FileCurve)
+    none. Names "radius", "pitch.d1", "pitch.v0", ... The curves' forms
+    (segments, order; 0 the file's) are the design's.
 
     bounds   overrides of default_bounds by group ("d", "seg.d", "seg.u",
              "seg.w"), curve ("pitch": its values; "pitch.d", "pitch.u",
@@ -719,6 +825,7 @@ class BladeSpace:
         self.params = params
         self.r1 = float(design.r1)
         self.forms = {c: (design.curves[c].segments, design.curves[c].order) for c in CURVES}
+        self.file_curves = {c: design.curves[c] for c in CURVES if design.curves[c].segments == 0}
         b = {**default_bounds(params, design), **(bounds or {})}
         self._slots = [(None, g) for g in GLOBAL_SLOTS]
         for c in CURVES:
@@ -771,6 +878,9 @@ class BladeSpace:
         curves = {}
         for c in CURVES:
             seg, order = self.forms[c]
+            if seg == 0:
+                curves[c] = self.file_curves[c]
+                continue
             cls = CURVE_TYPES[seg]
             curves[c] = cls.from_keys({k: vals[f"{c}.{k}"] for k in cls.keys_of(order)}, order)
         return BladeDesign(vals["radius"], vals["hub_radius"], vals["hub_height"], self.r1, curves)
@@ -797,13 +907,17 @@ class BladeSpace:
     def from_dict(cls, params, rec):
         """(space, design) from to_dict's output. A record from before the
         globals and the 2-segment form (no "forms", "r0" for the root): every
-        curve 1 segment, the globals held at the file's (root r/R the record's)."""
+        curve 1 segment, the globals held at the file's (root r/R the record's).
+        A curve of form 0 is the parameter file's (read again)."""
         slots = rec["slots"]
         forms = rec.get("forms", {})
         radius = 0.5 * params.diameter
         hub_h = HUB_HEIGHT if params.hub_height is None else params.hub_height
 
         def template(c):
+            if int(forms.get(c, 1)) == 0:
+                r, v = params.rows()
+                return FileCurve(r, v[c])
             if int(forms.get(c, 1)) == 2:
                 return TwoSegmentCurve(0.0, 0.5, 1.0, 0.5, 0.0, 0.5, 1.0, 0.0)
             n = int(rec["orders"][c])
@@ -828,7 +942,22 @@ def space_record(space, design, params, settings=None):
             "globals": {"diameter_m": params.diameter, "blades": params.blades, "root_r": params.root_r,
                         "hub_height_m": params.hub_height, "section_table": params.section_table,
                         "airfoil": params.airfoil},
+            "vary": None if params.vary is None else {n: [v.on, v.lo, v.hi] for n, v in params.vary.items()},
             "settings": dict(settings or {}), "space": space.to_dict(design)}
+
+
+def file_space(params, design, free=None):
+    """The design space as the parameter file sets it up: the parameters flagged Y free, within their ranges
+    where the file gives them (default_bounds otherwise); free (names) when the file has no vary line."""
+    names = vary_free(params)
+    return BladeSpace(params, design, bounds=vary_bounds(params), free=names if names is not None else free)
+
+
+def outside_bounds(space, design):
+    """The slots whose value lies outside their bounds (a range in the file may leave the file's own blade
+    outside it)."""
+    vals = space.values(design)
+    return [n for n, (lo, hi) in zip(space.all_names, space.all_bounds) if not lo <= vals[n] <= hi]
 
 
 def load_blade_space(path):
@@ -969,17 +1098,18 @@ def write_points(path, points, per_section=53):
     return path
 
 
-def design_params(design, params, n=101):
+def design_params(design, params, n=101, vary=None):
     """The design as a BladeParams (its curves at n cosine-clustered stations,
     its radius, root and hub height; the airfoil, or the section table by its
-    absolute path when it is found)."""
+    absolute path when it is found; vary, default the file's vary lines)."""
     r = cosine_stations(design.r0, design.r1, n)
     table = params.section_table
     if not params.airfoil:
         table = params.section_path()
         table = os.path.abspath(table) if os.path.exists(table) else params.section_table
     return BladeParams(design.diameter, params.blades, design.r0, table, r, design.values(r),
-                       hub_height=design.hub_height, airfoil=params.airfoil)
+                       hub_height=design.hub_height, airfoil=params.airfoil,
+                       vary=copy.deepcopy(params.vary if vary is None else vary))
 
 
 def design_record(design, params, space=None, problems=(), gap_mm=None, settings=None, warnings=()):
@@ -1084,11 +1214,13 @@ def plot_case(path, case, design, params):
         ax.plot(rf, params.spline(c)(rf), "-", color="#9a9994", lw=1, label="file")
         ax.plot(r, vals[c], ".", color="#52514e", ms=3)
         ax.plot(rr, design.prop(c)(rr), "-", color="#2a78d6", lw=1.8, label="design")
-        p = design.ctrl(c)
-        ax.plot(p[:, 0], p[:, 1], "o--", color="#2a78d6", lw=0.8, ms=4, mfc="white")
+        seg = design.curves[c].segments
+        if seg:
+            p = design.ctrl(c)
+            ax.plot(p[:, 0], p[:, 1], "o--", color="#2a78d6", lw=0.8, ms=4, mfc="white")
         ax.set_xlabel("r/R")
-        ax.set_ylabel(f"{c} ({UNITS[c]}), {design.curves[c].segments} segment"
-                      + ("s" if design.curves[c].segments == 2 else ""))
+        ax.set_ylabel(f"{c} ({UNITS[c]}), " + ("as the file (N)" if seg == 0 else
+                                               f"{seg} segment" + ("s" if seg == 2 else "")))
         ax.grid(True, color="#e4e3df")
     axs.flat[0].legend(fontsize=8)
     fig.suptitle(f"{case}: distributions, design (blue, control polygon dashed) and the parameter file (grey); "

@@ -5,6 +5,16 @@
 # root_r         0.18
 # hub_height_m   0.625
 # section_table  airfoil_data_fixed.csv
+# Y/N per parameter: Y changes it (a design variable; low high, optional: the range of its values), N keeps it as this file has it
+# vary  pitch       N
+# vary  chord       N
+# vary  thickness   N
+# vary  camber      N
+# vary  skew        N
+# vary  rake        N
+# vary  radius      N
+# vary  hub_radius  N
+# vary  hub_height  N
 # r/R  P/D  c/D  t/c  f/c  skew_deg  rake/D
 0.18000000  1.24135133  0.24524880  0.21585422  0.03041617  0.27575388  0.00001628
 0.18056189  1.24132570  0.24568512  0.21498565  0.03051483  0.28000330  0.00008629

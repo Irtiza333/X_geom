@@ -19,8 +19,15 @@ segments (set_segments):
 Each is a design variable or held. A change of either radius stretches the
 curves over the new span. A new form (set_segments) or order (set_order) is
 fitted to the parameter file while none of the curve's variables has changed,
-else to the curve's present shape. load_params reads another parameter file;
-save_params writes the design as one. set_sections sets the sections of the
+else to the curve's present shape. The parameter file's vary lines
+(blade_vary.read_vary) set the start: a distribution flagged N is the file's
+own (form 0, "file": its cubic spline, no variables; 1 or 2 segments make it a
+Bezier curve fitted to the file, its variables free), one flagged Y a Bezier
+curve whose variables are free, within the file's range when given; radius,
+hub radius and hub height flagged Y free. A file with no vary line: every curve
+fitted, blade_control.FREE free. load_params reads another parameter file;
+save_params writes the design as one, with vary lines for it as it stands (Y: a
+curve or global with a free variable). set_sections sets the sections of the
 XCAD points file and the 3D sections tab (blade_modify.section_stations).
 set_blades sets the number of blades Z (2 to 7; the parameter file's by
 default): the clearance check, the propeller views, the CAD's hub sector, the
@@ -54,7 +61,8 @@ TWO_SEGMENT_POINT = {"v1": 0, "d1": 1, "w23": 1, "u4": 3, "v4": 3, "d2": 4, "w56
 
 class BladeAdapter:
     joins = False                 # the curves have no join to switch
-    segment_choice = True         # each curve 1 or 2 segments
+    segment_choice = True         # each curve 1 or 2 segments, or the file's own (0)
+    segment_options = (0, 1, 2)   # 0: as the parameter file has it ("file")
     build_label = "CAD"
 
     def __init__(self, params=None):
@@ -70,7 +78,9 @@ class BladeAdapter:
     # ---------------------------------------------------------------- the file
     def load_params(self, path):
         """Start from a parameter file: its distributions fitted (blade_control's
-        segments and orders), the variables of blade_control.FREE free."""
+        segments and orders) or kept as the file has them (vary N); the
+        variables of the parameters flagged Y free (blade_control.FREE when the
+        file has no vary line)."""
         params = BM.read_params(path)
         design, _ = BM.fit_design(params, self.settings["orders"], self.settings["segments"])
         self.params, self.design, self.meta = params, design, {}
@@ -80,11 +90,30 @@ class BladeAdapter:
         self._original = None
 
     def save_params(self, path):
-        """Write the design as a parameter file (read_params and load_params read it)."""
-        BM.write_params(path, BM.design_params(self.design, self.params),
+        """Write the design as a parameter file (read_params and load_params read it), with vary lines for the
+        design as it stands (vary_state)."""
+        BM.write_params(path, BM.design_params(self.design, self.params, vary=self.vary_state()),
                         notes=(f"written by the design tool from {os.path.basename(self.params.path)}, "
                                f"{time.strftime('%d %b %Y %H:%M')}",))
         return path
+
+    def vary_state(self):
+        """Vary lines for the design as it stands: Y for a curve or global with a free variable (its range when
+        all its values share one), N for the others."""
+        out = {}
+        for n in BM.VARY_NAMES:
+            slots = [n] if n in BM.GLOBAL_SLOTS else [s for s in self.space.all_names if s.startswith(n + ".")]
+            on = any(self.meta[s]["free"] for s in slots)
+            vals = slots if n in BM.GLOBAL_SLOTS else [s for s in slots if s.split(".")[1][0] == "v"]
+            rng = {(self.meta[s]["lo"], self.meta[s]["hi"]) for s in vals}
+            lo, hi = next(iter(rng)) if on and len(rng) == 1 else (None, None)
+            out[n] = BM.Vary(on, lo, hi)
+        return out
+
+    def _free0(self):
+        """The parameters whose variables start free: the file's Y, else blade_control.FREE."""
+        names = BM.vary_free(self.params)
+        return names if names is not None else self.settings["free"]
 
     @property
     def title(self):
@@ -98,8 +127,8 @@ class BladeAdapter:
     def _rebuild(self):
         """The space for the present curves, keeping the bounds and free flags
         of every slot that is still there."""
-        full = BM.BladeSpace(self.params, self.design)
-        free0 = self.settings["free"]
+        full = BM.BladeSpace(self.params, self.design, bounds=BM.vary_bounds(self.params))
+        free0 = self._free0()
         self.meta = {n: self.meta.get(n, {"lo": float(lo), "hi": float(hi), "free": n.split(".")[0] in free0})
                      for n, (lo, hi) in zip(full.all_names, full.all_bounds)}
         self.space = BM.BladeSpace(self.params, self.design,
@@ -151,12 +180,21 @@ class BladeAdapter:
 
     def _refit(self, curve, segments, order):
         """The curve in a new form, its slots renewed (free if any of its slots
-        was): fitted to the parameter file while it is as fitted to it (no
-        variable of it changed since the file was read), else to its present
-        shape. Returns what was done, for the status bar."""
-        was_free = any(m["free"] for n, m in self.meta.items() if n.startswith(curve + "."))
+        was, or if it was the file's own): fitted to the parameter file while it
+        is as fitted to it (no variable of it changed since the file was read),
+        else to its present shape; form 0: the file's own. Returns what was done,
+        for the status bar."""
+        was_free = (self.design.curves[curve].segments == 0
+                    or any(m["free"] for n, m in self.meta.items() if n.startswith(curve + ".")))
         rr = np.linspace(self.design.r0, self.design.r1, 401)
         old = self.design.at(curve, rr)
+        if segments == 0:
+            self.design = BM.refit_to_file(self.params, self.design, curve, 0)
+            for n in [n for n in self.meta if n.startswith(curve + ".")]:
+                del self.meta[n]
+            self.as_fitted.add(curve)
+            self._rebuild()
+            return "as the parameter file has it (vary N): no design variables"
         if curve in self.as_fitted:
             self.design = BM.refit_to_file(self.params, self.design, curve, segments, order)
         else:
@@ -177,6 +215,8 @@ class BladeAdapter:
         """Number of control points of a 1-segment curve = order + 1; the curve
         is fitted again (_refit)."""
         order = int(order)
+        if self.segments(curve) == 0:
+            raise ValueError("the file's own distribution has no control points: 1 or 2 segments first")
         if self.segments(curve) != 1:
             raise ValueError("a 2-segment curve has its 7 control points P1 .. P7")
         if not 1 <= order <= MAX_ORDER:
@@ -191,10 +231,10 @@ class BladeAdapter:
 
     def set_segments(self, curve, n):
         """The curve as 1 segment (blade_control's order) or 2 segments, fitted
-        again (_refit)."""
+        again (_refit), or as the parameter file has it (0)."""
         n = int(n)
-        if n not in (1, 2):
-            raise ValueError("a curve has 1 or 2 segments")
+        if n not in (0, 1, 2):
+            raise ValueError("a curve has 1 or 2 segments, or is the file's own (0)")
         if n == self.segments(curve):
             return "unchanged"
         return self._refit(curve, n, self.settings["orders"].get(curve, BM.DEFAULT_ORDER))
@@ -205,9 +245,12 @@ class BladeAdapter:
         return [Row("var", f"{label} (m)", name, 4) for name, label in GLOBAL_ROWS]
 
     def curve_rows(self, curve):
-        """Rows for the variables of one curve, from the root to the tip."""
+        """Rows for the variables of one curve, from the root to the tip (the file's own: none)."""
         cu = self.design.curves[curve]
         digits = 3 if curve == "skew" else 5
+        if cu.segments == 0:
+            return [Row("pinned", "the file's", text="as the parameter file has it (vary N); 1 or 2 segments make "
+                                                     "it a Bezier curve to change")]
         if cu.segments == 2:
             return [Row("var", label, f"{curve}.{k}", digits if k[0] == "v" else 4) for k, label in TWO_SEGMENT_ROWS]
         n = cu.order
@@ -236,6 +279,8 @@ class BladeAdapter:
     def ctrl_free(self, curve):
         """For each control point of a curve: is any variable that moves it free?"""
         cu = self.design.curves[curve]
+        if cu.segments == 0:
+            return np.zeros(len(cu.r), dtype=bool)
         free = {k: self.meta[f"{curve}.{k}"]["free"] for k in cu.keys()}
         if cu.segments == 2:
             groups = (("v1",), ("d1", "w23"), ("d1", "w23"), ("u4", "v4"), ("d2", "w56"), ("d2", "w56"), ("v7",))
@@ -250,10 +295,21 @@ class BladeAdapter:
     def summary(self):
         n, m = self.n_free()
         d = self.design
+        kept = [c for c in BM.CURVES if d.curves[c].segments == 0]
         return (f"{n} of {m} variables free; R {d.radius:.4g} m, hub radius {d.hub_radius:.4g} m (r/R {d.r0:.3f}), "
-                f"hub height {d.hub_height:.4g} m, {self.params.blades} blades")
+                f"hub height {d.hub_height:.4g} m, {self.params.blades} blades"
+                + (f"; as the file (vary N): {', '.join(kept)}" if kept else ""))
+
+    def pick_note(self, curve):
+        """The picker's note: the file's own curve, or no free variable."""
+        if self.segments(curve) == 0:
+            return "  (file)"
+        return "  (held)" if self.n_free(curve)[0] == 0 else ""
 
     def describe(self, curve):
+        if self.segments(curve) == 0:
+            return (f"{BM.DESCRIPTIONS[curve]} against r/R as the parameter file has it (vary N): the cubic spline "
+                    f"through its rows, not a design variable")
         e, rel = BM.fit_report(self.params, self.design)[curve]
         diff = f"largest difference from the parameter file {e:.3g} ({100 * rel:.2f} % of its range)"
         if self.segments(curve) == 2:
@@ -510,6 +566,13 @@ class BladeViews:
         ax.plot(pv["rr"], pv["curves"][curve], "-", color=BLUE, lw=2.0, label="design")
         d = pv["design"]
         cu = d.curves[curve]
+        if cu.segments == 0:                       # the file's own: no control points
+            ax.set_xlabel("r/R")
+            ax.set_ylabel(f"{curve} ({BM.UNITS[curve]})")
+            ax.legend(loc="best", fontsize=7)
+            ax.set_title(f"curve {curve}: {BM.DESCRIPTIONS[curve]}, as the parameter file has it", loc="left",
+                         fontsize=10)
+            return
         p = d.ctrl(curve)
         ax.plot(p[:, 0], p[:, 1], "--", color=BLUE, lw=0.8)
         free = a.ctrl_free(curve)

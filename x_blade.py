@@ -21,6 +21,8 @@ def X_blade(
     bezier_constraint_mode=DEFAULT_BEZIER_CONSTRAINT_MODE,
     apply_coupled_constraints=None,
     write_dat=True,
+    para_control=7,
+    max_pitch=1.4,
 ):
     
     MaxCamber = lambda x: 1*(-4448.8369*x**12 + 30393.6831*x**11 + -92977.6043*x**10 + 168066.8833*x**9 + -199490.6759*x**8 + 163416.9800*x**7 + -94493.8152*x**6 + 38765.7447*x**5 + -11176.4246*x**4 + 2207.9559*x**3 + -285.0846*x**2 + 21.9443*x + -0.7490)
@@ -38,7 +40,7 @@ def X_blade(
     # Define the R values where we want to evaluate the polynomials
     R_values = np.concatenate([np.arange(0.17, 0.985, 0.018), [0.99, 0.999]])  # 100 points for smoother curves
 
-    para_control_flag = 7  # control which parameter is being modified, does not have combined parameter effect
+    para_control_flag = para_control  # 0 the original blade, 2 chord, 3 pitch, 7 both (default)
 
     (
         Pitch,
@@ -57,6 +59,7 @@ def X_blade(
         constraint_mode=bezier_constraint_mode,
         return_reject_info=True,
         apply_coupled_constraints=apply_coupled_constraints,
+        max_pitch=max_pitch,
     )
 
     use_coupled = (

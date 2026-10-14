@@ -6,10 +6,11 @@ interrupted from Python because it is C code) only affects one case and can be
 killed via a subprocess timeout instead of blocking the whole batch.
 
 Usage:
-    python cad_worker.py <case_id> <geometry_dir> <design_npy>
+    python cad_worker.py <case_id> <geometry_dir> <design_npy> [para_control [max_pitch]]
 
 design_npy is a 1-D array of length 11: 6 pitch CPs + 5 chord CPs
-(DRDC path via X_CAD_from_design).
+(DRDC path via X_CAD_from_design). para_control (default 7, both; 0 the
+original blade, 2 chord, 3 pitch) and max_pitch (default 1.4) go to X_blade.
 """
 
 import sys
@@ -19,9 +20,11 @@ import numpy as np
 
 
 def main():
-    if len(sys.argv) != 4:
-        print("usage: python cad_worker.py <case_id> <geometry_dir> <design_npy>")
+    if not 4 <= len(sys.argv) <= 6:
+        print("usage: python cad_worker.py <case_id> <geometry_dir> <design_npy> [para_control [max_pitch]]")
         return 2
+    para_control = int(sys.argv[4]) if len(sys.argv) > 4 else 7
+    max_pitch = float(sys.argv[5]) if len(sys.argv) > 5 else 1.4
 
     case_id = int(sys.argv[1])
     geometry_dir = Path(sys.argv[2])
@@ -39,7 +42,8 @@ def main():
     para.GEOMETRY_OUTPUT_DIR = geometry_dir
     from X_CAD_new import X_CAD_from_design
 
-    X_CAD_from_design(pitch_con, chord_con, case_id, output_dir=geometry_dir)
+    X_CAD_from_design(pitch_con, chord_con, case_id, output_dir=geometry_dir,
+                      para_control=para_control, max_pitch=max_pitch)
     return 0
 
 

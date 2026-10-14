@@ -2,28 +2,38 @@
 _xgeom_blade_test.py
 
 Self-check for the propeller blade in XGeom: the parameter file and its fitted
-curves of 1 and 2 segments (blade_modify.py), the blade radius, hub radius and
-hub height, the geometry through the MSc code (para.py, blade_surface_new.py),
-the design tool's blade adapter (xgeom_blade.py) and, with --gui, the window;
-with --cad the DRDC CAD (IGES and STEP, pythonocc-core, about two minutes).
+curves of 1 and 2 segments (blade_modify.py), its vary lines (Y/N per parameter,
+blade_vary.py, blade_control.py, and para_control in the MSc pipeline:
+para_control_bez_updated, x_blade_new, Initial_sampling.py with the CAD left
+out), the blade radius, hub radius and hub height, the geometry through the MSc
+code (para.py, blade_surface_new.py), the design tool's blade adapter
+(xgeom_blade.py) and, with --gui, the window; with --cad the DRDC CAD (IGES and
+STEP, pythonocc-core, about two minutes).
 
-    python _xgeom_blade_test.py                 file, curves, design space, geometry, adapter
+    python _xgeom_blade_test.py                 file, vary lines, curves, design space, geometry, adapter
     python _xgeom_blade_test.py --gui           also the window
     python _xgeom_blade_test.py --cad           also the CAD
     python _xgeom_blade_test.py --section-table PATH
                                                 another section table than airfoil_data_fixed.csv
 
-The geometry and adapter checks need the section table and are skipped without it.
+The geometry and adapter checks need the section table and are skipped without
+it; the Initial_sampling.py checks need pythonocc-core (it imports X_CAD_new).
 """
 
+import contextlib
+import importlib.util
+import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 import numpy as np
 
 import blade_modify as BM
+import blade_vary as BV
 import rudder_modify as RM
 
 _FAILED = []
@@ -46,6 +56,18 @@ def msc_file(tmp, table=None):
     if table:
         p.section_table = os.path.abspath(table)
     return BM.write_params(os.path.join(tmp, "msc.dat"), p)
+
+
+def vary_file(tmp, name, lines, table=None):
+    """The MSc blade's parameter file with '# vary' lines (e.g. 'pitch Y 0.6 1.6') above its table."""
+    head, rest = open(msc_file(tmp, table)).read().split("# r/R", 1)
+    path = os.path.join(tmp, name)
+    with open(path, "w") as fh:
+        fh.write(head + "".join(f"# vary {s}\n" for s in lines) + "# r/R" + rest)
+    return path
+
+
+ALL_N = [f"{n} N" for n in BM.VARY_NAMES]          # every vary line N: the original blade
 
 
 def refused(fn, *args):
@@ -102,6 +124,166 @@ def test_file(tmp):
     check("an airfoil by name (NACA 2416): read back, its section table (26 rows), the blade; both keys or an "
           "unknown airfoil refused", [qa.airfoil == "NACA 2416", qa.section_table == "", tab.shape[0],
                                       np.all(np.isfinite(pts))] + out, [1, 1, 26, 1, 1, 1], 0)
+
+
+def test_vary(tmp):
+    print("\nthe vary lines (Y/N per parameter)")
+    p = BM.read_params(vary_file(tmp, "vary.dat", ["pitch Y 0.6 1.6", "chord y", "skew N", "radius yes 0.6 0.8"]))
+    check("read: Y (y, yes) and N, a range; a name not listed is N; a file with no vary line: None",
+          [BM.vary_free(p) == ("pitch", "chord", "radius"), BM.vary_bounds(p) == {"pitch": (0.6, 1.6),
+                                                                                 "radius": (0.6, 0.8)},
+           p.vary["thickness"].on, p.vary["skew"].on, BM.vary_free(BM.read_params(msc_file(tmp))) is None],
+          [1, 1, 0, 0, 1], 0)
+    out = [refused(BM.read_params, vary_file(tmp, "bad_vary.dat", lines))
+           for lines in (["twist Y"], ["pitch Y", "pitch N"], ["pitch maybe"], ["pitch Y 1.6 0.6"], ["pitch Y 0.6"],
+                         ["pitch Y low high"])]
+    check("refused: an unknown name, a second line for one, a flag not Y or N, low not below high, one bound, "
+          "not numbers", out, [1] * 6, 0)
+    alone = os.path.join(tmp, "alone")                  # blade_vary.py by itself, as in a pipeline folder
+    os.makedirs(alone, exist_ok=True)
+    with open(os.path.join(HERE, "blade_vary.py")) as src, open(os.path.join(alone, "blade_vary.py"), "w") as dst:
+        dst.write(src.read())
+    run = subprocess.run([sys.executable, "-I", "-c", "import sys; sys.path.insert(0, sys.argv[1]); import blade_vary "
+                          "as V; v = V.read_vary(sys.argv[2]); print(' '.join(n for n in V.VARY_NAMES if v[n].on))",
+                          alone, p.path], capture_output=True, text=True)
+    check("blade_vary.py alone (standard library only) reads them; blade_modify's names and reader are its own",
+          [run.stdout.strip() == "pitch chord radius", BM.read_vary is BV.read_vary,
+           BM.VARY_NAMES == BM.CURVES + BM.GLOBAL_SLOTS], [1, 1, 1], 0)
+    design, _ = BM.fit_design(p, segments={"chord": 1, "thickness": 1})
+    kept = [c for c in BM.CURVES if c not in ("pitch", "chord")]
+    rr = np.linspace(design.r0, design.r1, 2001)
+    rep = BM.fit_report(p, design)
+    check("fit_design: pitch 2 segments, chord 1 (SEGMENTS); the N curves the file's own (also with SEGMENTS), "
+          "exactly its splines",
+          [design.curves["pitch"].segments, design.curves["chord"].segments]
+          + [design.curves[c].segments for c in kept]
+          + [max(np.abs(design.prop(c)(rr) - p.spline(c)(rr)).max() for c in kept), max(rep[c][0] for c in kept)],
+          [2, 1, 0, 0, 0, 0, 0, 0], 1e-12)
+    space = BM.file_space(p, design)
+    bnd = dict(zip(space.names, map(tuple, space.bounds)))
+    x0 = space.to_vector(design)
+    check("file_space: the Y parameters free (pitch 8, chord 10, the radius), no slot of a file's own curve; "
+          "pitch's values and the radius in the file's ranges; round trip; the blade inside them",
+          [len(space), sum(n.startswith("pitch.") for n in space.names), sum(n.startswith("chord.") for n in space.names),
+           "radius" in space.names, any(n.split(".")[0] in kept for n in space.all_names),
+           all(bnd[n] == (0.6, 1.6) for n in space.names if n.startswith("pitch.v")), bnd["radius"] == (0.6, 0.8),
+           np.abs(space.to_vector(space.to_design(x0)) - x0).max(), len(BM.outside_bounds(space, design))],
+          [19, 8, 10, 1, 0, 1, 1, 0, 0], 1e-14)
+    narrow = BM.read_params(vary_file(tmp, "narrow.dat", ["pitch Y 1.0 1.2"]))
+    dn, _ = BM.fit_design(narrow)
+    out_n = BM.outside_bounds(BM.file_space(narrow, dn), dn)
+    alln = BM.read_params(vary_file(tmp, "all_n.dat", ALL_N))
+    da, _ = BM.fit_design(alln)
+    check("a range the file's blade leaves (pitch 1.0 .. 1.2): outside_bounds names pitch's values; every line N: "
+          "nothing free, every curve the file's own, the blade exactly the file's",
+          [len(out_n) > 0, all(n.startswith("pitch.v") for n in out_n), BM.vary_free(alln) == (),
+           len(BM.file_space(alln, da)), all(da.curves[c].segments == 0 for c in BM.CURVES),
+           max(BM.fit_report(alln, da)[c][0] for c in BM.CURVES)], [1, 1, 1, 0, 1, 0], 1e-12)
+    q = BM.read_params(BM.write_params(os.path.join(tmp, "vary_back.dat"), BM.design_params(design, p)))
+    big = design.copy()
+    big.radius, big.hub_radius = 0.77, 1.2 * design.hub_radius
+    frac = np.linspace(0.0, 1.0, 11)
+    check("written (design_params) and read back: the same vary lines; the file's own curves stretch with the "
+          "blade and hub radius", [q.vary == p.vary] + [np.abs(big.at(c, big.r0 + frac * (big.r1 - big.r0))
+                                                            - design.at(c, design.r0 + frac * (design.r1 - design.r0))
+                                                            ).max() for c in kept], [1, 0, 0, 0, 0], 1e-12)
+    repo = BM.read_params(os.path.join(HERE, "msc_blade_params.dat"))
+    m = BM.msc_params()
+    check("msc_blade_params.dat: pitch and chord Y (no range), the others N; its table the MSc polynomials' (8 "
+          "decimals, written on another machine)",
+          [BM.vary_free(repo) == ("pitch", "chord"), BM.vary_bounds(repo) == {},
+           max(np.abs(repo.values[c] - m.values[c]).max() for c in BM.CURVES)], [1, 1, 0], 2e-8)
+
+
+def test_msc_flags():
+    print("\nthe MSc pipeline's para_control (para_control_bez_updated, x_blade_new)")
+    import para_control_bez_updated as PB
+    import x_blade_new as XB
+    pcon = np.array([0.9, 1.0, 0.5, 0.3, 0.3, 0.7])
+    ccon = np.array([0.2, 0.6, 0.3, 0.45, 0.2])
+    args = (XB.BASE_PITCH, XB.BASE_CHORD, XB.R_VALUES)
+    o0 = PB.para_control_bez_updated(*args, 0, pcon, ccon)
+    o3 = PB.para_control_bez_updated(*args, 3, pcon, ccon, max_pitch=1.3)
+    o2 = PB.para_control_bez_updated(*args, 2, pcon, ccon)
+    check("para_control from Y/N (both 7, chord 2, pitch 3, neither 0); 0: the original pitch and chord, no "
+          "control points; 3: pitch only, P4 at max_pitch; 2: chord only; 5 refused",
+          [PB.para_control_flag(a, b) for a, b in ((1, 1), (0, 1), (1, 0), (0, 0))]
+          + [o0[0] is XB.BASE_PITCH, o0[1] is XB.BASE_CHORD, np.abs(o0[2]).max() + np.abs(o0[3]).max(),
+             o3[1] is XB.BASE_CHORD, float(o3[0](0.5)), o2[0] is XB.BASE_PITCH, o2[1] is not XB.BASE_CHORD,
+             refused(PB.para_control_bez_updated, *args, 5, pcon, ccon)],
+          [7, 2, 3, 0, 1, 1, 0, 1, 1.3, 1, 1, 1], 1e-12)
+    if not os.path.exists(os.path.join(HERE, "airfoil_data_fixed.csv")):
+        print("       X_blade skipped: no airfoil_data_fixed.csv")
+        return
+    from para import para
+    pts = XB.X_blade(np.zeros(6), np.zeros(5), 0, write_dat=False, para_control=0)[0]
+    ref = para(XB.BASE_MAX_CAMBER, XB.BASE_PITCH, XB.BASE_CHORD, XB.BASE_MAX_THICKNESS, XB.BASE_SKEW_ANGLE,
+               XB.BASE_RAKE, XB.R_VALUES, 0, write_dat=False)
+    check("X_blade with para_control 0: the original blade's points (the polynomials'), m", np.abs(pts - ref).max(),
+          0.0, 0)
+
+
+def test_sampling(tmp):
+    print("\nInitial_sampling.py and the vary lines (the CAD left out)")
+    if importlib.util.find_spec("OCC") is None or not os.path.exists(os.path.join(HERE, "airfoil_data_fixed.csv")):
+        print("       skipped: no pythonocc-core (Initial_sampling imports X_CAD_new) or no airfoil_data_fixed.csv")
+        return
+    import Initial_sampling as IS
+    import para as PARA
+    files = {"both": os.path.join(HERE, "msc_blade_params.dat"), "none": vary_file(tmp, "s0.dat", ALL_N),
+             "pitch": vary_file(tmp, "s3.dat", ["pitch Y 0.9 1.5"]),
+             "chord": vary_file(tmp, "s2.dat", ["chord Y 0.2 0.6", "skew Y"])}
+    s = {k: IS.sampling_setup(v) for k, v in files.items()}
+    s["legacy"], s["missing"] = IS.sampling_setup(msc_file(tmp)), IS.sampling_setup(os.path.join(tmp, "nofile.dat"))
+    dev = lambda k: np.abs(s[k]["pitch_bounds"] - IS.pitch_bounds).max() + np.abs(s[k]["chord_bounds"]
+                                                                                 - IS.chord_bounds).max()
+    check("sampling_setup: msc_blade_params.dat 7 (the code's bounds); every line N 0; pitch only 3 (its range on "
+          "p1y, p7y, max_pitch); chord only 2 (its range on p1y, y4; skew noted); no vary line or no file 7",
+          [s["both"]["para_control"], dev("both"), s["none"]["para_control"], "nothing varies" in s["none"]["notes"][0],
+           s["pitch"]["para_control"], *s["pitch"]["pitch_bounds"][[0, 5]].ravel(), s["pitch"]["max_pitch"],
+           s["chord"]["para_control"], *s["chord"]["chord_bounds"][[0, 3]].ravel(), "skew" in s["chord"]["notes"][-1],
+           s["legacy"]["para_control"], dev("legacy"), s["missing"]["para_control"]],
+          [7, 0, 0, 1, 3, 0.9, 1.5, 0.9, 1.5, 1.5, 2, 0.2, 0.6, 0.2, 0.6, 1, 7, 0, 7], 0)
+    calls = []
+
+    def no_cad(pitch_con, chord_con, case_id, geometry_dir, para_control=7, max_pitch=1.4):
+        calls.append((np.asarray(pitch_con, float), np.asarray(chord_con, float), int(case_id), int(para_control),
+                      float(max_pitch), Path(geometry_dir).name))
+        return True
+
+    keep = {k: getattr(IS, k) for k in ("generate_cad", "BLADE_PARAMS", "INPUT_MODE", "N_GENERATED_BLADES",
+                                        "RESET_OUTPUT_FILES", "CONTROL_OUTPUT_PATH", "REJECTED_CONTROL_POINTS_PATH",
+                                        "PLOT_OUTPUT_PATH", "GENERATED_CONTROL_POINTS_PATH", "GEOMETRY_DIR",
+                                        "ORIGINAL_GEOMETRY_DIR")}
+    keep_dir, got = PARA.GEOMETRY_OUTPUT_DIR, {}
+    try:
+        IS.generate_cad, IS.INPUT_MODE, IS.N_GENERATED_BLADES, IS.RESET_OUTPUT_FILES = no_cad, "test", 3, True
+        for k in ("both", "pitch", "chord", "none"):
+            d = Path(tmp) / f"sampling_{k}"
+            IS.BLADE_PARAMS = Path(files[k])
+            IS.CONTROL_OUTPUT_PATH, IS.REJECTED_CONTROL_POINTS_PATH = d / "accepted.txt", d / "rejected.txt"
+            IS.PLOT_OUTPUT_PATH, IS.GENERATED_CONTROL_POINTS_PATH = d / "curves.png", d / "generated.txt"
+            IS.GEOMETRY_DIR, IS.ORIGINAL_GEOMETRY_DIR = d / "geometry", d / "original"
+            n = len(calls)
+            with contextlib.redirect_stdout(io.StringIO()):
+                IS.main()
+            gen = d / "generated.txt"
+            got[k] = (calls[n:], np.loadtxt(gen, ndmin=2) if gen.exists() else None)
+    finally:
+        for k, v in keep.items():
+            setattr(IS, k, v)
+        PARA.GEOMETRY_OUTPUT_DIR = keep_dir
+    flags = {k: sorted({c[3] for c in got[k][0]}) for k in got}
+    gp, gc = got["pitch"][1], got["chord"][1]
+    check("main() (the CAD left out): both 11 sampled variables, para_control 7; pitch only 6 (p1y, p7y in "
+          "0.9 .. 1.5), 3, max_pitch 1.5, chord zeros; chord only 5, 2, pitch zeros; nothing: no sampling, the "
+          "original (case 0, para_control 0) only",
+          [got["both"][1].shape[1], flags["both"] == [7], gp.shape[1], gp[:, [0, 5]].min() >= 0.9,
+           gp[:, [0, 5]].max() <= 1.5, flags["pitch"] == [3], all(c[4] == 1.5 and not c[1].any() for c in got["pitch"][0]),
+           gc.shape[1], flags["chord"] == [2], all(not c[0].any() for c in got["chord"][0]), got["none"][1] is None,
+           [(c[2], c[3], c[5]) for c in got["none"][0]] == [(0, 0, "original")],
+           min(len(got[k][0]) for k in ("both", "pitch", "chord")) > 0],
+          [11, 1, 6, 1, 1, 1, 1, 5, 1, 1, 1, 1, 1], 0)
 
 
 def test_curves(tmp):
@@ -372,6 +554,58 @@ def test_adapter(tmp, table):
     ad.settings["clearance_mm"] = BM.CLEARANCE_MM
 
 
+def test_adapter_vary(tmp, table):
+    print("\nthe tool's blade adapter and the vary lines")
+    import xgeom_blade as XBL
+    ad = XBL.BladeAdapter(params=vary_file(tmp, "vary_ad.dat", ["pitch Y 0.6 1.6", "chord Y", "radius Y"], table))
+    kept = ("thickness", "camber", "skew", "rake")
+    check("starts from the vary lines: pitch and chord 2 segments, free (pitch's values in 0.6 .. 1.6), the radius "
+          "free, the hub height held; the N curves the file's own ('(file)' in the picker, a pinned row)",
+          [ad.n_free()[0], ad.n_free()[1], ad.bounds("pitch.v4") == (0.6, 1.6), ad.is_free("radius"),
+           ad.is_free("hub_height"), all(ad.segments(c) == 0 for c in kept), ad.pick_note("skew") == "  (file)",
+           ad.pick_note("pitch") == "", [r.kind for r in ad.curve_rows("skew")] == ["pinned"]],
+          [17, 19, 1, 1, 0, 1, 1, 1, 1], 0)
+    no_order = refused(ad.set_order, "skew", 6)
+    msg1 = ad.set_segments("skew", 1)
+    n1, rel1 = ad.n_free("skew"), BM.fit_report(ad.params, ad.design)["skew"][1]
+    msg0 = ad.set_segments("skew", 0)
+    rr = np.linspace(ad.design.r0, ad.design.r1, 501)
+    check("a file's own curve: no order to set; 1 segment: fitted to the file, its 10 variables free; 'file' "
+          "again: exactly the file's, no variables",
+          [no_order, n1[0], n1[1], rel1 < 0.01, msg1.startswith("fitted to the parameter file"),
+           msg0.startswith("as the parameter file has it"), ad.n_free("skew")[1],
+           np.abs(ad.design.prop("skew")(rr) - ad.params.spline("skew")(rr)).max()], [1, 10, 10, 1, 1, 1, 0, 0], 1e-12)
+    for n in ad.space.all_names:
+        if n.startswith("chord."):
+            ad.set_free(n, False)
+    q = BM.read_params(ad.save_params(os.path.join(tmp, "vary_saved.dat")))
+    ad2 = XBL.BladeAdapter(params=q.path)
+    check("save_params writes the vary lines as the design stands (chord held: N; pitch Y with its range, the "
+          "radius Y); loaded again: chord the saved file's own",
+          [BM.vary_free(q) == ("pitch", "radius"), q.vary["pitch"].lo, q.vary["pitch"].hi, ad2.segments("chord"),
+           ad2.n_free() == (9, 11)], [1, 0.6, 1.6, 0, 1], 0)
+
+
+def test_control_original(tmp, table):
+    print("\nblade_control.py with every vary line N (no CAD, no plot)")
+    out = os.path.join(tmp, "control")
+    src = open(os.path.join(HERE, "blade_control.py")).read()
+    src = src.replace('if __name__ == "__main__":', f"PARAMS, OUT_DIR = {vary_file(tmp, 'control_n.dat', ALL_N, table)!r}"
+                      f", {out!r}\nsettings.cad = settings.plot = False\n\nif __name__ == \"__main__\":", 1)
+    script = os.path.join(tmp, "blade_control_n.py")
+    with open(script, "w") as fh:
+        fh.write(src)
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([HERE] + [os.environ.get("PYTHONPATH", "")]))
+    run = subprocess.run([sys.executable, script], capture_output=True, text=True, cwd=tmp, env=env)
+    files = sorted(os.listdir(out)) if os.path.isdir(out) else []
+    if run.returncode:
+        print(run.stdout + run.stderr)
+    check("'nothing (every vary line N)': only the case 'original' (parameter file, XCAD points, design, set-up)",
+          [run.returncode, "the original blade only" in run.stdout,
+           files == [f"original_{f}" for f in ("design.json", "design_space.json", "params.dat", "xcad_m.dat")]],
+          [0, 1, 1], 0)
+
+
 def test_gui(tmp, table):
     print("\nthe window (xgeom_tool.py, blade)")
     try:
@@ -441,6 +675,26 @@ def test_gui(tmp, table):
               [app.status.cget("background") == XT.STATUS["warn"][0], warn.startswith("warning (CAD still possible)"),
                len(app.ad.preview()["problems"])], [1, 1, 0], 0)
         app.ad.settings["clearance_mm"] = BM.CLEARANCE_MM
+        app.ad.load_params(vary_file(tmp, "vary_gui.dat", ["pitch Y", "chord Y"], table))   # as Load ... does
+        app._title()
+        app.after_change(structure=True)
+        app.curve.set("skew")
+        app.on_curve()
+        root.update()
+        texts = {n: rb.cget("text") for n, (rb, _) in app.picks.items()}
+        seg0, rows0 = app.nseg.get(), len(app.rows)
+        app.nseg.set(1)
+        app.on_segments()
+        rows1 = len(app.rows)
+        app.nseg.set(0)
+        app.on_segments()
+        app.update_views()
+        note = app.status.cget("text")
+        root.update()
+        check("a file with vary lines: '(file)' by the N curves; skew: the 'file' form, no variables; 1 segment: "
+              "its 10; 'file' again (the status bar says so)",
+              [texts["skew"].endswith("(file)"), texts["pitch"].endswith("(file)"), seg0, rows0, rows1, len(app.rows),
+               note.startswith("skew: as the parameter file has it")], [1, 0, 0, 3, 13, 3, 1], 0)
     finally:
         root.destroy()
 
@@ -451,8 +705,8 @@ def test_cad(tmp, table):
     if importlib.util.find_spec("OCC") is None:
         print("       skipped: no pythonocc-core")
         return
-    p = BM.read_params(msc_file(tmp, table))
-    design, _ = BM.fit_design(p)
+    p = BM.read_params(vary_file(tmp, "cad.dat", ["pitch Y", "chord Y"], table))
+    design, _ = BM.fit_design(p)                           # pitch and chord 2 segments, the others the file's own
     design.hub_height = 0.8
     out = BM.write_cad(tmp, "cad", design, p)
     from OCC.Core.STEPControl import STEPControl_Reader
@@ -477,7 +731,8 @@ def test_cad(tmp, table):
         x0, x1 = -400.0, 400.0
     print(f"       grids {out['grid_seconds']:.0f} s, faces and IGES {out['cad_seconds']:.1f} s; x from {x0:.1f} "
           f"to {x1:.1f} mm")
-    check("IGES and STEP (2-segment curves, hub 0.8 m): 5 blade faces, hub sector, 2 caps, valid; hub length",
+    check("IGES and STEP (pitch, chord 2 segments, the others the file's; hub 0.8 m): 5 blade faces, hub sector, "
+          "2 caps, valid; hub length",
           [os.path.exists(out["cad_paths"]["iges"]), n, BRepCheck_Analyzer(shape).IsValid(),
            not any(f.startswith("x_cad_") for f in os.listdir(tmp)), (x1 - x0) / 800.0], [1, 8, 1, 1, 1], 2e-3)
 
@@ -490,10 +745,15 @@ def main():
     assert RM.Bezier                                       # the curves are rudder_modify's Bezier
     with tempfile.TemporaryDirectory() as tmp:
         test_file(tmp)
+        test_vary(tmp)
+        test_msc_flags()
+        test_sampling(tmp)
         test_curves(tmp)
         test_space(tmp)
         if test_geometry(tmp, table):
             test_adapter(tmp, table)
+            test_adapter_vary(tmp, table)
+            test_control_original(tmp, table)
             if "--gui" in sys.argv:
                 test_gui(tmp, table)
             if "--cad" in sys.argv:

@@ -97,9 +97,12 @@ Left panel (rudder)
 Left panel (blade)
     Parameter file
               the blade's parameter file (blade_modify.py: D, blades, root r/R,
-              hub height, section table or airfoil name, and the radial table).
-              Load reads another one (the curves are fitted to it again); Save
-              writes the design as one.
+              hub height, section table or airfoil name, the radial table and
+              the vary lines '# vary <name> Y|N [low high]'). Load reads another
+              one (the curves are fitted to it again): a parameter flagged N
+              starts as the file has it, one flagged Y with its variables free
+              (within low .. high when given). Save writes the design as one,
+              with vary lines for it as it stands (Y: a free variable).
     Blade and hub
               the blade radius R, the hub radius and the hub height (m; the hub
               is centred at x = 0 and must cover the blade root). A change of
@@ -122,7 +125,9 @@ Left panel (blade)
               at the root .. Cm at the tip, as many as set) or 2 segments
               (x_blade's form: rational cubics P1 .. P4 and P4 .. P7, P2 = P3 and
               P5 = P6 at P4's value, so zero slope at P4; the weights w23 and w56
-              are variables). Switching, or a new number of control points,
+              are variables) or file (the distribution as the parameter file has
+              it, the cubic spline through its rows: no variables, the picker
+              notes "(file)"). Switching, or a new number of control points,
               refits the curve: to the parameter file while none of its
               variables has changed, else to its present shape.
 Left panel (hull)
@@ -559,17 +564,18 @@ class App:
         ttk.Label(box, text=ad.describe(c), foreground=INK2, wraplength=560, justify="left").pack(fill="x", padx=4)
         top = ttk.Frame(box)
         top.pack(fill="x", pady=2)
-        two = getattr(ad, "segment_choice", False) and ad.segments(c) == 2
-        if getattr(ad, "segment_choice", False):
+        choice = getattr(ad, "segment_choice", False)
+        nseg = ad.segments(c) if choice else 1                   # blade: 0 is the file's own curve
+        if choice:
             ttk.Label(top, text="segments").pack(side="left", padx=(4, 2))
-            self.nseg = tk.IntVar(value=ad.segments(c))
-            for n in (1, 2):
-                ttk.Radiobutton(top, text=str(n), value=n, variable=self.nseg,
+            self.nseg = tk.IntVar(value=nseg)
+            for n in getattr(ad, "segment_options", (1, 2)):
+                ttk.Radiobutton(top, text=str(n) if n else "file", value=n, variable=self.nseg,
                                 command=self.on_segments).pack(side="left")
-        if two:
+        if nseg == 2:
             ttk.Label(top, text="P1 .. P7: P2 = P3 and P5 = P6 at P4's value (zero slope at P4)",
                       foreground=INK2).pack(side="left", padx=8)
-        else:
+        elif nseg == 1:
             lo, hi = getattr(ad, "order_range", (1, 12))
             ttk.Label(top, text="control points").pack(side="left",
                                                        padx=(10 if getattr(ad, "segment_choice", False) else 4, 2))
@@ -625,8 +631,9 @@ class App:
         self.free_label.configure(text=self.ad.summary())
         if getattr(self, "sec_info", None) is not None and self.sec_info.winfo_exists():
             self.sec_info.configure(text=self.ad.sections_info())     # blade: the steps follow the root
+        note = getattr(self.ad, "pick_note", None)                  # blade: "(file)", the file's own curve
         for name, (rb, text) in self.picks.items():                 # "held": no free variable on that curve
-            rb.configure(text=text + ("  (held)" if self.ad.n_free(name)[0] == 0 else ""))
+            rb.configure(text=text + (note(name) if note else "  (held)" if self.ad.n_free(name)[0] == 0 else ""))
         texts = [s.text for s in self.ad.curve_rows(self.curve.get()) if s.kind == "pinned"]
         for lab, t in zip(self.pinned, texts):
             lab.configure(text=t)
@@ -672,14 +679,14 @@ class App:
                 self._note = f"{c}: {n + 1} control points, {msg}"
 
     def on_segments(self):
-        """Blade: the picked curve as 1 or 2 segments, fitted to its present shape."""
+        """Blade, wing, fin: the picked curve as 1 or 2 segments, fitted again; blade: or the file's own (0)."""
         c, n = self.curve.get(), self.nseg.get()
         if n == self.ad.segments(c):
             return
         msg = self.guard(lambda: self.ad.set_segments(c, n))
         self.after_change(structure=True)
         if msg is not None:
-            self._note = f"{c}: {n} segment{'s' if n == 2 else ''}, {msg}"
+            self._note = f"{c}: " + (msg if n == 0 else f"{n} segment{'s' if n == 2 else ''}, {msg}")
 
     def on_tangent(self):
         c = self.curve.get()

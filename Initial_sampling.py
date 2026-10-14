@@ -2,7 +2,10 @@
 # The script supports two input paths:
 # 1) read existing control points from file
 # 2) generate N new blade designs using optimized Latin hypercube sampling
+# What changes (pitch, chord, both, or nothing: the original blade's CAD only) comes from the '# vary' lines of
+# the blade parameter file BLADE_PARAMS (see below).
 
+import argparse
 import subprocess
 import sys
 import tempfile
@@ -14,15 +17,21 @@ from scipy.stats import qmc
 
 import para_control_bez_updated as bezier_constraints
 import para
-from pipeline_config import infill_paths, initial_sampling_paths
+from blade_vary import read_vary
+from pipeline_config import INFILL_ROUND, case_id, infill_paths, initial_sampling_paths
 from pipeline_io import append_design_row, clear_file, load_table, save_table, split_case_ids
 from X_CAD_new import X_CAD_from_design
 from x_blade_new import X_blade
 
 
+# python Initial_sampling.py --round r   -> CAD for round r's proposed designs (infill mode)
+parser = argparse.ArgumentParser(description="CAD for proposed designs.")
+parser.add_argument("--round", type=int, default=None, help="run infill mode for this round")
+ROUND = parser.parse_known_args()[0].round
+
 ROOT = Path(__file__).resolve().parent
 PATHS = initial_sampling_paths()
-INFILL_PATHS = infill_paths()
+INFILL_PATHS = infill_paths(ROUND)
 
 # Input mode:
 # - "existing": read design/control points from EXISTING_CONTROL_POINTS_PATH
@@ -30,10 +39,12 @@ INFILL_PATHS = infill_paths()
 # - "infill": generate CAD for the current infill round's control points
 # - "test": short LHS smoke test of the DRDC CAD path (x_blade_new / X_CAD_new)
 INPUT_MODE = "test"
+if ROUND is not None:
+    INPUT_MODE = "infill"
 
-# In "infill"/"test" mode, case ids start at CASE_ID_START so geometry does not
-# overwrite earlier cases (e.g. test: 1001, 1002, ...).
-CASE_ID_START = 10
+# In "test" mode, case ids start at CASE_ID_START. In "infill" mode they follow
+# pipeline_config.case_id (100 * round + row), so rounds never overwrite each other.
+CASE_ID_START = 1
 
 EXISTING_CONTROL_POINTS_PATH = PATHS["existing_input"]
 GENERATED_CONTROL_POINTS_PATH = PATHS["generated"]
@@ -49,7 +60,7 @@ if INPUT_MODE == "infill":
     REJECTED_CONTROL_POINTS_PATH = INFILL_PATHS["cad_rejected"]
     PLOT_OUTPUT_PATH = INFILL_PATHS["cad_plot"]
     GEOMETRY_DIR = INFILL_PATHS["geometry_dir"]
-    CASE_ID_OFFSET = CASE_ID_START
+    CASE_ID_OFFSET = case_id(INFILL_ROUND if ROUND is None else ROUND, 0)   # 100 * round
     # Keep prior outputs so a killed/partial batch can be resumed (cases whose
     # IGES already exists are skipped below).
     RESET_OUTPUT_FILES_DEFAULT = False
@@ -78,7 +89,7 @@ BEZIER_PITCH_DIFF_MAX_NORM = 0.73
 WRITE_CASE_ID_TO_OUTPUT_FILES = True
 CONTROL_POINT_FORMAT = "%.6f"
 
-N_GENERATED_BLADES = 3
+N_GENERATED_BLADES = 1
 LHS_SEED = 62955
 LHS_OPTIMIZATION = "random-cd"
 WRITE_GENERATED_CONTROL_POINTS = True
@@ -106,6 +117,52 @@ from x_blade_new import R_VALUES as _R_VALUES
 # Plot range starts at the first design station, so the curves never show
 # the clamped extrapolation below it as if it were design.
 R_FINE = np.linspace(float(_R_VALUES[0]), 0.998, 100)
+
+# What changes comes from the blade parameter file's '# vary <name> Y|N [low high]' lines (blade_vary.read_vary),
+# the file the XGeom tools read. pitch and chord Y or N give para_control (both 7, chord only 2, pitch only 3;
+# neither 0: no sampling, only the original blade's CAD, case ORIGINAL_CASE_ID in ORIGINAL_GEOMETRY_DIR). A range
+# on their line ('# vary pitch Y 0.6 1.3') bounds their values: pitch p1y and p7y and the cap of P4's pitch
+# (max_pitch, else 1.4); chord p1y and y4. The positions, fractions and weights keep the bounds above. Only the
+# flagged parameters' variables are sampled and written (pitch's 6, then chord's 5). The blade is x_blade_new's
+# (the MSc polynomials, which msc_blade_params.dat tabulates); other parameters flagged Y are not varied here. A
+# file with no vary line: both, with the bounds above, as before.
+BLADE_PARAMS = ROOT / "msc_blade_params.dat"
+ORIGINAL_CASE_ID = 0
+ORIGINAL_GEOMETRY_DIR = ROOT / "geometry" / "original"
+PITCH_VALUE_ROWS = (0, 5)        # pitch_bounds rows that are P/D values: p1y, p7y
+CHORD_VALUE_ROWS = (0, 3)        # chord_bounds rows that are c/D values: p1y, y4
+
+
+def sampling_setup(params_path=BLADE_PARAMS):
+    """What the parameter file's vary lines ask for: a dict with para_control, the pitch and chord bounds (their
+    value rows set by the file's ranges), max_pitch, which parameters are sampled, and notes to print."""
+    p_bounds, c_bounds = pitch_bounds.copy(), chord_bounds.copy()
+    out = {"pitch_bounds": p_bounds, "chord_bounds": c_bounds, "max_pitch": bezier_constraints.MAX_PITCH}
+    vary = {}
+    if Path(params_path).is_file():
+        vary = read_vary(params_path)
+    if not vary:
+        out.update(para_control=7, pitch=True, chord=True,
+                   notes=[f"{Path(params_path).name}: " + ("no vary line" if Path(params_path).is_file() else
+                                                          "not found") + "; pitch and chord both vary (para_control 7)"])
+        return out
+    pitch, chord = vary["pitch"], vary["chord"]
+    out.update(para_control=bezier_constraints.para_control_flag(pitch.on, chord.on), pitch=pitch.on,
+               chord=chord.on, notes=[])
+    if pitch.on and pitch.lo is not None:
+        p_bounds[list(PITCH_VALUE_ROWS)] = (pitch.lo, pitch.hi)
+        out["max_pitch"] = pitch.hi
+    if chord.on and chord.lo is not None:
+        c_bounds[list(CHORD_VALUE_ROWS)] = (chord.lo, chord.hi)
+    on = [n for n in ("pitch", "chord") if vary[n].on]
+    out["notes"].append(f"{Path(params_path).name}: " + (" and ".join(on) + (" vary" if len(on) > 1 else " varies")
+                                                          if on else "nothing varies")
+                        + f" (para_control {out['para_control']})"
+                        + ("" if on else ": only the original blade's CAD"))
+    others = [n for n, v in vary.items() if v.on and n not in ("pitch", "chord")]
+    if others:
+        out["notes"].append(f"flagged Y but not varied here (pitch and chord only): {', '.join(others)}")
+    return out
 
 
 def load_or_generate_control_points(bounds, d_total):
@@ -164,8 +221,9 @@ def initialize_output_files():
     clear_file(REJECTED_CONTROL_POINTS_PATH)
 
 
-def generate_cad(pitch_con, chord_con, case_id, geometry_dir):
+def generate_cad(pitch_con, chord_con, case_id, geometry_dir, para_control=7, max_pitch=1.4):
     """Generate one DRDC blade CAD, guarded by a subprocess timeout if configured.
+    para_control and max_pitch go to X_blade (0: the original blade).
 
     Returns True on success, False on timeout/failure so the caller can reject
     the case and continue with the rest of the batch.
@@ -173,7 +231,8 @@ def generate_cad(pitch_con, chord_con, case_id, geometry_dir):
     pitch_con = np.asarray(pitch_con, dtype=float).ravel()
     chord_con = np.asarray(chord_con, dtype=float).ravel()
     if not CAD_TIMEOUT_S:
-        X_CAD_from_design(pitch_con, chord_con, case_id, output_dir=geometry_dir, hub=True, hub_height=None, n_blades=5)
+        X_CAD_from_design(pitch_con, chord_con, case_id, output_dir=geometry_dir, hub=True, hub_height=None, n_blades=5,
+                          para_control=para_control, max_pitch=max_pitch)
         return True
 
     tmp_design = Path(tempfile.gettempdir()) / f"cad_design_{case_id}.npy"
@@ -181,7 +240,7 @@ def generate_cad(pitch_con, chord_con, case_id, geometry_dir):
     try:
         subprocess.run(
             [sys.executable, str(ROOT / "cad_worker.py"),
-             str(int(case_id)), str(geometry_dir), str(tmp_design)],
+             str(int(case_id)), str(geometry_dir), str(tmp_design), str(int(para_control)), repr(float(max_pitch))],
             check=True,
             timeout=CAD_TIMEOUT_S,
         )
@@ -209,11 +268,29 @@ def append_control_points_row(path, values, case_id=None):
     )
 
 
+def build_original():
+    """Nothing flagged Y: the original blade's CAD only (para_control 0)."""
+    ORIGINAL_GEOMETRY_DIR.mkdir(parents=True, exist_ok=True)
+    para.GEOMETRY_OUTPUT_DIR = ORIGINAL_GEOMETRY_DIR
+    print(f"The original blade: case {ORIGINAL_CASE_ID} in {ORIGINAL_GEOMETRY_DIR}")
+    ok = generate_cad(np.zeros(pitch_bounds.shape[0]), np.zeros(chord_bounds.shape[0]), ORIGINAL_CASE_ID,
+                      ORIGINAL_GEOMETRY_DIR, para_control=0)
+    print("CAD written" if ok else "CAD failed")
+
+
 def main():
+    setup = sampling_setup(BLADE_PARAMS)
+    for note in setup["notes"]:
+        print(note)
+    para_control, max_pitch = setup["para_control"], setup["max_pitch"]
+    if para_control == 0:
+        build_original()
+        return
     d_pitch = pitch_bounds.shape[0]
     d_chord = chord_bounds.shape[0]
-    d_total = d_pitch + d_chord
-    bounds = np.vstack([pitch_bounds, chord_bounds])
+    blocks = ([setup["pitch_bounds"]] if setup["pitch"] else []) + ([setup["chord_bounds"]] if setup["chord"] else [])
+    bounds = np.vstack(blocks)                      # the sampled variables: pitch's, then chord's
+    d_total = bounds.shape[0]
 
     initialize_output_files()
 
@@ -239,9 +316,15 @@ def main():
         )
 
     case_ids, X_phys = load_or_generate_control_points(bounds, d_total)
-    pitch_phys = X_phys[:, :d_pitch]
-    chord_phys = X_phys[:, d_pitch:]
+    # Resumable: cases already in the accepted file are skipped. A CAD file alone is
+    # not enough (it may be incomplete if a run was interrupted), so such cases are redone.
+    done_ids = set()
+    if CONTROL_OUTPUT_PATH.exists() and CONTROL_OUTPUT_PATH.stat().st_size > 0:
+        done_ids = {int(c) for c in split_case_ids(load_table(CONTROL_OUTPUT_PATH), d_total)[0]}
     n_samples = X_phys.shape[0]
+    d_p = d_pitch if setup["pitch"] else 0               # an unflagged parameter: zeros, not used (para_control)
+    pitch_phys = X_phys[:, :d_pitch] if setup["pitch"] else np.zeros((n_samples, d_pitch))
+    chord_phys = X_phys[:, d_p:d_p + d_chord] if setup["chord"] else np.zeros((n_samples, d_chord))
 
     colors = plt.cm.tab20(np.linspace(0, 1, n_samples))
     fig, (ax_pitch, ax_chord) = plt.subplots(1, 2, figsize=(12, 5))
@@ -262,10 +345,9 @@ def main():
         pitch_con = pitch_phys[i, :]
         chord_con = chord_phys[i, :]
         blade_count = case_id
-        raw_input_values = np.asarray(np.concatenate([pitch_con, chord_con]), dtype=float).ravel()
+        raw_input_values = np.asarray(X_phys[i, :], dtype=float).ravel()       # the sampled variables
 
-        # Resumable: skip cases whose CAD was already generated.
-        if (geometry_dir / f"sample_blade{case_id}.iges").exists():
+        if case_id in done_ids:
             print(f"Case {case_id} already has CAD; skipping")
             accepted_count += 1
             continue
@@ -286,6 +368,8 @@ def main():
             return_bezier_info=True,
             bezier_constraint_mode=BEZIER_CONSTRAINT_MODE,
             apply_coupled_constraints=USE_BEZIER_VIOLATION_FILTER,
+            para_control=para_control,
+            max_pitch=max_pitch,
         )
 
         if USE_BEZIER_VIOLATION_FILTER and bezier_info["rejected"]:
@@ -309,7 +393,7 @@ def main():
         print(f"Case {case_id} accepted for CAD and data export")
 
         try:
-            cad_ok = generate_cad(pitch_con, chord_con, blade_count, geometry_dir)
+            cad_ok = generate_cad(pitch_con, chord_con, blade_count, geometry_dir, para_control, max_pitch)
         except Exception as e:
             print(f"[WARN] X_CAD failed for case {case_id}: {e}")
             cad_ok = False

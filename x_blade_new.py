@@ -13,6 +13,10 @@ What is new: X_blade() can additionally return a BladeSurface (the smooth
 global parameterization b(xi, eta) of blade_surface_new.py) built from the
 same Bezier-modified Pitch/Chord, which X_CAD_new.py turns into the DRDC
 five-surface IGES geometry. Use `return_blade_surface=True`.
+
+para_control (default 7, both) is para_control_bez_updated's: 0 gives the
+original blade (pitch_con and chord_con not used), 2 chord only, 3 pitch
+only. max_pitch caps P4's pitch (default 1.4).
 """
 
 import numpy as np
@@ -66,6 +70,8 @@ def X_blade(
     bezier_constraint_mode=DEFAULT_BEZIER_CONSTRAINT_MODE,
     apply_coupled_constraints=None,
     write_dat=True,
+    para_control=7,
+    max_pitch=1.4,
 ):
     MaxCamber = BASE_MAX_CAMBER
     Pitch = BASE_PITCH
@@ -76,7 +82,7 @@ def X_blade(
 
     R_values = R_VALUES
 
-    para_control_flag = 7  # control which parameter is being modified
+    para_control_flag = para_control  # 0 the original blade, 2 chord, 3 pitch, 7 both
 
     (
         Pitch,
@@ -95,6 +101,7 @@ def X_blade(
         constraint_mode=bezier_constraint_mode,
         return_reject_info=True,
         apply_coupled_constraints=apply_coupled_constraints,
+        max_pitch=max_pitch,
     )
 
     use_coupled = (

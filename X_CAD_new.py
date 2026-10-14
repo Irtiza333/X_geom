@@ -396,18 +396,21 @@ def X_CAD(grids, x1, output_dir=None, hub=True, hub_height=None,
 def X_CAD_from_design(pitch_con, chord_con, x1, output_dir=None,
                       tip_config=None, write_dat=False, verbose=True,
                       hub=True, hub_height=None, hub_center=0.0,
-                      n_blades=5, trim_root_at_hub=False):
+                      n_blades=5, trim_root_at_hub=False,
+                      para_control=7, max_pitch=1.4):
     """Convenience wrapper: design vector -> DRDC grids -> IGES.
 
     Drop-in for workers that previously called
     X_CAD(points, case_id): call X_CAD_from_design(pitch_con, chord_con,
-    case_id) instead.
+    case_id) instead. para_control and max_pitch go to X_blade (0: the
+    original blade).
     """
     from x_blade_new import X_blade
     from tip_surfaces_new import build_drdc_grids, TipConfig
 
     res = X_blade(pitch_con, chord_con, x1, return_blade_surface=True,
-                  write_dat=write_dat)
+                  write_dat=write_dat, para_control=para_control,
+                  max_pitch=max_pitch)
     blade_surface = res[-1]
     constraint_violation = res[2]
     if blade_surface is None or constraint_violation:
