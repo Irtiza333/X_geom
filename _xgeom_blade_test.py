@@ -189,10 +189,9 @@ def test_vary(tmp):
                                                             ).max() for c in kept], [1, 0, 0, 0, 0], 1e-12)
     repo = BM.read_params(os.path.join(HERE, "msc_blade_params.dat"))
     m = BM.msc_params()
-    check("msc_blade_params.dat: pitch and chord Y (no range), the others N; its table the MSc polynomials' (8 "
+    check("msc_blade_params.dat: its vary lines read (the flags are the user's); its table the MSc polynomials' (8 "
           "decimals, written on another machine)",
-          [BM.vary_free(repo) == ("pitch", "chord"), BM.vary_bounds(repo) == {},
-           max(np.abs(repo.values[c] - m.values[c]).max() for c in BM.CURVES)], [1, 1, 0], 2e-8)
+          [repo.vary is not None, max(np.abs(repo.values[c] - m.values[c]).max() for c in BM.CURVES)], [1, 0], 2e-8)
 
 
 def test_msc_flags():
@@ -230,14 +229,14 @@ def test_sampling(tmp):
         return
     import Initial_sampling as IS
     import para as PARA
-    files = {"both": os.path.join(HERE, "msc_blade_params.dat"), "none": vary_file(tmp, "s0.dat", ALL_N),
+    files = {"both": vary_file(tmp, "s7.dat", ["pitch Y", "chord Y"]), "none": vary_file(tmp, "s0.dat", ALL_N),
              "pitch": vary_file(tmp, "s3.dat", ["pitch Y 0.9 1.5"]),
              "chord": vary_file(tmp, "s2.dat", ["chord Y 0.2 0.6", "skew Y"])}
     s = {k: IS.sampling_setup(v) for k, v in files.items()}
     s["legacy"], s["missing"] = IS.sampling_setup(msc_file(tmp)), IS.sampling_setup(os.path.join(tmp, "nofile.dat"))
     dev = lambda k: np.abs(s[k]["pitch_bounds"] - IS.pitch_bounds).max() + np.abs(s[k]["chord_bounds"]
                                                                                  - IS.chord_bounds).max()
-    check("sampling_setup: msc_blade_params.dat 7 (the code's bounds); every line N 0; pitch only 3 (its range on "
+    check("sampling_setup: pitch and chord Y 7 (the code's bounds); every line N 0; pitch only 3 (its range on "
           "p1y, p7y, max_pitch); chord only 2 (its range on p1y, y4; skew noted); no vary line or no file 7",
           [s["both"]["para_control"], dev("both"), s["none"]["para_control"], "nothing varies" in s["none"]["notes"][0],
            s["pitch"]["para_control"], *s["pitch"]["pitch_bounds"][[0, 5]].ravel(), s["pitch"]["max_pitch"],

@@ -1,8 +1,9 @@
 """
 _xgeom_tool_test.py
 
-Self-check for the design tool: the CAD loft (xcad_loft.py), the rudder
-adapter (xgeom_rudder.py) and, with --gui, the window itself (xgeom_tool.py).
+Self-check for the design tool: the CAD loft and Save CAD's files
+(xcad_loft.py), the rudder adapter (xgeom_rudder.py) and, with --gui, the window
+itself (xgeom_tool.py, Save CAD included).
 
     python _xgeom_tool_test.py          loft and adapter
     python _xgeom_tool_test.py --gui    also open the tool for a moment
@@ -15,6 +16,7 @@ repo) and is skipped without them.
 import os
 import sys
 import tempfile
+import time
 
 import numpy as np
 
@@ -86,6 +88,20 @@ def test_loft():
         step = XL.write_step(res2.shape, os.path.join(tmp, "wing.step"))
         back = XL.read_step(step)
         check("STEP written and read back: the same volume", XL.mass_properties(back)[0], res2.volume, 1e-5 * res2.volume)
+        igs, stp, own = (os.path.join(tmp, n) for n in ("saved.igs", "saved.stp", "own.iges"))
+        how = [XL.save_cad(step, igs), XL.save_cad(step, stp), XL.save_cad(step, own, iges=igs)]
+        back_i = XL.read_iges(igs)
+        try:
+            XL.save_cad(step, os.path.join(tmp, "saved.txt"))
+            txt = 0
+        except ValueError:
+            txt = 1
+        check("save_cad: IGES converted from the STEP (its 8 faces, their area), STEP copied, a build's own IGES "
+              "copied, .txt refused", [how[0].startswith("IGES converted"), XL.count_faces(back_i),
+                                       XL.mass_properties(back_i)[1] / XL.mass_properties(back)[1] - 1.0,
+                                       open(stp, "rb").read() == open(step, "rb").read(),
+                                       open(own, "rb").read() == open(igs, "rb").read(), txt],
+              [1, 8, 0, 1, 1, 1], 1e-6)
 
 
 def test_adapter():
@@ -259,9 +275,49 @@ def test_gui():
         check("the full height box: 300 mm stretches the rudder (H 60 -> 60 x 300 / the extracted), 10 refused",
               [app.ad.span, app.ad.get("H") / (60.0 * 300.0 / span0), tops > 290.0, app.span_box.get() == "300.00",
                app.status.cget("background") == XT.STATUS["error"][0]], [300.0, 1, 1, 1, 1], 1e-9)
+        if not XL.occ_available():
+            print("       Save CAD skipped: no pythonocc-core or cadquery-ocp here")
+            return
+        builds, ask, log = [], XT.filedialog.asksaveasfilename, XT.LOG
+        real = app.ad.build_task
+        app.ad.build_task = lambda case: builds.append(case) or real(case)
+        with tempfile.TemporaryDirectory() as tmp:
+            app.ad.out_dir = tmp                                   # the build's case files go here
+            XT.LOG = os.path.join(tmp, "log.txt")
+            picks = iter(os.path.join(tmp, n) for n in ("saved.step", "saved.igs", "changed"))
+            XT.filedialog.asksaveasfilename = lambda **kw: next(picks)
+            try:
+                said = []
+                for change in (False, False, True):
+                    if change:
+                        app.set_value("H", 0.9 * app.ad.get("H"), None)
+                    app.save_btn.invoke()
+                    busy = str(app.save_btn.cget("state"))
+                    wait_job(app, root)
+                    said.append(app.status.cget("text"))
+                built = app.built["rudder"]["step"]
+                faces = XL.count_faces(XL.read_iges(os.path.join(tmp, "saved.igs")))
+                check("Save CAD: built first and saved (the build's STEP), then as IGES without a new build; a "
+                      "change builds again (no extension: .step); the button off while it runs",
+                      [len(builds), said[0].startswith("XCAD done") and "saved" in said[0],
+                       said[1].startswith("Save CAD done"), faces, os.path.exists(os.path.join(tmp, "changed.step")),
+                       open(os.path.join(tmp, "changed.step"), "rb").read() == open(built, "rb").read(),
+                       busy == "disabled", app.status.cget("background") == XT.STATUS["ok"][0]],
+                      [2, 1, 1, 8, 1, 1, 1, 1], 0)
+            finally:
+                XT.filedialog.asksaveasfilename, XT.LOG = ask, log
+                app.ad.build_task = real
     finally:
         root.destroy()
         os.chdir(cwd)
+
+
+def wait_job(app, root, limit=600.0):
+    """Let the window run until its build (or save) is done."""
+    t0 = time.time()
+    while app._job is not None and time.time() - t0 < limit:
+        root.update()
+        time.sleep(0.05)
 
 
 def main():

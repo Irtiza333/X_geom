@@ -202,8 +202,14 @@ IGES and STEP. CAD (hull) writes the case (parameter file, design and set-up
 JSON, stations, hydrostatics, section points, check plot) and the STEP. CAD
 (wing, fin) writes the case (parameter file, XCAD file, sections table, design
 and set-up JSON, check plot) to outputs/wing or outputs/fin and the loft of the
-XCAD file as STEP. OCC viewer opens the last STEP (needs pythonocc-core). Every build's outcome (and
-the error of a failed one) is added to outputs/xgeom_tool_log.txt.
+XCAD file as STEP. OCC viewer opens the last STEP (needs pythonocc-core). Save
+CAD ... (and the Vehicle tab's Save vehicle CAD ...) writes the CAD of the
+design as it stands to a file picked in a dialog, STEP (.step, .stp) or IGES
+(.igs, .iges): the last build's when nothing has changed since, else the build
+runs first (as its button does, the case written to the output folder too). The
+IGES of the blade is its own DRDC IGES; the others are converted from their STEP
+(faces as trimmed surfaces, mm). Every build's outcome (and the error of a
+failed one) is added to outputs/xgeom_tool_log.txt.
 The bar at the bottom: green ok, amber a build running (the build button counts
 the seconds), orange a warning (e.g. blades closer than the clearance; the
 build still runs), red a problem or an error; a design with a problem (e.g. a
@@ -253,6 +259,7 @@ STATUS = {"ok": ("#dfeedd", "black"), "busy": ("#f6d58e", "black"), "warn": ("#f
 VEHICLE_TAB = 2                                    # the notebook's tabs: Design, 3D sections, Vehicle
 VEHICLE_DIR = os.path.join("outputs", "vehicle")   # the Vehicle CAD's files (relative to this folder)
 LOG = os.path.join(HERE, "outputs", "xgeom_tool_log.txt")   # every build's outcome
+CAD_TYPES = [("STEP", "*.step *.stp"), ("IGES", "*.igs *.iges")]   # Save CAD's file types
 
 
 def load_adapter(name, params=None):
@@ -263,6 +270,40 @@ def load_adapter(name, params=None):
 def available(name):
     """Is the geometry's adapter in this folder (the Rudder folder has the rudder's only)?"""
     return importlib.util.find_spec(ADAPTERS[name][0]) is not None
+
+
+def same(a, b):
+    """Two build keys (App._design_key) alike: tuples item by item, numbers and strings by value, anything
+    else (a design, a parameter file) the same object."""
+    if isinstance(a, tuple) and isinstance(b, tuple):
+        return len(a) == len(b) and all(same(x, y) for x, y in zip(a, b))
+    if isinstance(a, (str, int, float, bool, type(None))) or isinstance(b, (str, int, float, bool, type(None))):
+        return a == b
+    return a is b
+
+
+def save_built(kind, step, path):
+    """A build's STEP written to path as Save CAD asks (xcad_loft.save_cad): the blade's IGES is its own
+    DRDC IGES, written next to its STEP. Returns how."""
+    import xcad_loft as XL
+    return XL.save_cad(step, path, os.path.splitext(step)[0] + ".iges" if kind == "blade" else None)
+
+
+def then_save(res, kind, path):
+    """A build's result with its CAD then written to path (Save CAD), when the build made one."""
+    if not path:
+        return res
+    if not res.get("view"):
+        res["message"] = f"NOT saved to {path} (no CAD); " + res.get("message", "")
+        return res
+    try:
+        how = save_built(kind, res["view"], path)
+    except Exception as exc:
+        res.update(message=f"NOT saved to {path}: {type(exc).__name__}: {exc}; " + res["message"], error=True)
+        return res
+    res["message"] = f"saved {path} ({how}); " + res["message"]
+    res.setdefault("report", []).append(f"  saved: {path} ({how})")
+    return res
 
 
 def file_kind(path):
@@ -371,6 +412,8 @@ class App:
         self._job = None
         self._note = None                                   # a message the next view update shows instead of ok
         self.step = None
+        self.built = {}                                     # kind or 'vehicle' -> the last build's key and STEP
+        self.save_dir = None                                # the folder Save CAD wrote to last
         self._build_layout()
         self.switch(self.kinds[0])
 
@@ -533,10 +576,12 @@ class App:
         ttk.Label(row, text="CAD", font=("TkDefaultFont", 10, "bold")).pack(side="left")
         self.vbuild_btn = ttk.Button(row, text="Vehicle CAD", command=self.on_vehicle_build)
         self.vbuild_btn.pack(side="left", padx=(12, 6))
+        self.vsave_btn = ttk.Button(row, text="Save vehicle CAD ...", command=lambda: self.on_save_cad("vehicle"))
+        self.vsave_btn.pack(side="left", padx=(0, 6))
         ttk.Button(row, text="OCC viewer", command=self.open_occ_viewer).pack(side="left")
         ttk.Label(row, text=f"each component's CAD (its own folder, the case named in the left panel), placed as "
                             f"shown and fused: {VEHICLE_DIR}/<case>_vehicle.step (mm)", foreground=INK2,
-                  wraplength=620, justify="left").pack(side="left", padx=10)
+                  wraplength=520, justify="left").pack(side="left", padx=10)
         self.figv = Figure(figsize=(10, 7), dpi=100)
         self.canvasv = FigureCanvasTkAgg(self.figv, master=tab)
         self.canvasv.get_tk_widget().pack(fill="both", expand=True)
@@ -613,6 +658,8 @@ class App:
         self.build_btn = ttk.Button(row, text=self.build_label(self.kind),
                                     command=lambda k=self.kind: self.on_build(k))
         self.build_btn.pack(side="left", padx=6)
+        self.save_btn = ttk.Button(row, text="Save CAD ...", command=lambda k=self.kind: self.on_save_cad(k))
+        self.save_btn.pack(side="left", padx=(0, 6))
         self._buttons()
         ttk.Button(row, text="OCC viewer", command=self.open_occ_viewer).pack(side="left")
         self.refresh_labels()
@@ -913,9 +960,10 @@ class App:
         ad = self.adapters[kind]
         return f"{ad.build_label} {NAMES[kind].lower()}" if self.vehicle else ad.build_label
 
-    def on_build(self, kind=None):
+    def on_build(self, kind=None, save_to=None):
         """The left panel's build button, made for one component (kind): that component writes its case and
-        its CAD (its adapter's build_task, run off the GUI thread)."""
+        its CAD (its adapter's build_task, run off the GUI thread); with save_to (Save CAD) the CAD is then
+        written to that file too."""
         kind = kind or self.kind
         ad = self.adapters.get(kind)
         if self._job is not None or ad is None:
@@ -928,15 +976,19 @@ class App:
                 return
             case = self.case.get().strip() or "gui"
             task = ad.build_task(case)                                  # the design as it is now
+            keys = {kind: self._design_key(kind)}
         except Exception as exc:
             self._log(label, "-", 0.0, traceback.format_exc())
             self.say(f"{label} failed: {type(exc).__name__}: {exc}", error=True)
             return
-        self._start(kind, label, case, lambda job: task(), f"{label} running: writing {case} and building the CAD")
+        self._start(kind, label, case, lambda job: then_save(task(), kind, save_to),
+                    f"{label} running: writing {case} and building the CAD"
+                    + (f", then saving {os.path.basename(save_to)}" if save_to else ""), keys)
 
-    def on_vehicle_build(self):
+    def on_vehicle_build(self, save_to=None):
         """The Vehicle tab's Vehicle CAD: each component's own case and CAD, then the parts placed as the tab
-        shows them and fused into one solid (vehicle_cad.run_vehicle)."""
+        shows them and fused into one solid (vehicle_cad.run_vehicle); with save_to (Save vehicle CAD) the
+        vehicle's CAD is then written to that file too."""
         import dataclasses
         import xgeom_vehicle as XV
         if self._job is not None:
@@ -960,6 +1012,8 @@ class App:
             info = XV.assemble(parts, placement)[1]
             case = self.case.get().strip() or "gui"
             tasks = {k: self.adapters[k].build_task(case) for k in parts}   # the designs as they are now
+            keys = {k: self._design_key(k) for k in parts}
+            keys["vehicle"] = self._design_key("vehicle")
         except Exception as exc:
             self._log(label, "-", 0.0, traceback.format_exc())
             self.say(f"{label} failed: {type(exc).__name__}: {exc}", error=True)
@@ -970,13 +1024,68 @@ class App:
 
             def progress(text):
                 job["message"] = f"{label} running: {text} ..."
-            return VC.run_vehicle(VEHICLE_DIR, case, tasks, parts, info, placement, progress)
-        self._start("vehicle", label, case, run, f"{label} running: the components' CAD, then the vehicle")
+            return then_save(VC.run_vehicle(VEHICLE_DIR, case, tasks, parts, info, placement, progress), "vehicle",
+                             save_to)
+        self._start("vehicle", label, case, run, f"{label} running: the components' CAD, then the vehicle"
+                    + (f", then saving {os.path.basename(save_to)}" if save_to else ""), keys)
 
-    def _start(self, kind, label, case, run, message):
-        """Run a build off the GUI thread: run(job) returns the result dict (report, message, error, view)."""
+    def _design_key(self, kind):
+        """What a build depends on, to tell whether the last build is of the design as it stands: the
+        component's design and parameter file (its adapter makes new ones on every change) and its settings;
+        for 'vehicle' its components' keys and the placement (not the view)."""
+        if kind != "vehicle":
+            ad = self.adapters[kind]
+            return ad.design, getattr(ad, "params", None), repr(getattr(ad, "settings", None))
+        import dataclasses
+        import xgeom_vehicle as XV
+        parts = {k: self._vehicle_part(k) for k in self.kinds if k in self.adapters}
+        pl = self.placement
+        if pl is None:
+            return ()
+        place = tuple((f.name, getattr(pl, f.name)) for f in dataclasses.fields(pl) if f.name != "view")
+        return tuple((k, self._design_key(k)) for k in XV.active(parts, pl)) + (place,)
+
+    def on_save_cad(self, kind=None):
+        """Save CAD ...: the CAD of a component (kind 'vehicle': of the vehicle) as its design stands, to a
+        STEP or IGES file picked here (CAD_TYPES): the last build's when it is of the design as it stands,
+        else the build runs first (on_build, on_vehicle_build) and then writes the file."""
+        kind = kind or self.kind
+        if self._job is not None or (kind != "vehicle" and kind not in self.adapters):
+            return
+        import xcad_loft as XL
+        case = self.case.get().strip() or "gui"
+        vehicle = kind == "vehicle"
+        start = self.save_dir or os.path.abspath(VEHICLE_DIR if vehicle else self.adapters[kind].out_dir)
+        name = "the vehicle" if vehicle else f"the {NAMES.get(kind, kind).lower()}"
+        path = filedialog.asksaveasfilename(title=f"Save the CAD of {name}", defaultextension=".step",
+                                            initialdir=start if os.path.isdir(start) else HERE,
+                                            initialfile=f"{case}_vehicle.step" if vehicle else f"{case}.step",
+                                            filetypes=CAD_TYPES)
+        if not path:
+            return
+        if not os.path.splitext(path)[1]:
+            path += ".step"
+        if os.path.splitext(path)[1].lower() not in XL.CAD_EXTENSIONS:
+            self.say(f"Save CAD: {os.path.basename(path)} is not a .step, .stp, .igs or .iges file", error=True)
+            return
+        self.save_dir = os.path.dirname(path)
+        built = self.built.get(kind)
+        if built and os.path.exists(built["step"]) and same(built["key"], self._design_key(kind)):
+            def run(job):                                           # the last build is of this design
+                how = save_built(kind, built["step"], path)
+                return {"view": built["step"], "error": False, "report": [f"saved: {path} ({how})"],
+                        "message": f"{path} ({how})"}
+            self._start("save", "Save CAD", case, run, f"Save CAD: writing {os.path.basename(path)}")
+        elif vehicle:
+            self.on_vehicle_build(save_to=path)
+        else:
+            self.on_build(kind, save_to=path)
+
+    def _start(self, kind, label, case, run, message, keys=None):
+        """Run a build off the GUI thread: run(job) returns the result dict (report, message, error, view).
+        keys: the build keys (_design_key) of what it builds, by kind, kept with its STEP for Save CAD."""
         job = self._job = {"kind": kind, "label": label, "case": case, "done": False, "result": None,
-                           "error": None, "t0": time.time(), "message": message + " ..."}
+                           "error": None, "t0": time.time(), "message": message + " ...", "keys": keys or {}}
         self._buttons()
         self.say(job["message"], busy=True)
 
@@ -1002,6 +1111,9 @@ class App:
                 btn.configure(state="disabled")
                 if job["kind"] == kind:
                     btn.configure(text=f"{time.time() - job['t0']:.0f} s")     # the build's time so far
+        for btn in (getattr(self, "save_btn", None), getattr(self, "vsave_btn", None)):
+            if btn is not None and btn.winfo_exists():
+                btn.configure(state="normal" if job is None else "disabled")
 
     def _poll(self):
         job = self._job
@@ -1026,6 +1138,10 @@ class App:
             pass
         if res.get("view"):
             self.step = res["view"]
+            steps = dict(res.get("record", {}).get("steps", {}), **{job["kind"]: res["view"]})
+            for k, key in job["keys"].items():                     # the builds Save CAD can use as they are
+                if steps.get(k):
+                    self.built[k] = {"key": key, "step": steps[k]}
         self._log(label, job["case"], secs, res["message"])
         self.say(f"{label} done in {secs:.1f} s: {res['message']}", error=res["error"], warn=res.get("warn", False))
 

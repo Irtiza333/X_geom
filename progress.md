@@ -1,6 +1,6 @@
 # Progress
 
-XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 14 Oct 2026.
+XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 16 Oct 2026.
 
 ## Achieved
 
@@ -96,8 +96,11 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   change points, 1 or 2 segments per curve; planform, front view, the picked curve, the wing in 3D and its sections
   over the chord. The build button builds its own panel's component (in the vehicle named after it: CAD hull, CAD
   propeller, XCAD rudder, CAD fin, CAD wing) and stays in view under the panel; every build's outcome, and a failed
-  one's error, goes to `outputs/xgeom_tool_log.txt`. Status bar: green ok, amber while a build runs, orange a
-  warning (the build still runs), red for a problem or an error.
+  one's error, goes to `outputs/xgeom_tool_log.txt`. Save CAD ... beside it (and Save vehicle CAD ... in the
+  Vehicle tab) writes the CAD of the design as it stands to a file picked in a dialog, STEP or IGES: the last
+  build's when nothing has changed since, else it builds first (user, 16 Oct 2026). IGES: the blade's own DRDC
+  IGES, the others converted from their STEP (`xcad_loft.save_cad`; faces as trimmed surfaces, mm). Status bar:
+  green ok, amber while a build runs, orange a warning (the build still runs), red for a problem or an error.
   2D plots, in the tool and in the case check plots: the blade's and the hull's have r/R and x across; the
   rudder's planform and curves are drawn as the rudder stands, x (or the curve's value) across and the height up
   (user, 8 Oct 2026); the wing's and the fin's the same way, the span up.

@@ -31,6 +31,9 @@ point files in metres are scaled by 1000, as X_CAD.py does.
     python xcad_loft.py <xcad file> --view        and shows it in the pythonocc viewer
     python xcad_loft.py --view-step <file.step>   shows a STEP file
 
+save_cad writes a built STEP file to a file of the user's choice, as STEP or
+IGES (the design tool's Save CAD).
+
 Needs pythonocc-core (OCC.Core, conda-forge) or cadquery-ocp (OCP).
 """
 
@@ -335,6 +338,47 @@ def read_step(path):
         raise RuntimeError(f"reading {path} failed")
     r.TransferRoots()
     return r.OneShape()
+
+
+def write_iges(shape, path):
+    """Write a shape as IGES in mm, its faces as trimmed surfaces (entity 144, the form CAD and meshing
+    tools read)."""
+    IGESControl_Writer = _occ("IGESControl", "IGESControl_Writer")
+    w = IGESControl_Writer("MM", 0)                      # 0: faces as trimmed surfaces (1: BRep solids)
+    w.AddShape(shape)
+    w.ComputeModel()
+    if not w.Write(str(path)):
+        raise RuntimeError(f"writing {path} failed")
+    return path
+
+
+def read_iges(path):
+    IGESControl_Reader = _occ("IGESControl", "IGESControl_Reader")
+    r = IGESControl_Reader()
+    if int(r.ReadFile(str(path))) != 1:
+        raise RuntimeError(f"reading {path} failed")
+    r.TransferRoots()
+    return r.OneShape()
+
+
+CAD_EXTENSIONS = {".step": "STEP", ".stp": "STEP", ".igs": "IGES", ".iges": "IGES"}
+
+
+def save_cad(step, path, iges=None):
+    """A built STEP file written to path, by its extension (CAD_EXTENSIONS): STEP a copy of it; IGES a copy
+    of iges (a build's own IGES: the blade's) when that exists, else the STEP converted (write_iges). Returns
+    how it was written."""
+    import shutil
+    kind = CAD_EXTENSIONS.get(os.path.splitext(str(path))[1].lower())
+    if kind is None:
+        raise ValueError(f"{path}: a .step, .stp, .igs or .iges file")
+    src = step if kind == "STEP" else iges if iges and os.path.exists(iges) else None
+    if src is None:
+        write_iges(read_step(step), path)
+        return f"IGES converted from {os.path.basename(step)}"
+    if not (os.path.exists(path) and os.path.samefile(src, path)):
+        shutil.copyfile(src, path)
+    return f"{kind}, a copy of {os.path.basename(src)}"
 
 
 def tessellate(shape, linear=0.5, angular=0.5):

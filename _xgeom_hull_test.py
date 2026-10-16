@@ -3,7 +3,8 @@ _xgeom_hull_test.py
 
 Self-check for the hull in the design tool (xgeom_hull.py) and the vehicle (xgeom_vehicle.py): the adapter's
 variables, orders, elliptical sections, set-up and parameter files and build; the placement of the propeller
-and the rudder on the hull; with --gui the window in vehicle mode and the hull alone (xgeom_tool.py).
+and the rudder on the hull; with --gui the window in vehicle mode (Save vehicle CAD with the vehicle's CAD
+left out) and the hull alone (xgeom_tool.py).
 
     python _xgeom_hull_test.py          adapter and placement; with OCC the vehicle's CAD (hull and rudders)
     python _xgeom_hull_test.py --gui    also open the tool for a moment
@@ -478,6 +479,10 @@ def test_gui():
                                                      app.vbuild_btn.cget("text") == "Vehicle CAD",
                                                      "Traceback" in log and "the hull: hull: no CAD here" in log],
               [1, 1, 1, 1, 1, 1], 0)
+        if XL.occ_available():
+            save_vehicle(app, wait)
+        else:
+            print("       Save vehicle CAD skipped: no pythonocc-core or cadquery-ocp here")
         app.switch("hull")
         h0 = rudder_height(app, per)
         app.switch("rudder")
@@ -549,6 +554,48 @@ def test_gui():
         settle(root)
         root.destroy()
         os.chdir(cwd)
+
+
+def save_vehicle(app, wait):
+    """Save vehicle CAD with vehicle_cad.run_vehicle left out (a box for the vehicle and each component):
+    built first, then saved again without a build (IGES), a component's CAD from that build saved from its
+    panel, and built again after the placement changes."""
+    import xgeom_tool as XT
+    import vehicle_cad as VC
+    tmp = tempfile.mkdtemp()
+    box = XL._occ("BRepPrimAPI", "BRepPrimAPI_MakeBox")(10.0, 20.0, 30.0).Shape()
+    runs = []
+
+    def fake_run(out_dir, case, tasks, parts, info, placement, progress=print, separate=True):
+        runs.append(sorted(tasks))
+        n = len(runs)
+        steps = {k: XL.write_step(box, os.path.join(tmp, f"{k}{n}.step")) for k in tasks}
+        return {"report": [], "message": "vehicle built", "error": False, "warn": False,
+                "view": XL.write_step(box, os.path.join(tmp, f"{case}_vehicle{n}.step")), "record": {"steps": steps}}
+    real_run, ask = VC.run_vehicle, XT.filedialog.asksaveasfilename
+    picks = iter(os.path.join(tmp, n) for n in ("v1.step", "v2.igs", "hull.stp", "v3.step"))
+    VC.run_vehicle, XT.filedialog.asksaveasfilename = fake_run, (lambda **kw: next(picks))
+    said = []
+    try:
+        for kind in ("vehicle", "vehicle", "hull", "vehicle"):
+            if len(said) == 3:
+                app.vset["rudders"].set(3)                          # a new placement: the vehicle again
+                app.on_vehicle()
+            app.on_save_cad(kind)
+            wait()
+            said.append(app.status.cget("text"))
+        app.vset["rudders"].set(4)
+        app.on_vehicle()
+    finally:
+        VC.run_vehicle, XT.filedialog.asksaveasfilename = real_run, ask
+    same = [open(os.path.join(tmp, a), "rb").read() == open(os.path.join(tmp, b), "rb").read()
+            for a, b in (("v1.step", "gui_vehicle1.step"), ("hull.stp", "hull1.step"), ("v3.step", "gui_vehicle2.step"))]
+    check("Save vehicle CAD: built first (all components) and saved, then IGES without a build; the hull's CAD "
+          "from that build saved from its panel; a new placement builds again",
+          [len(runs), runs[0] == sorted(XV.active({k: 0 for k in app.adapters}, app.placement)),
+           said[0].startswith("Vehicle CAD done") and "saved" in said[0], said[1].startswith("Save CAD done"),
+           XL.count_faces(XL.read_iges(os.path.join(tmp, "v2.igs"))), said[2].startswith("Save CAD done"),
+           said[3].startswith("Vehicle CAD done")] + same, [2, 1, 1, 1, 6, 1, 1, 1, 1, 1], 0)
 
 
 def rudder_height(app, per):
