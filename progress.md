@@ -1,6 +1,6 @@
 # Progress
 
-XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 16 Oct 2026.
+XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 22 Oct 2026.
 
 ## Achieved
 
@@ -115,7 +115,11 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   ahead along the hull's profile at the rudder's angle, the rudder pitched to that line (again whenever it is
   moved or scaled, or the hull changes); a copy of the root section extruded inwards along the rudder's height
   by the largest gap under the root (its thickness over the curved hull, a concave profile under the chord) plus
-  2 % of the root chord closes the joint. Fins (0 to 12 around the axis; default 1, on top, a tenth of the way
+  2 % of the root chord closes the joint. With TE rake ticked (user, 22 Oct 2026) the rudder's angle is set
+  instead: its TE line at the rake from square to the axis (0: square, as BB2's stern planes; top aft positive),
+  meeting the hull at the x set; the rudder rests on the hull (the root's closest point on it) and its root
+  section is extruded along the TE line until it meets the hull fully (the largest gap plus 2 % of the chord);
+  unticked, the box shows the TE's rake the hull's slope gives. Fins (0 to 12 around the axis; default 1, on top, a tenth of the way
   along the middle body) and the wing pair (wings 2 or 0; the starboard wing's angle 0 to 180 deg, default 90,
   level; a quarter of the way along the middle body) sit the same way, their root's LE on the hull at the x set
   (m from the nose) and the TE one root chord aft along the hull, pitched to the hull's slope (their own pitch on
@@ -186,6 +190,13 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   root extrusion and the loft) until each appendage stood 0.2 mm off the hull on its extrusion; a fin's root LE
   exactly on a join of the hull's faces (the start of the middle body) stayed unfused, so the defaults avoid the
   joins.
+- Vehicle, TE rake (user, 22 Oct 2026): `Placement.rudder_rake` (None: pitched to the hull, the default),
+  `place_rudder(..., rake, slope)` with the rudder's TE line (`te_slope`, from the original's TE rows, which every
+  design keeps: dx/dy -0.142, 8.08 deg for the wind-tunnel rudder), `rest_on_hull`; Vehicle CAD extrudes the root
+  along the TE line (`extended_rudder(..., direction)`, the set-up's `slope`). Wind-tunnel rudder on SUBOFF at the
+  default x, rake 0: root chord 8.08 deg, root LE 60.4 mm and TE 35.0 mm from the axis, extruded 14.5 mm; the
+  vehicle's CAD one valid solid, V 0.701645 m^3. The window checks ran under Xvfb in a Python 3.12 environment
+  (the cloud's Python 3.13 has no Tk).
 - Blade count (the MSc blade as fitted): Z 2 to 7 pass the clearance check (25 mm; 29.6 mm apart at 7) and the
   hub sector. Checked without OCC (the hub sector's grids); the CAD with Z other than 5 is still to be built on the
   user's machine.
@@ -199,6 +210,46 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   merged `Initial_sampling.py` runs a round in infill mode (cloud, the CAD left out: cases 100 to 102, resumed
   without repeats). The GP script keeps its own copy of the bounds and 11 variables: ranges on the vary lines,
   or pitch or chord alone, are not yet seen by it.
+- BB2 (one-off, user, 22 Oct 2026; `bb2/`, the scripts take the input paths): the MARIN stock propeller S7371R cut
+  at 34 radii into `bb2/outputs/bb2_blade_params.dat` (blade_modify's format: D 5 m, Z 6, every vary line N), a
+  section table per r/R and one at r/R 0.7 (`bb2_sections.py`); one blade on the conic hub and cap of drawing F6
+  (the root runs 0.1 m into the hub, so the hub cuts the root sections) and the aft half of the hull rebuilt with
+  `hull_modify` (tail order 5, within 0.96 mm of the IGES), fused into one valid solid (`bb2_build.py`). The blade
+  takes the section shape per r/R (`SectionsBladeSurface`): within 0.9 mm of the original at 44 cuts; X_CAD_new's
+  single table is off by up to 23 mm at the root (the shape changes along the span). The outputs carry MARIN data.
+  Then (user, 22 Oct 2026): the six-blade propeller (`bb2_prop6`, `bb2_vehicle6`); quadrant IGES files with
+  solids, the quadrant y >= 0, z >= 0 of hull.iges (hull, hub with six blades, vehicle); the wind-tunnel rudder as
+  BB2's X stern (`bb2_rudder.py`): scaled 1:20 (the free fit gives 1:20.006) and placed by a fit of its LE, TE and
+  their tops onto BB2's stern plane in hull.iges (turned 7.5 deg; LE within 2 mm, TE 16 mm, the tip line 83 mm
+  off at its ends: its tip is cut at another angle), the root extruded 510 mm into the hull, four rudders; every
+  vehicle one valid solid. No quartered blades (user, 22 Oct 2026): the quadrant files are the hull, the hull with
+  the hub, and with the rudder too; the propeller for the periodic set-up is one blade on its 1/6 of the hub, the
+  periodic hub strip of hub_new (TM 2013-178 Sec. 10: theta within p_h(x) +- 30 deg, p_h on the mid-line of the
+  blade's footprint on the cone), `bb2_blade_sector` as a solid and as its walls; six of them have the six-blade
+  propeller's volume to 4e-7.
+  Then (user, 22 Oct 2026): the rudder placed by the XGeom tool's rule (`xgeom_vehicle.place_rudder` on the
+  rebuilt hull: the root's TE on the hull where BB2's TE meets it, x 5304.6 mm; the LE a root chord ahead on the
+  hull, x 8762.6 mm, 80 mm aft of BB2's; pitched 16.46 deg with the hull; root extruded 72.1 mm plus the 0.2 mm
+  lift) and compared with BB2's stern plane in hull.iges above the hull (`bb2_rudder_compare.dat`,
+  `bb2_rudder_sections.dat`, `bb2_rudder_compare.png`). The previous best fit lay within 4 mm of BB2's surface
+  over 95 % of it (57 mm at the tip), area within 0.2 %. The rule turns the rudder 9 deg further aft than BB2's
+  (on BB2 the rudder file's root runs at 7.5 deg to the axis, the hull under it at 16.4 deg): the tip LE 722 mm
+  aft, the tip TE 626 mm aft and 599 mm lower, area 4.9 % less, BB2's surface up to 650 mm from it. The vehicles
+  and the quadrant carry the rule's rudders, fused as their parts outside the hull (a fuse of the whole rudders
+  left some apart: the flat root crosses the hull at a shallow angle).
+  Then (user, 22 Oct 2026): BB2's rule is the TE line square to the axis. The rudder so placed (XGeom's TE rake
+  0: the TE line through BB2's TE on the hull, x 5304.6 mm; resting on the hull at its root LE, x 8874.6 mm, 33 mm
+  ahead of BB2's; root chord 8.08 deg; the root extended 616 mm along the TE into the hull) lies within 16 mm of
+  95 % of BB2's surface (mean 5.6 mm; up to 123 mm at the tip, whose LE corner sits 180 mm higher: the tip is
+  cut at another angle), its LE swept 12.08 deg against 11.46, area 2.2 % more.
+  Then (user, 22 Oct 2026; the propeller is optimized in this set-up): the vehicles carry BB2's own stern planes
+  (`bb2_sternplanes.py`: hull.iges's stern plane copied to 45 + 90 k deg, cut by the rebuilt hull with the hub
+  and fused; the quadrant file likewise). The wind-tunnel rudder cannot line up with BB2 by placement: its tip is
+  cut at 94.5 deg to its TE (3.6 deg to its root) against BB2's 90.6, and its LE converges on the TE at 12.1 deg
+  against 11.6; XGeom reads the model right but keeps the original's TE line and tip, so it cannot make BB2's tip
+  (a tip-angle variable would). Stern plane outside the rebuilt hull 4.799887e9 mm^3, outside hull.iges's own hull
+  4.799854e9 (7e-6); vehicles one valid solid each (1.808035e12 and 1.808734e12 mm^3), quadrant 4.51974e11.
+  `bb2_rudder.py` keeps the comparison and the TE-square rudder (`bb2_rudder.step`) only.
 
 ## Next steps
 

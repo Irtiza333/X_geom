@@ -48,7 +48,14 @@ Vehicle
                             moved or scaled, or the hull changes); a copy of the root
                             section extruded inwards along the rudder's height (dark
                             orange) closes the gaps the flat root leaves on the curved
-                            hull.
+                            hull. TE rake ticked: the rudder's angle is set instead,
+                            its TE line that many deg from square to the axis (top aft
+                            positive; 0 square to it, as BB2's stern planes), meeting
+                            the hull at x; the rudder rests on the hull (the root's
+                            closest point on it) and its root section is extruded along
+                            the TE line until it meets the hull fully (the largest gap
+                            under it and 2 % of the root chord). Unticked, the box
+                            shows the TE's rake that the hull's slope gives.
                  fins       root LE at x: where the root's leading edge sits on the
                             hull (m from the nose; default a tenth of the way along the
                             middle body); fins: how many, 0 to 12, evenly spaced around
@@ -405,7 +412,7 @@ class App:
                     raise ValueError(f"{path}: not a set-up or parameter file of " + ", ".join(self.kinds))
                 self.start[kind][key] = path
         self.adapters, self.errors, self.frames, self.picked, self._vcache = {}, {}, {}, {}, {}
-        self.kind, self.ad, self.placement = None, None, None
+        self.kind, self.ad, self.placement, self._vinfo = None, None, None, None
         self.curve = tk.StringVar()
         self.rows = []
         self._pending = False
@@ -544,7 +551,7 @@ class App:
         rows = [("Propeller", (("prop_dx", "plane at x - L (m)", num),
                                ("prop_d", "D (m)", dict(num, from_=0.001))), "show"),
                 ("Rudder", (("rudder_dx", "root TE at x - L (m)", num), ("rudders", "rudders", count),
-                            ("rudder_angle", "first at (deg)", angle), ("rudder_scale", "scale", scale)), None)]
+                            ("rudder_angle", "first at (deg)", angle), ("rudder_scale", "scale", scale)), "rake")]
         if "fin" in self.kinds:
             rows.append(("Fin", (("fin_x", "root LE at x (m)", dict(num, from_=0.0)), ("fins", "fins", count),
                                  ("fin_angle", "first at (deg)", angle), ("fin_scale", "scale", scale)), None))
@@ -565,6 +572,16 @@ class App:
                 sb.bind("<FocusOut>", self.on_vehicle)
                 self.vset[key] = sb
                 c += 2
+            if extra == "rake":                         # the rudders' own angle, or the hull's slope
+                self.vrake = tk.BooleanVar(value=False)
+                ttk.Checkbutton(bar, text="TE rake (deg)", variable=self.vrake,
+                                command=self.on_vehicle).grid(row=r, column=c, sticky="e", padx=(12, 3))
+                sb = ttk.Spinbox(bar, command=self.on_vehicle, from_=-XV.MAX_RAKE, to=XV.MAX_RAKE, increment=1.0,
+                                 width=6)
+                sb.grid(row=r, column=c + 1, sticky="w", pady=1)
+                sb.bind("<Return>", self.on_vehicle)
+                sb.bind("<FocusOut>", self.on_vehicle)
+                self.vset["rudder_rake"] = sb
             if extra == "show":
                 self.vshow = tk.StringVar(value="vehicle")
                 ttk.Label(bar, text="show").grid(row=r, column=c, sticky="e", padx=(24, 3))
@@ -837,6 +854,8 @@ class App:
         except (ValueError, tk.TclError):
             new = None
         L = self.adapters["hull"].design.length if "hull" in self.adapters else float("inf")
+        if new is not None and "rudder_rake" in new and not self.vrake.get():
+            new["rudder_rake"] = None                                 # pitched to the hull's slope
         problem = None if new is None else self._xv().placement_problem(new, L)
         if problem:
             self.say(problem, error=True)
@@ -861,10 +880,25 @@ class App:
         """The Vehicle tab's boxes show the placement in use."""
         pl = self.placement
         for k, sb in self.vset.items():
+            if k == "rudder_rake":
+                self._fill_rake()
+                continue
             v = getattr(pl, k)
             sb.set(f"{v:d}" if k in COUNTS else f"{v:g}" if k.endswith("_angle") else
                    f"{v:.2f}" if k.endswith("_scale") else f"{v:.3f}")
         self.vshow.set(pl.view)
+
+    def _fill_rake(self):
+        """The rudders' TE rake: ticked and the value set, or unticked and greyed with the TE's rake that the
+        hull's slope gives (the Vehicle tab's last view)."""
+        v, sb = self.placement.rudder_rake, self.vset["rudder_rake"]
+        self.vrake.set(v is not None)
+        if v is None:
+            got = (self._vinfo or {}).get("rudder_rake")
+            v = round(float(got[0]), 2) if got else 0.0
+        sb.configure(state="normal")
+        sb.set(f"{v:g}")
+        sb.configure(state="normal" if self.vrake.get() else "disabled")
 
     def say(self, text, error=False, busy=False, warn=False):
         """The status bar: green ok, amber busy (a build running), orange a
@@ -939,7 +973,9 @@ class App:
         if self.placement is None:
             self.placement = XV.default_placement(parts)
             self._fill_vehicle()
-        self.viewv.update(parts, self.placement, self.kind)
+        self._vinfo = self.viewv.update(parts, self.placement, self.kind)
+        if self.placement.rudder_rake is None and "rudder_rake" in self.vset:
+            self._fill_rake()                                         # the rake the hull's slope gives
         self.canvasv.draw_idle()
         parts = {k: parts[k] for k in XV.active(parts, self.placement)}      # on the vehicle (a count above 0)
         problems = [f"{NAMES[k].lower()}: {q}" for k, part in parts.items() for q in part["problems"]]

@@ -7,17 +7,19 @@ y to starboard, z up).
 
     hull       the hull's STEP solid (hull_modify.build_solid), as it is
     rudder     the rudder's STEP solid (lofted through its XCAD file by xcad_loft; its XCAD frame: x chordwise,
-               y the thickness reversed, z the height), with its flat root face extruded down the height by the
-               root extrusion's depth (extended_rudder: the prism's sides and end sewn on in place of the root
-               face); each rudder is a copy turned, pitched, scaled and moved so that its root LE sits at the
-               vehicle's root LE, its chord along ec, its height along eh and its thickness along et (rudder_trsf)
+               y the thickness reversed, z the height), with its flat root face extruded by the root extrusion's
+               depth (extended_rudder: the prism's sides and end sewn on in place of the root face), down the
+               height, or along the TE line when the Vehicle tab sets the rudders' TE rake (the extrusion's
+               slope dx/dz, 'slope' in the set-up); each rudder is a copy turned, pitched, scaled and moved so
+               that its root LE sits at the vehicle's root LE, its chord along ec, its height along eh and its
+               thickness along et (rudder_trsf)
     fin, wing  the same from their own STEP solids (wing_modify.write_cad, the same XCAD frame with the span as
                the height); the port wing is the starboard one mirrored in the plane y = 0 (mirrored)
     propeller  the blade's five DRDC faces (the propeller's STEP: blade_modify.write_cad, X_CAD_new) sewn and
                closed at the root by the piece of the hub cylinder inside the root ring (blade_solid); Z copies
                around the axis fused with the hub cylinder (the hub radius and height: propeller_solid); scaled to
                the vehicle's D and moved to the propeller plane
-Each rudder, fin and wing stands ROOT_LIFT_MM off the hull on its root extrusion (lifted along its height,
+Each rudder, fin and wing stands ROOT_LIFT_MM off the hull on its root extrusion (lifted along the extrusion,
 the extrusion that much longer, its inner end where the Vehicle tab has it): where the root lies on the
 hull (along the whole chord on the middle body) the hull would otherwise touch the edge between the root
 extrusion and the lofted faces, and the fuse comes out invalid. The hull now meets the extrusion's side
@@ -174,15 +176,19 @@ def _root_face(solid, axis=2):
     return best
 
 
-def extended_rudder(solid, depth, axis=2):
+def extended_rudder(solid, depth, axis=2, direction=None):
     """The rudder with its root extrusion, one solid: its faces but the root face, sewn to the sides and the
-    end of the root face's prism (depth mm down the axis); the same as the union of the two, without a
-    boolean."""
+    end of the root face's prism (depth mm down the axis, or back along direction, a vector pointing up from
+    the root, the TE line's for a set TE rake); the same as the union of the two, without a boolean."""
     BRepPrimAPI_MakePrism = XL._occ("BRepPrimAPI", "BRepPrimAPI_MakePrism")
     gp_Vec = XL._occ("gp", "gp_Vec")
     root = _root_face(solid, axis)
-    v = [0.0, 0.0, 0.0]
-    v[axis] = -float(depth)
+    if direction is None:
+        v = [0.0, 0.0, 0.0]
+        v[axis] = -float(depth)
+    else:
+        u = np.asarray(direction, dtype=float)
+        v = list(-float(depth) * u / np.linalg.norm(u))
     mk = BRepPrimAPI_MakePrism(root, gp_Vec(*v))
     first, last = mk.FirstShape(), mk.LastShape()
     sides = [f for f in _shapes(mk.Shape(), "FACE") if not (f.IsSame(first) or f.IsSame(last))]
@@ -295,12 +301,14 @@ def place_parts(hull, rudder, propeller, setup, fin=None, wing=None):
         if solid is None or not rec:
             continue
         cache, lift = {}, float(setup.get("root_lift_mm", 0.0))
+        slopes = rec.get("slope") or [0.0] * len(rec["depth"])      # dx/dz of the extrusion (0: down the height)
         for k, (frame, depth) in enumerate(zip(rec["frames"], rec["depth"])):
             d = round((1000.0 * depth + lift) / rec["scale"], 9)      # the extrusion in the part's own mm
-            if d not in cache:
-                cache[d] = extended_rudder(solid, d)
+            up = np.array([float(slopes[k]), 0.0, 1.0])               # the extrusion, up, in the part's frame
+            if (d, up[0]) not in cache:
+                cache[d, up[0]] = extended_rudder(solid, d, direction=up)
             m, t = rudder_trsf(frame, rec["scale"], rec["xa"], rec["y0"])
-            placed = transformed(cache[d], m, t + lift * np.asarray(frame[2], dtype=float))
+            placed = transformed(cache[d, up[0]], m, t + lift * (m @ up) / np.linalg.norm(m @ up))
             if rec.get("mirror"):
                 out[f"{kind} starboard"], out[f"{kind} port"] = placed, mirrored(placed)
             else:
@@ -348,8 +356,9 @@ APPENDAGES = {"rudder": ("rudder_angle", "rudder_scale"), "fin": ("fin_angle", "
 def vehicle_setup(case, steps, parts, info, placement):
     """What the vehicle's CAD needs, in numbers (JSON): the case, the components' STEP files (steps, by kind),
     the placement, and as xgeom_vehicle.assemble has them the rudders', fins' and wings' frames, root
-    extrusions and root LE in their own frame (the wing: the starboard one, 'mirror' for its port copy), and the
-    propeller's plane, scale, blades and hub (mm in its own frame)."""
+    extrusions (depth, and slope: dx/dz in the part's frame, 0 down its height) and root LE in their own frame
+    (the wing: the starboard one, 'mirror' for its port copy), and the propeller's plane, scale, blades and hub
+    (mm in its own frame)."""
     out = {"case": case, "written": time.strftime("%d %b %Y %H:%M"),
            "units": "mm, the hull's frame (x aft from the nose, y to starboard, z up)",
            "steps": {NAMES[k]: os.path.abspath(v) for k, v in steps.items()},
@@ -365,7 +374,8 @@ def vehicle_setup(case, steps, parts, info, placement):
                "frames": [[np.asarray(v, dtype=float).tolist() for v in f] for f in frames],
                "depth": [float(v) for v in info[f"{kind}_depth"]],
                "angle_deg": [(a0 + 360.0 * k / n) % 360.0 for k in range(n)],
-               **{q: [float(v) for v in info[f"{kind}_{q}"]] for q in ("x_le", "rho_le", "rho_te", "pitch")}}
+               **{q: [float(v) for v in info[f"{kind}_{q}"]] for q in ("x_le", "rho_le", "rho_te", "pitch", "rake",
+                                                                        "slope")}}
         rec["x_te"] = float(info["rudder_x_te"]) if kind == "rudder" else [float(v) for v in info[f"{kind}_x_te"]]
         if kind == "wing":
             rec["mirror"] = True                                      # the port wing: y to -y
