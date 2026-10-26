@@ -134,8 +134,23 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   stays responsive): `outputs/vehicle/<case>_vehicle.step` (one solid, mm, the hull's frame),
   `<case>_vehicle_parts.step` (the parts placed, not fused), `<case>_vehicle.json` and `<case>_vehicle_setup.json`
   (`python vehicle_cad.py <setup>` builds the vehicle again from it).
+- **Input files** (`xgeom_files.py`, claude/xgeom-file-formats.md; 26 Oct 2026): one component file layout
+  (`.txt`) for the blade, the rudder, the fin, the wing and the hull: the geometry, the tool's settings, each
+  curve's form (`table`, `bezier1 <points>`, `bezier2`; the hull's `cst <order>`) and every variable's value,
+  bounds and free flag, then the table (blade `r/R P/D c/D t/c f/c skew_deg rake/D`; rudder, fin and wing
+  `eta pitch_deg chord_mm t/c f/c sweep_mm rake_mm` and the dt/dc columns; hull `x_m r_m [rp_m]`). The var lines
+  define each Bezier curve exactly and its column is the curve at the rows, so a file round-trips (a rewrite is
+  the same file); a curve with no var lines is fitted to its column, and a column edited under its var lines is
+  refused with a message. `load_component` and `write_component` in `blade_modify.py`, `wing_modify.py` and
+  `hull_modify.py` (planar curves can now be `table` too); old `.dat` files still load
+  (`python xgeom_files.py convert old.dat new.txt`); `airfoils.py` reads a coordinate file by its path. The
+  tool: the File box's Load ... reads a component file and sets the whole panel, Save set-up ... writes one (the
+  dialog opens on the file it came from), `--file`; the rudder (modified below H) keeps its set-up JSON. Case
+  outputs: `<case>.txt` in place of `<case>_params.dat` and `<case>_design_space.json`. Examples, now the
+  tool's defaults: `msc_blade.txt`, `wing.txt`, `fin.txt`, `suboff_hull.txt`. The assembly file is read and
+  written (`read_assembly`, `write_assembly`); the tool and the pipeline do not use it yet.
 - **Checks**: `_rudder_modify_test.py`, `_xgeom_tool_test.py`, `_xgeom_blade_test.py`, `_xgeom_hull_test.py`,
-  `_xgeom_wing_test.py`,
+  `_xgeom_wing_test.py`, `_xgeom_files_test.py`,
   `_airfoils_test.py`, `_hull_test.py`, `_hull_modify_test.py`, `_section_fit_test.py`, `_rudder_param_test.py`
   and `_tip_cap_test.py` pass (the window checks with `--gui`).
 
@@ -250,6 +265,20 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   (a tip-angle variable would). Stern plane outside the rebuilt hull 4.799887e9 mm^3, outside hull.iges's own hull
   4.799854e9 (7e-6); vehicles one valid solid each (1.808035e12 and 1.808734e12 mm^3), quadrant 4.51974e11.
   `bb2_rudder.py` keeps the comparison and the TE-square rudder (`bb2_rudder.step`) only.
+  Then (user, 22 Oct 2026): the set-up with the propeller periodic, `bb2_quadrant_sector` (.step, .iges with
+  solids): the quadrant of the hull without the hub and the stern plane (`bb2_hull_rudder_quadrant`, one solid,
+  4.516768e11 mm^3) and the one blade on its 1/6 of the hub (3.376802e8 mm^3) as a second solid, meeting at the
+  hub's forward end (x 1929.9 mm). The sector is turned about the axis so that the strip's face at the hull's end
+  is centred on the quadrant, 15 to 75 deg (user, 22 Oct 2026: at prop.stp's blade at 32.8 deg it stuck out of
+  the hull's quarter face, 35.6 to 95.6 deg): -80.62 deg from prop.stp's blade 1. The strip twists about 100 deg
+  along the hub, so the blade then lies at -16.8 to 43.3 deg, its clocking against the stern planes not one of
+  prop.stp's.
+
+- Input files (26 Oct 2026; user's choices: the rudder planar on the fin's engine, only the span coordinate
+  normalized, optimization runs vary the propeller only for now): steps 1 (the files) and 2 (the tool's Load and
+  Save set-up) of 5 done. Checked in the cloud (all checks, the windows with `--gui`, OCC) and here
+  (`_xgeom_files_test.py`). Saving the SUBOFF hull puts its CST curves' half-heights into the table (within
+  0.12 mm of SUBOFF's equations); a fit at another order then fits to them.
 
 ## Next steps
 
@@ -258,7 +287,10 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
 - Vehicle: the placement is not loaded back yet (the set-up JSON records it); blended wing bodies later.
 - Review the blade in the tool: default segments, orders and free variables (`blade_control.py`); camber and
   rake fit poorly as 2 segments.
-- Optimisation: sample a saved set-up (`load_design_space`, `load_blade_space`, `Initial_sampling.py`), screen
+- Input files, steps 3 to 5: the planar rudder (the wind-tunnel rudder fitted into a component file; the
+  modified-below-H model as `rudder-h`), the assembly file in the Vehicle tab (Load and Save assembly), then
+  `Initial_sampling.py` and the infill reading the assembly (claude/xgeom-file-formats.md).
+- Optimisation: sample a saved set-up (`load_component`, `Initial_sampling.py`), screen
   designs with the problem checks, couple to CFD. `Initial_sampling.py` varies pitch and chord only (x_blade_new's
   form); other parameters flagged Y are reported, not sampled.
 - Rudder: the tip tilt and cap parameters into the design space; more cap loops if the cap ripples matter.

@@ -8,12 +8,15 @@ and output folder (ROLES).
 A wing or a fin starts from a parameter file: the span, the airfoil, the pitch axis and the spanwise table.
 Its variables: the span (mm), and each distribution (chord, sweep, rake, pitch, thickness, camber) and each
 section change (dt1 .. dtk of the thickness, dc1 .. dck of the camber line) as a Bezier curve over the span
-fraction eta, fitted to the file, of 1 or 2 segments as the blade's (xgeom_blade.py). The root values of sweep
-and rake are pinned at 0: the root's LE is the origin. A change of the span stretches the curves over it, their
-values staying. A new form or order is fitted to the parameter file while none of the curve's variables has
-changed, else to the curve's present shape. set_changes sets the number of change points along the chord (0
-to 8): the changes are carried over, exactly when there are more of them. set_sections sets the sections of the
-XCAD file. load_params reads another parameter file, save_params writes the design as one.
+fraction eta, fitted to the file, of 1 or 2 segments as the blade's (xgeom_blade.py), or as the table has it
+(form 0, "table": the cubic spline through its rows, no variables). The root values of sweep and rake are
+pinned at 0: the root's LE is the origin. A change of the span stretches the curves over it, their values
+staying. A new form or order is fitted to the parameter file while none of the curve's variables has changed,
+else to the curve's present shape. set_changes sets the number of change points along the chord (0 to 8): the
+changes are carried over, exactly when there are more of them. set_sections sets the sections of the XCAD file.
+load_params reads a component file (xgeom_files.py: its design, variables and settings exactly) or an old
+parameter file (fitted); save_file writes the design, its variables and the settings as a component file (Save
+set-up); save_params writes the design as an old parameter file.
 
 The views are drawn as the rudder's, in the wing's own frame: x (or the curve's value) across and the span up.
 
@@ -34,8 +37,8 @@ from xgeom_common import BLUE, GREY, GRID, INK2, RED, SECTION_COLORS, Row, fit_b
 MAX_ORDER = 12
 VIEW_FRACTIONS = (0.0, 0.25, 0.5, 0.75, 1.0)     # sections in the Design tab's views, fractions of the span
 FREE = ("chord", "pitch")                         # the curves whose variables start free
-ROLES = {"wing": {"name": "Wing", "params": "wing_params.dat", "out_dir": os.path.join("outputs", "wing")},
-         "fin": {"name": "Fin", "params": "fin_params.dat", "out_dir": os.path.join("outputs", "fin")}}
+ROLES = {"wing": {"name": "Wing", "params": "wing.txt", "out_dir": os.path.join("outputs", "wing")},
+         "fin": {"name": "Fin", "params": "fin.txt", "out_dir": os.path.join("outputs", "fin")}}
 TWO_SEGMENT_ROWS = (("v1", "P1 value (root)"), ("d1", "P2=P3 d1"), ("w23", "P2=P3 weight"), ("u4", "P4 position"),
                     ("v4", "P4 value"), ("d2", "P5=P6 d2"), ("w56", "P5=P6 weight"), ("v7", "P7 value (tip)"))
 TWO_SEGMENT_POINT = {"v1": 0, "d1": 1, "w23": 1, "u4": 3, "v4": 3, "d2": 4, "w56": 4, "v7": 6}
@@ -44,7 +47,8 @@ DIGITS = {"chord": 2, "sweep": 2, "rake": 2, "pitch": 3}  # value digits; t/c, f
 
 class WingAdapter:
     joins = False                 # the curves have no join to switch
-    segment_choice = True         # each curve 1 or 2 segments
+    segment_choice = True         # each curve 1 or 2 segments, or as the table has it (0)
+    segment_options = (0, 1, 2)   # 0: as the table has it ("table")
     build_label = "CAD"
     role = "wing"
 
@@ -56,13 +60,26 @@ class WingAdapter:
 
     # ---------------------------------------------------------------- the file
     def load_params(self, path):
-        """Start from a parameter file: its distributions fitted (1 segment), the variables of FREE free."""
-        params = WM.read_params(path)
-        design, _ = WM.fit_design(params)
-        self.params, self.design, self.meta = params, design, {}
-        self.as_fitted = set(design.names)          # curves still as fitted to the file (no variable changed)
+        """Start from a component file (wing_modify.load_component: its design, variables and settings exactly)
+        or an old parameter file: its distributions fitted (1 segment), the variables of FREE free."""
+        ld = WM.load_component(path, free=self.settings["free"])
+        self.params, self.design = ld.params, ld.design
+        self.meta = {n: {"lo": float(lo), "hi": float(hi), "free": n not in ld.space.fixed}
+                     for n, (lo, hi) in zip(ld.space.all_names, ld.space.all_bounds)}
+        self.settings.update({k: v for k, v in ld.settings.items() if k in self.CASE_KEYS})
+        self.file, self.legacy, self.notes = os.path.abspath(path), ld.legacy, ld.notes
+        self.as_fitted = set(self.design.names)     # curves still as the file has them (no variable changed)
         self._rebuild()
         self._original = None
+
+    def save_file(self, path):
+        """Write the design, its variables (bounds, free flags) and the settings as a component file of this
+        role's kind (wing_modify.write_component), which load_params reads back exactly; it is the file in use
+        then."""
+        WM.write_component(path, self.params, self.design, self.free_space(), self._case_settings(),
+                           os.path.splitext(os.path.basename(path))[0], self.notes, self.role)
+        self.file, self.legacy = os.path.abspath(path), False
+        return path
 
     def save_params(self, path):
         """Write the design as a parameter file (read_params and load_params read it)."""
@@ -73,7 +90,7 @@ class WingAdapter:
 
     @property
     def title(self):
-        return f"{ROLES[self.role]['name']} ({os.path.basename(self.params.path)})"
+        return f"{ROLES[self.role]['name']} ({os.path.basename(self.file)})"
 
     @property
     def names(self):
@@ -138,11 +155,19 @@ class WingAdapter:
             del self.meta[n]
 
     def _refit(self, curve, segments, order):
-        """The curve in a new form, its slots renewed (free if any of its slots was): fitted to the parameter
-        file while it is as fitted to it, else to its present shape. Returns what was done."""
-        was_free = any(m["free"] for n, m in self.meta.items() if n.startswith(curve + "."))
+        """The curve in a new form, its slots renewed (free if any of its slots was, or if it was as the table
+        has it): fitted to the parameter file while it is as fitted to it, else to its present shape; form 0:
+        as the table has it. Returns what was done."""
+        was_free = (self.design.curves[curve].segments == 0
+                    or any(m["free"] for n, m in self.meta.items() if n.startswith(curve + ".")))
         ee = np.linspace(0.0, 1.0, 401)
         old = self.design.at(curve, ee)
+        if segments == 0:
+            self.design = WM.refit_to_file(self.params, self.design, curve, 0)
+            self._drop(curve)
+            self.as_fitted.add(curve)
+            self._rebuild()
+            return "as the table has it: no design variables"
         if curve in self.as_fitted:
             self.design = WM.refit_to_file(self.params, self.design, curve, segments, order)
         else:
@@ -161,6 +186,8 @@ class WingAdapter:
     def set_order(self, curve, order):
         """Number of control points of a 1-segment curve = order + 1; the curve is fitted again (_refit)."""
         order = int(order)
+        if self.segments(curve) == 0:
+            raise ValueError("a curve as the table has it has no control points: 1 or 2 segments first")
         if self.segments(curve) != 1:
             raise ValueError("a 2-segment curve has its 7 control points P1 .. P7")
         if not 1 <= order <= MAX_ORDER:
@@ -174,10 +201,11 @@ class WingAdapter:
         return self.design.curves[curve].segments
 
     def set_segments(self, curve, n):
-        """The curve as 1 segment (DEFAULT_ORDER, CHANGE_ORDER for a change) or 2 segments, fitted again."""
+        """The curve as 1 segment (DEFAULT_ORDER, CHANGE_ORDER for a change) or 2 segments, fitted again, or as
+        the table has it (0)."""
         n = int(n)
-        if n not in (1, 2):
-            raise ValueError("a curve has 1 or 2 segments")
+        if n not in (0, 1, 2):
+            raise ValueError("a curve has 1 or 2 segments, or is as the table has it (0)")
         if n == self.segments(curve):
             return "unchanged"
         return self._refit(curve, n, WM.DEFAULT_ORDER if curve in WM.CURVES else WM.CHANGE_ORDER)
@@ -218,6 +246,9 @@ class WingAdapter:
     def curve_rows(self, curve):
         """Rows for the variables of one curve, from the root to the tip; the pinned root of sweep and rake."""
         cu = self.design.curves[curve]
+        if cu.segments == 0:
+            return [Row("pinned", "the table's", text="as the table has it (the cubic spline through its rows): no "
+                                                      "variables; 1 or 2 segments make it a Bezier curve to change")]
         digits = DIGITS.get(curve, 5)
         pinned = curve in WM.PINNED
         root_text = "0: the root's LE is the origin"
@@ -247,6 +278,8 @@ class WingAdapter:
     def ctrl_free(self, curve):
         """For each control point of a curve: is any variable that moves it free? (a pinned root: no)"""
         cu = self.design.curves[curve]
+        if cu.segments == 0:
+            return np.zeros(len(cu.r), dtype=bool)
         free = {k: self.meta[f"{curve}.{k}"]["free"] for k in cu.keys() if f"{curve}.{k}" in self.meta}
         if cu.segments == 2:
             groups = (("v1",), ("d1", "w23"), ("d1", "w23"), ("u4", "v4"), ("d2", "w56"), ("d2", "w56"), ("v7",))
@@ -265,7 +298,16 @@ class WingAdapter:
         return (f"{n} of {m} variables free; span {d.span:.1f} mm, chord {c[0]:.1f} mm at the root and {c[1]:.1f} mm "
                 f"at the tip; {d.changes} change point{'s' if d.changes != 1 else ''} along the chord")
 
+    def pick_note(self, curve):
+        """The picker's note: as the table has it, or no free variable."""
+        if self.segments(curve) == 0:
+            return "  (table)"
+        return "  (held)" if self.n_free(curve)[0] == 0 else ""
+
     def describe(self, curve):
+        if self.segments(curve) == 0:
+            return (f"{WM.describe_curve(curve, self.design.changes)} against the span as the table has it: the "
+                    f"cubic spline through its rows, not a design variable")
         e, rel = WM.fit_report(self.params, self.design)[curve]
         diff = f"largest difference from the parameter file {e:.3g} {WM.unit(curve)}"
         if curve in WM.CURVES and np.isfinite(rel) and rel > 0.0:
@@ -382,6 +424,7 @@ class WingAdapter:
         params = WM.read_params(rec["params_file"])
         space, design = WM.WingSpace.from_dict(params, rec["space"])
         self.params, self.design, self._original = params, design, None
+        self.file, self.legacy, self.notes = params.path, not WM.XF.is_component(params.path), []
         self.as_fitted = set()                      # a saved design: refits keep its curves' shapes
         self.meta = {q["name"]: {"lo": q["lo"], "hi": q["hi"], "free": q["free"]} for q in rec["space"]["slots"]}
         for k in self.CASE_KEYS:
@@ -390,9 +433,9 @@ class WingAdapter:
         self._rebuild()
 
     def build_task(self, case):
-        """A function that writes the case as the design is now (wing_modify.write_case: the parameter file,
-        the XCAD file, the sections table, the design and the set-up JSON, the check plot), then lofts the
-        XCAD file into the solid (<case>.step). The state is copied here, so it can run off the GUI thread."""
+        """A function that writes the case as the design is now (wing_modify.write_case: the component file,
+        the XCAD file, the sections table, the design, the check plot), then lofts the XCAD file into the solid
+        (<case>.step). The state is copied here, so it can run off the GUI thread."""
         import xcad_loft as XL
         design, params, space, st = self.design.copy(), self.params, self.free_space(), self._case_settings()
         out_dir, plot, role = self.out_dir, self.settings["plot"], self.role
@@ -404,7 +447,7 @@ class WingAdapter:
                    "report": [f"{case}: {res['sections']} sections, planform {res['area_mm2'] / 100:.1f} cm^2, "
                               f"volume {res['volume_mm3'] / 1000:.1f} cm^3 (from the sections)",
                               "  written: " + ", ".join(res["paths"].values())]}
-            files = f"{case}_params.dat, {case}_xcad_m.dat"
+            files = f"{case}.txt, {case}_xcad_m.dat"
             if res["problems"]:
                 out.update(message=f"{files}; no CAD: {res['problems'][0]}", error=True)
                 return out

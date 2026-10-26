@@ -36,6 +36,13 @@ Parameter file (.dat; '#' header, np.loadtxt reads the table):
 sweep and rake count from the root's row: the root's LE (before its pitch) is the origin. Between the rows a
 distribution is the cubic spline through them: the file's shape, the reference the design is compared with.
 
+Component file (xgeom_files.py, kind rudder, fin or wing; claude/xgeom-file-formats.md): the same geometry
+('section': a coordinate file or an airfoil by name) and table, its columns in the common order eta pitch_deg
+chord_mm t/c f/c sweep_mm rake_mm (then dt1 .. dtk dc1 .. dck), with the settings (sections, change_points),
+each curve's form ('table' as the file has it, 'bezier1 <points>', 'bezier2') and every variable's value,
+bounds and free flag. load_component reads one exactly (or an old parameter file, fitted as below);
+write_component writes one (the design tool's Save set-up, write_case's <case>.txt).
+
 Frame (mm; the rudder's working frame): the origin at the root's LE, x chordwise aft, y along the span (0 at
 the root, the span at the tip), z across the section, positive on the side the camber bulges to (a wing's
 upper side). The XCAD file has X = x, Y = -z, Z = y (rudder_modify.XCAD_FRAME), in m.
@@ -81,7 +88,8 @@ import numpy as np
 from scipy.interpolate import CubicSpline, PchipInterpolator
 
 import blade_modify as BM
-from blade_modify import BladeCurve, TwoSegmentCurve, curve_at, fit_form
+import xgeom_files as XF
+from blade_modify import BladeCurve, FileCurve, TwoSegmentCurve, curve_at, fit_form
 from replica_funcs import bernstein
 from rudder_modify import fit_values
 
@@ -162,7 +170,13 @@ class WingParams:
 
 
 def read_params(path):
-    """The WingParams of a parameter file (see the module docstring)."""
+    """The WingParams of a parameter file (see the module docstring), or of a component file (xgeom_files.py:
+    its geometry and table; load_component gives its design and variables too)."""
+    if XF.is_component(path):
+        comp = XF.read_component(path)
+        if comp.kind not in XF.PLANAR:
+            raise ValueError(f"{path}: a {comp.kind} file, not a rudder's, a fin's or a wing's")
+        return _component_params(comp)
     head, first = {}, ""
     with open(path) as fh:
         for i, line in enumerate(fh):
@@ -451,7 +465,9 @@ def fit_design(params, orders=None, segments=None, changes=None):
     eta = fit_stations(params)
     curves = {}
     for c in CURVES + change_names(k):
-        curves[c] = fit_curve_to(eta, params.spline(c)(eta), c, segments.get(c, DEFAULT_SEGMENTS), orders.get(c))
+        seg = int(segments.get(c, DEFAULT_SEGMENTS))
+        curves[c] = file_curve(params, c) if seg == 0 else fit_curve_to(eta, params.spline(c)(eta), c, seg,
+                                                                         orders.get(c))
     design = WingDesign(float(params.span), curves)
     res = {c: design.at(c, params.eta) - params.spline(c)(params.eta) for c in design.names}
     return design, res
@@ -470,11 +486,19 @@ def refit_curve(design, name, order=None, segments=None, n_samples=None):
     return out
 
 
+def file_curve(params, name):
+    """The distribution as the parameter file has it (form 0, 'table'): the cubic spline through its rows (a
+    change the file has none of: 0)."""
+    return FileCurve(np.array(params.eta, dtype=float), np.asarray(params.spline(name)(params.eta), dtype=float))
+
+
 def refit_to_file(params, design, name, segments, order=None):
-    """The design with curve `name` fitted again to the parameter file's distribution (fit_stations)."""
+    """The design with curve `name` fitted again to the parameter file's distribution (fit_stations), or as
+    the file has it (segments 0: file_curve)."""
     eta = fit_stations(params)
     out = design.copy()
-    out.curves[name] = fit_curve_to(eta, params.spline(name)(eta), name, segments, order)
+    out.curves[name] = (file_curve(params, name) if int(segments) == 0 else
+                        fit_curve_to(eta, params.spline(name)(eta), name, segments, order))
     return out
 
 
@@ -557,8 +581,9 @@ class WingSpace:
 
     The slots: "span" (mm), then curve by curve (design.names order) its own: 1 segment d1 .. d(m-1) (the
     fractions that place the inner control points), v0 (root) .. vm (tip); 2 segments v1, d1, w23, u4, v4, d2,
-    w56, v7; the root values of sweep and rake are pinned at 0 and no slots. Names "span", "chord.d1",
-    "chord.v0", ... The curves' forms (segments, order) and the number of change points are the design's.
+    w56, v7; the root values of sweep and rake are pinned at 0 and no slots; a curve as the file has it (form 0,
+    'table') none. Names "span", "chord.d1", "chord.v0", ... The curves' forms (segments, order) and the number
+    of change points are the design's.
 
     bounds   overrides of default_bounds by group ("d", "seg.d", "seg.u", "seg.w"), curve ("chord": its
              values; "chord.d", "chord.u", "chord.w") or slot ("chord.v3", "span"); a slot beats its curve, a
@@ -571,6 +596,7 @@ class WingSpace:
         self.params = params
         self.curve_names = design.names
         self.forms = {c: (design.curves[c].segments, design.curves[c].order) for c in self.curve_names}
+        self.file_curves = {c: design.curves[c] for c in self.curve_names if design.curves[c].segments == 0}
         b = {**default_bounds(params, design), **(bounds or {})}
         self._slots = [(None, "span")]
         for c in self.curve_names:
@@ -628,6 +654,9 @@ class WingSpace:
         curves = {}
         for c in self.curve_names:
             seg, order = self.forms[c]
+            if seg == 0:                                     # as the file has it: no variables
+                curves[c] = self.file_curves[c]
+                continue
             cls = BM.CURVE_TYPES[seg]
             keys = cls.keys_of(order)
             pin = "v1" if seg == 2 else "v0"
@@ -657,7 +686,8 @@ class WingSpace:
         """(space, design) from to_dict's output."""
         forms, orders = rec["forms"], rec["orders"]
         k = int(rec.get("changes", 0))
-        curves = {c: zero_curve(forms[c], orders[c]) for c in CURVES + change_names(k)}
+        curves = {c: file_curve(params, c) if int(forms[c]) == 0 else zero_curve(forms[c], orders[c])
+                  for c in CURVES + change_names(k)}
         tmpl = WingDesign(float(params.span), curves)
         vals = {q["name"]: q["value"] for q in rec["slots"]}
         bounds = {q["name"]: (q["lo"], q["hi"]) for q in rec["slots"]}
@@ -690,6 +720,196 @@ def load_wing_space(path):
     params = read_params(rec["params_file"])
     space, design = WingSpace.from_dict(params, rec["space"])
     return space, design, rec
+
+
+# --------------------------------------------------------------------------
+# The component file (xgeom_files.py)
+# --------------------------------------------------------------------------
+
+SETTING_TYPES = {"sections": int, "change_points": int}
+
+
+def _component_params(comp):
+    """The WingParams of a rudder, fin or wing component: its geometry and its table (sweep and rake from the
+    root's row). section: a coordinate file when such a file is there (relative to the component file), else an
+    airfoil by name."""
+    g, path = comp.geometry, comp.path
+    missing = [k for k in ("span_mm", "section") if k not in g]
+    if missing:
+        raise ValueError(f"{path}: the geometry misses {', '.join(missing)}")
+    sec = g["section"]
+    full = XF.resolve(sec, os.path.dirname(path))
+    airfoil = full if os.path.isfile(full) else sec
+    try:
+        span, ref = float(g["span_mm"]), float(g.get("ref_xc", REF_XC))
+        cxc = float(g.get("camber_xc", CAMBER_XC))
+    except ValueError as exc:
+        raise ValueError(f"{path}: {exc}") from None
+    eta = comp.column("eta")
+    if np.any(np.diff(eta) <= 0.0) or abs(eta[0]) > ROW_TOL or abs(eta[-1] - 1.0) > ROW_TOL:
+        raise ValueError(f"{path}: eta must rise from 0 (the root) to 1 (the tip)")
+    eta[0], eta[-1] = 0.0, 1.0
+    if span <= 0.0:
+        raise ValueError(f"{path}: the span must be positive")
+    if not 0.0 <= ref <= 1.0 or not 0.0 < cxc < 1.0:
+        raise ValueError(f"{path}: ref_xc lies in [0, 1], camber_xc in (0, 1)")
+    k = sum(1 for c in comp.columns if c.startswith("dt"))
+    if k > MAX_CHANGES:
+        raise ValueError(f"{path}: at most {MAX_CHANGES} change points")
+    values = {c: comp.column(col) for c, col in XF.CURVE_COLUMNS[comp.kind].items()}
+    values.update({c: comp.column(c) for c in change_names(k)})
+    for c in PINNED:
+        values[c] = values[c] - values[c][0]
+    params = WingParams(span, airfoil, eta, values, k, ref, cxc, comp.kind, path)
+    try:
+        base_shape(params.airfoil, params.camber_xc)       # the airfoil exists and has a thickness
+    except ValueError as exc:
+        raise ValueError(f"{path}: section: {exc}") from None
+    return params
+
+
+def _component_design(comp, params, orders=None, segments=None):
+    """The WingDesign of a component: each curve exactly as its var lines give it, as the table has it (form
+    table), or fitted to its column (no var lines; no curve line: fit_design's choice from segments and
+    orders); the change points of the table's dt and dc columns (change_points, when the table has none;
+    default CHANGES); the span from its var line, else the geometry (given in both: they must agree)."""
+    path = comp.path
+    k = params.changes
+    if "change_points" in comp.settings:
+        kk = XF.typed_settings(comp, SETTING_TYPES)["change_points"]
+        if k and kk != k:
+            raise ValueError(f"{path}: change_points {kk}, but the table has {k} dt and dc columns")
+        if not 0 <= kk <= MAX_CHANGES:
+            raise ValueError(f"{path}: change_points from 0 to {MAX_CHANGES}")
+        k = kk
+    elif not k:
+        k = CHANGES
+    eta = fit_stations(params)
+    curves, exact = {}, []
+    for c in CURVES + change_names(k):
+        form, n = comp.curves.get(c, (None, None))
+        if form is None:
+            seg = int((segments or {}).get(c, DEFAULT_SEGMENTS))
+            order = (orders or {}).get(c)
+            order = int(order) if order is not None else (DEFAULT_ORDER if c in CURVES else CHANGE_ORDER)
+        else:
+            seg = XF.SEGMENTS[form]
+            order = n - 1 if form == "bezier1" else 3
+        keys = BM.CURVE_TYPES[seg].keys_of(order) if seg else []
+        pin = "v1" if seg == 2 else "v0"
+        need = [q for q in keys if not (c in PINNED and q == pin)]
+        given = [q for q in need if f"{c}.{q}" in comp.vars]
+        stray = [q for q in comp.vars if q.startswith(c + ".") and q.split(".", 1)[1] not in need]
+        if stray:
+            raise ValueError(f"{path}: {', '.join(stray)}: not variables of a {XF.FORM_OF[seg]} {c} curve"
+                             + (f" of {order + 1} points" if seg == 1 else "")
+                             + (" (its root value is pinned at 0)" if c in PINNED and seg else ""))
+        if given and len(given) < len(need):
+            raise ValueError(f"{path}: the {c} curve has var lines for some of its variables only; missing: "
+                             + ", ".join(f"{c}.{q}" for q in need if q not in given))
+        if seg == 0:
+            curves[c] = file_curve(params, c)
+        elif given:
+            curves[c] = BM.CURVE_TYPES[seg].from_keys(
+                {q: 0.0 if q not in need else comp.vars[f"{c}.{q}"].value for q in keys}, order)
+            exact.append(c)
+        else:
+            curves[c] = fit_curve_to(eta, params.spline(c)(eta), c, seg, order)
+    span = params.span
+    if "span" in comp.vars:
+        v = comp.vars["span"].value
+        if abs(v - span) > 1e-8 * max(abs(span), 1e-6):
+            raise ValueError(f"{path}: var span {v:.10g} disagrees with the geometry's span_mm {span:.10g}; change "
+                             f"both, or delete the var line")
+        span = v
+    design = WingDesign(float(span), curves)
+    columns = {**XF.CURVE_COLUMNS[comp.kind], **{c: c for c in change_names(params.changes)}}
+    BM.check_columns(comp, design, [c for c in exact if c in columns], columns, "eta", design.at, PINNED)
+    return design
+
+
+def _component_space(comp, params, design, free=None):
+    """The WingSpace of a component: each variable's bounds and free flag from its var line; one with none:
+    default_bounds (its curve's vary range for the values) and free as the vary lines say (with none: the names
+    in free)."""
+    names = set(design.names) | {"span"}
+    bad = sorted(set(comp.vary) - names)
+    if bad:
+        raise ValueError(f"{comp.path}: vary lines for {', '.join(bad)}: not one of span, {', '.join(design.names)}")
+    bounds = {n: (lo, hi) for n, (on, lo, hi) in comp.vary.items() if on and lo is not None}
+    bounds.update({n: (q.lo, q.hi) for n, q in comp.vars.items()})
+    full = WingSpace(params, design, bounds=bounds)
+    unknown = [n for n in comp.vars if n not in full.all_names]
+    if unknown:
+        raise ValueError(f"{comp.path}: var lines for {', '.join(unknown)}, which this {comp.kind} does not have "
+                         f"(its variables: span and those of its curves)")
+    free0 = tuple(n for n, (on, _, _) in comp.vary.items() if on) if comp.vary else tuple(free or ())
+    vals = full.values(design)
+    fixed = {n: vals[n] for n in full.all_names
+             if not (comp.vars[n].free if n in comp.vars else n.split(".")[0] in free0)}
+    return WingSpace(params, design, bounds=bounds, fixed=fixed)
+
+
+def load_component(path, orders=None, segments=None, free=None):
+    """A rudder, fin or wing from a component file (xgeom_files.py) or an old parameter file (read_params, its
+    curves fitted as fit_design fits them, the names in free free): an XF.Loaded with the parameters, the
+    design, the design space (every variable, the held ones fixed), the file's settings (SETTING_TYPES; an old
+    file has none), its name and notes. The kind is the file's (an old file: wing or fin).
+
+        ld = load_component("fin.txt")
+        x0, bounds = ld.space.to_vector(ld.design), ld.space.bounds
+        d = ld.space.to_design(x)
+    """
+    name = os.path.splitext(os.path.basename(path))[0]
+    if not XF.is_component(path):
+        params = read_params(path)
+        design, _ = fit_design(params, orders, segments)
+        notes, _ = XF.legacy_header(path, GLOBALS)
+        return XF.Loaded(params.kind, params, design, WingSpace(params, design, free=tuple(free or ())), {}, name,
+                         notes, {}, True)
+    comp = XF.read_component(path)
+    if comp.kind not in XF.PLANAR:
+        raise ValueError(f"{path}: a {comp.kind} file, not a rudder's, a fin's or a wing's")
+    params = _component_params(comp)
+    design = _component_design(comp, params, orders, segments)
+    space = _component_space(comp, params, design, free)
+    settings = XF.typed_settings(comp, SETTING_TYPES)
+    settings["change_points"] = design.changes
+    return XF.Loaded(comp.kind, params, design, space, settings, comp.name, list(comp.notes), {}, False)
+
+
+def write_component(path, params, design, space, settings=None, name=None, notes=(), kind=None):
+    """Write the design as a component file of kind (default the parameter file's: rudder, fin or wing), which
+    load_component reads back exactly: the geometry (the design's span; the section, the pitch axis and, for a
+    symmetric section, camber_xc of params), the settings (sections; change_points, the design's), each curve's
+    form, every variable of space (value, bounds, free) and the distributions at the parameter file's rows,
+    with the dt and dc columns of the design's change points."""
+    folder = os.path.dirname(os.path.abspath(path))
+    kind = kind or params.kind
+    comp = XF.Component(kind, name or os.path.splitext(os.path.basename(path))[0], list(notes))
+    g = comp.geometry
+    g["span_mm"] = XF.num(design.span)
+    own = os.path.isabs(params.airfoil) and os.path.isfile(params.airfoil)        # a coordinate file
+    g["section"] = XF.rel(params.airfoil, folder) if own else params.airfoil
+    g["ref_xc"] = XF.num(params.ref_xc)
+    if base_shape(params.airfoil, params.camber_xc)[2]["symmetric"]:
+        g["camber_xc"] = XF.num(params.camber_xc)
+    comp.settings = XF.settings_text({**(settings or {}), "change_points": design.changes}, SETTING_TYPES)
+    order = list(XF.CURVE_COLUMNS[kind]) + list(change_names(design.changes))     # the table's order
+    for c in order:
+        cu = design.curves[c]
+        comp.curves[c] = (XF.FORM_OF[cu.segments], cu.order + 1 if cu.segments == 1 else None)
+    comp.vars = XF.vars_of(space, design)
+    eta = np.round(np.asarray(params.eta, dtype=float), XF.DECIMALS[kind])
+    eta[0], eta[-1] = 0.0, 1.0
+    v = design.values(eta)
+    for c in order:                              # a table curve: its own values at its rows
+        cu = design.curves[c]
+        if cu.segments == 0 and len(cu.v) == len(eta):
+            v[c] = np.asarray(cu.v, dtype=float)
+    comp.columns = XF.COLUMNS[kind] + tuple(change_names(design.changes))
+    comp.table = np.column_stack([eta] + [v[c] for c in order])
+    return XF.write_component(path, comp)
 
 
 # --------------------------------------------------------------------------
@@ -780,28 +1000,25 @@ def design_record(design, params, space=None, problems=(), settings=None, warnin
 
 
 def write_case(out_dir, case, design, params, space=None, cad=True, settings=None, plot=True, geometry=None):
-    """Write the case: <case>_params.dat (the design as a parameter file, which read_params and the tool
-    load), <case>_xcad_m.dat (the sections, settings 'sections' of them, 'points' per side), <case>_sections.dat
-    (their table), <case>_design.json, <case>_design_space.json (with a space; geometry as space_record's),
-    <case>_check.png (plot), and with cad the loft of the XCAD file (write_cad): <case>.step. Returns the
-    paths, the checks and the sections' count, planform area (mm^2) and volume (mm^3, from the sections'
-    areas)."""
+    """Write the case: <case>.txt (the design as a component file of kind geometry, default the parameter
+    file's, with the variables of space, every one held without one, and the settings: write_component;
+    load_component and the tool load it), <case>_xcad_m.dat (the sections, settings 'sections' of them, 'points'
+    per side), <case>_sections.dat (their table), <case>_design.json, <case>_check.png (plot), and with cad the
+    loft of the XCAD file (write_cad): <case>.step. Returns the paths, the checks and the sections' count,
+    planform area (mm^2) and volume (mm^3, from the sections' areas)."""
     os.makedirs(out_dir, exist_ok=True)
     st = dict(settings or {})
     eta = section_stations(st.get("sections", SECTIONS))
     problems, warnings = design_checks(design, params)
-    paths = {k: os.path.join(out_dir, f"{case}_{k}") for k in ("params.dat", "xcad_m.dat", "sections.dat",
-                                                                "design.json")}
+    paths = {k: os.path.join(out_dir, f"{case}_{k}") for k in ("xcad_m.dat", "sections.dat", "design.json")}
     note = f"design {case} from {os.path.basename(params.path) or 'memory'}, {datetime.date.today().isoformat()}"
-    write_params(paths["params.dat"], design_params(design, params), notes=(note,))
+    held = space or WingSpace(params, design, fixed=WingSpace(params, design).values(design))
+    paths["component"] = write_component(os.path.join(out_dir, f"{case}.txt"), params, design, held, st, case,
+                                         [note], geometry)
     write_xcad(paths["xcad_m.dat"], section_loops(design, params, eta, st.get("points", POINTS)))
     write_sections(paths["sections.dat"], design, params, eta, notes=(note,))
     with open(paths["design.json"], "w") as fh:
         json.dump(design_record(design, params, space, problems, st, warnings), fh, indent=1)
-    if space is not None:
-        paths["space"] = os.path.join(out_dir, f"{case}_design_space.json")
-        with open(paths["space"], "w") as fh:
-            json.dump(space_record(space, design, params, st, geometry), fh, indent=1)
     if plot:
         paths["check"] = plot_case(os.path.join(out_dir, f"{case}_check.png"), case, design, params)
     ee = np.linspace(0.0, 1.0, 201)

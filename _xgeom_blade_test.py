@@ -441,15 +441,20 @@ def test_geometry(tmp, table):
     res = BM.write_case(tmp, "t", design, p, BM.BladeSpace(p, design, free=("pitch",)), cad=False)
     secs = [b for b in open(res["paths"]["xcad_m.dat"]).read().split("#")[1:]]
     pts_back = np.loadtxt(res["paths"]["xcad_m.dat"], comments="#")
-    q = BM.read_params(res["paths"]["params.dat"])
-    check(f"write_case: XCAD points ({BM.SECTIONS} sections of 53, as para.py), the parameter file, the JSON, "
+    q = BM.read_params(res["paths"]["component"])
+    check(f"write_case: XCAD points ({BM.SECTIONS} sections of 53, as para.py), the component file, the JSON, "
           "the plot",
           [len(secs), pts_back.shape[0], q.blades, json.load(open(res["paths"]["design.json"]))["globals"]["blades"],
            os.path.exists(res["paths"]["check"])], [BM.SECTIONS, BM.SECTIONS * 53, 5, 5, 1], 0)
     res_b = BM.write_case(tmp, "big", big, p, cad=False, plot=False)
-    qb = BM.read_params(res_b["paths"]["params.dat"])
-    check("write_case of a bigger blade and hub: the parameter file has its D, root r/R, hub height",
-          [qb.diameter - big.diameter, qb.root_r - big.r0, qb.hub_height - big.hub_height], 0.0, 1e-9)
+    qb = BM.read_params(res_b["paths"]["component"])
+    lb = BM.load_component(res_b["paths"]["component"])
+    check("write_case of a bigger blade and hub: the component file has its D, root r/R, hub height, its curves "
+          "(every variable held)",
+          [qb.diameter - big.diameter, qb.root_r - big.r0, qb.hub_height - big.hub_height,
+           max(np.abs(lb.design.at(c, lb.design.r0 + frac * (lb.design.r1 - lb.design.r0))
+                      - big.at(c, big.r0 + frac * (big.r1 - big.r0))).max() for c in BM.CURVES), len(lb.space.names)],
+          0.0, 1e-8)
     s = BM.section_stations(0.17, 57, 0.93, 14)
     s2 = BM.section_stations(0.2, 30, 0.9, 8)
     check("section_stations: 57 from the root to the tip, 14 from r/R 0.93 closer together, even below",
@@ -599,9 +604,9 @@ def test_control_original(tmp, table):
     files = sorted(os.listdir(out)) if os.path.isdir(out) else []
     if run.returncode:
         print(run.stdout + run.stderr)
-    check("'nothing (every vary line N)': only the case 'original' (parameter file, XCAD points, design, set-up)",
+    check("'nothing (every vary line N)': only the case 'original' (component file, XCAD points, design)",
           [run.returncode, "the original blade only" in run.stdout,
-           files == [f"original_{f}" for f in ("design.json", "design_space.json", "params.dat", "xcad_m.dat")]],
+           files == ["original.txt"] + [f"original_{f}" for f in ("design.json", "xcad_m.dat")]],
           [0, 1, 1], 0)
 
 

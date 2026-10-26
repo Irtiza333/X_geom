@@ -25,9 +25,12 @@ own (form 0, "file": its cubic spline, no variables; 1 or 2 segments make it a
 Bezier curve fitted to the file, its variables free), one flagged Y a Bezier
 curve whose variables are free, within the file's range when given; radius,
 hub radius and hub height flagged Y free. A file with no vary line: every curve
-fitted, blade_control.FREE free. load_params reads another parameter file;
-save_params writes the design as one, with vary lines for it as it stands (Y: a
-curve or global with a free variable). set_sections sets the sections of the
+fitted, blade_control.FREE free. A component file (xgeom_files.py) gives its
+design, variables (bounds, free flags) and settings exactly. load_params reads
+another component file or old parameter file; save_file writes the design, its
+variables and the settings as a component file (Save set-up); save_params
+writes the design as an old parameter file, with vary lines for it as it stands
+(Y: a curve or global with a free variable). set_sections sets the sections of the
 XCAD points file and the 3D sections tab (blade_modify.section_stations).
 set_blades sets the number of blades Z (2 to 7; the parameter file's by
 default): the clearance check, the propeller views, the CAD's hub sector, the
@@ -77,17 +80,28 @@ class BladeAdapter:
 
     # ---------------------------------------------------------------- the file
     def load_params(self, path):
-        """Start from a parameter file: its distributions fitted (blade_control's
-        segments and orders) or kept as the file has them (vary N); the
-        variables of the parameters flagged Y free (blade_control.FREE when the
-        file has no vary line)."""
-        params = BM.read_params(path)
-        design, _ = BM.fit_design(params, self.settings["orders"], self.settings["segments"])
-        self.params, self.design, self.meta = params, design, {}
-        self.file_blades = params.blades            # the file's Z (set_blades may change the one in use)
-        self.as_fitted = set(BM.CURVES)             # curves still as fitted to the file (no variable changed)
+        """Start from a component file (blade_modify.load_component: its design, variables and settings
+        exactly) or an old parameter file: its distributions fitted (blade_control's segments and orders) or
+        kept as the file has them (vary N); the variables of the parameters flagged Y free (blade_control.FREE
+        when the file has no vary line)."""
+        ld = BM.load_component(path, self.settings["orders"], self.settings["segments"], self.settings["free"])
+        self.params, self.design = ld.params, ld.design
+        self.meta = {n: {"lo": float(lo), "hi": float(hi), "free": n not in ld.space.fixed}
+                     for n, (lo, hi) in zip(ld.space.all_names, ld.space.all_bounds)}
+        self.settings.update(ld.settings)
+        self.file, self.legacy, self.notes, self.extra = os.path.abspath(path), ld.legacy, ld.notes, ld.extra
+        self.file_blades = self.params.blades       # the file's Z (set_blades may change the one in use)
+        self.as_fitted = set(BM.CURVES)             # curves still as the file has them (no variable changed)
         self._rebuild()
         self._original = None
+
+    def save_file(self, path):
+        """Write the design, its variables (bounds, free flags) and the settings as a component file
+        (blade_modify.write_component), which load_params reads back exactly; it is the file in use then."""
+        BM.write_component(path, self.params, self.design, self.free_space(), self._case_settings(),
+                           os.path.splitext(os.path.basename(path))[0], self.notes, self.extra)
+        self.file, self.legacy = os.path.abspath(path), False
+        return path
 
     def save_params(self, path):
         """Write the design as a parameter file (read_params and load_params read it), with vary lines for the
@@ -117,7 +131,7 @@ class BladeAdapter:
 
     @property
     def title(self):
-        return f"Propeller blade ({os.path.basename(self.params.path)})"
+        return f"Propeller blade ({os.path.basename(self.file)})"
 
     @property
     def names(self):
@@ -457,6 +471,7 @@ class BladeAdapter:
             params = BM.with_blades(params, rec["globals"]["blades"])
         space, design = BM.BladeSpace.from_dict(params, rec["space"])
         self.params, self.design, self._original = params, design, None
+        self.file, self.legacy, self.notes, self.extra = params.path, not BM.XF.is_component(params.path), [], {}
         self.as_fitted = set()                      # a saved design: refits keep its curves' shapes
         self.meta = {q["name"]: {"lo": q["lo"], "hi": q["hi"], "free": q["free"]} for q in rec["space"]["slots"]}
         for k in self.CASE_KEYS:
@@ -466,18 +481,19 @@ class BladeAdapter:
 
     def build_task(self, case):
         """A function that writes the case as the design is now (blade_modify.
-        write_case: the parameter file, the XCAD points, the design and the
-        set-up JSON, the check plot) and then the CAD (<case>.iges, <case>.step).
-        The state is copied here, so it can run off the GUI thread."""
+        write_case: the component file, the XCAD points, the design, the check
+        plot) and then the CAD (<case>.iges, <case>.step). The state is copied
+        here, so it can run off the GUI thread."""
         design, params, space, st = self.design.copy(), self.params, self.free_space(), self._case_settings()
-        out_dir, plot = self.out_dir, self.settings["plot"]
+        out_dir, plot, extra = self.out_dir, self.settings["plot"], dict(self.extra)
 
         def run():
-            res = BM.write_case(out_dir, case, design, params, space, cad=False, settings=st, plot=plot)
+            res = BM.write_case(out_dir, case, design, params, space, cad=False, settings=st, plot=plot,
+                                extra=extra)
             out = {"case": res, "view": None, "error": False,
                    "report": [f"{case}: {res['sections']} sections, blades {res['clearance_mm']:.1f} mm apart",
                               "  written: " + ", ".join(res["paths"].values())]}
-            files = f"{case}_params.dat, {case}_xcad_m.dat"
+            files = f"{case}.txt, {case}_xcad_m.dat"
             if res["problems"]:
                 out.update(message=f"{files}; no CAD: {res['problems'][0]}", error=True)
                 return out

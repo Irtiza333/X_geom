@@ -11,8 +11,9 @@ the four lengths, the largest radius r* and the tail end's radius re (with ellip
 and each curve's exponent and free coefficients. The curves: nose r and tail r; with elliptical sections
 (set_elliptic) also nose r' and tail r', fitted to the parameter file's half-widths (an axisymmetric file: copies
 of the r curves). A new order (set_order) is fitted to the parameter file while none of the curve's variables has
-changed, else to the curve's present shape. load_params reads another parameter file; save_params writes the
-design as one.
+changed, else to the curve's present shape. load_params reads a component file (xgeom_files.py: its design and
+variables exactly; by default suboff_hull.txt) or an old parameter file (fitted); save_file writes the design and
+its variables as a component file (Save set-up); save_params writes the design as an old parameter file.
 
 The adapter has the methods of xgeom_rudder.RudderAdapter that the tool uses.
 """
@@ -36,6 +37,7 @@ VIEW_COLORS = {"r": BLUE, "rp": ORANGE}
 PART_NAMES = ("nose", "middle", "tail", "cap")
 PART_COLORS = (BLUE, INK2, ORANGE, AQUA)            # the parts in the 3D sections tab
 SKELETON_STATIONS = 25                              # stations per curved part in the 3D sections tab
+DEFAULT_FILE = "suboff_hull.txt"                    # the hull to start with (not there: SUBOFF's equations)
 
 
 class HullAdapter:
@@ -47,23 +49,38 @@ class HullAdapter:
     def __init__(self, params=None):
         self.out_dir = HM.OUT_DIR
         self.settings = {"plot": True}
-        self.load_params(params or HM.SUBOFF_PARAMS)
+        self.load_params(params or (DEFAULT_FILE if os.path.exists(DEFAULT_FILE) else HM.SUBOFF_PARAMS))
 
     # ---------------------------------------------------------------- the file
     def load_params(self, path):
-        """Start from a parameter file: its curves fitted (order hull_modify.DEFAULT_ORDER), the lengths and the
-        curves free (hull_modify.DEFAULT_FREE), the radii and the cap held."""
+        """Start from a component file (hull_modify.load_component: its design and variables exactly) or an old
+        parameter file: its curves fitted (order hull_modify.DEFAULT_ORDER), the lengths and the curves free
+        (hull_modify.DEFAULT_FREE), the radii and the cap held (SUBOFF's parameter file not there: SUBOFF's
+        equations)."""
         if os.path.exists(path):
-            params, source = HM.read_params(path), os.path.basename(path)
+            ld = HM.load_component(path)
+            params, design, space, source = ld.params, ld.design, ld.space, os.path.basename(path)
+            self.file, self.legacy, self.notes = os.path.abspath(path), ld.legacy, ld.notes
         elif os.path.basename(path) == HM.SUBOFF_PARAMS:
             params, source = HM.suboff_params(), "SUBOFF's equations"
+            design = HM.fit_design(params)
+            space = HM.HullSpace(design)
+            self.file, self.legacy, self.notes = None, True, list(params.notes)
         else:
             raise FileNotFoundError(path)
-        self.params, self.source = params, source
-        self.design = HM.fit_design(params)
-        self.meta = {}
-        self.as_fitted = set(self.design.curves)    # curves still as fitted to the file (no variable changed)
+        self.params, self.source, self.design = params, source, design
+        self.meta = {n: {"lo": float(lo), "hi": float(hi), "free": n not in space.fixed}
+                     for n, (lo, hi) in zip(space.all_names, space.all_bounds)}
+        self.as_fitted = set(self.design.curves)    # curves still as the file has them (no variable changed)
         self._rebuild()
+
+    def save_file(self, path):
+        """Write the design and its variables (bounds, free flags) as a component file (hull_modify.
+        write_component), which load_params reads back exactly; it is the file in use then."""
+        HM.write_component(path, self.params, self.design, self.free_space(),
+                           os.path.splitext(os.path.basename(path))[0], self.notes)
+        self.file, self.legacy, self.source = os.path.abspath(path), False, os.path.basename(path)
+        return path
 
     def save_params(self, path):
         """Write the design as a parameter file (read_params and load_params read it)."""
@@ -358,15 +375,17 @@ class HullAdapter:
             self.params, self.source = HM.suboff_params(), "SUBOFF's equations"
         else:
             self.params, self.source = HM.design_params(design), f"{os.path.basename(path)} ({pf} not found)"
+        self.file = pf if pf and os.path.exists(pf) else None
+        self.legacy, self.notes = not (self.file and HM.XF.is_component(self.file)), list(self.params.notes)
         self.design = design
         self.as_fitted = set()                      # a saved design: new orders keep its curves' shapes
         self.meta = {q["name"]: {"lo": q["lo"], "hi": q["hi"], "free": q["free"]} for q in rec["space"]["slots"]}
         self._rebuild()
 
     def build_task(self, case):
-        """A function that writes the case as the design is now (hull_modify.write_case: the parameter file,
-        the design and the set-up JSON, stations, hydrostatics, section points, the check plot and the STEP).
-        The state is copied here, so it can run off the GUI thread."""
+        """A function that writes the case as the design is now (hull_modify.write_case: the component file,
+        the design, stations, hydrostatics, section points, the check plot and the STEP). The state is copied
+        here, so it can run off the GUI thread."""
         design, params, space = self.design.copy(), self.params, self.free_space()
         out_dir, plot = self.out_dir, self.settings["plot"]
 
@@ -378,7 +397,7 @@ class HullAdapter:
                    "report": [f"{case}: L {design.length:.4f} m, V {hs['volume']:.6f} m^3, S "
                               f"{hs['wetted_surface']:.5f} m^2, LCB {hs['lcb'] / design.length:.4f} L, Cp "
                               f"{hs['cp']:.4f}", "  written: " + ", ".join(files.values())]}
-            names = f"{case}_params.dat, {case}_design.json"
+            names = f"{case}.txt, {case}_design.json"
             if cad:
                 out["message"] = (f"{names} and {case}.step (V {hs['volume']:.5g} m^3, S {hs['wetted_surface']:.5g} "
                                   f"m^2 from the solid); OCC viewer shows it")

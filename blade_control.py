@@ -1,12 +1,15 @@
 """
 blade_control.py
 
-A propeller blade from a parameter file (blade_modify.py), built with the MSc
-blade code. Set the file, the settings and the designs below, then run
+A propeller blade from a component file (xgeom_files.py) or an old parameter
+file (blade_modify.py), built with the MSc blade code. Set the file, the
+settings and the designs below, then run
 
     python blade_control.py
 
-1. PARAMS is read (the radial table and the globals, see blade_modify). Its
+1. PARAMS is read (the radial table and the globals, see blade_modify). A
+   component file gives its curves and variables (bounds, free flags) exactly,
+   and its settings over those below. An old parameter file's
    '# vary <name> Y|N [low high]' lines say what changes: each distribution
    (pitch, chord, thickness, camber, skew, rake) flagged Y is fitted with a
    Bezier curve over r/R of 1 or 2 segments (SEGMENTS) whose variables are
@@ -21,25 +24,24 @@ blade code. Set the file, the settings and the designs below, then run
    positions, weights) or the blade's radius, hub radius and hub height to
    change the blade.
 3. For each case, OUT_DIR gets
-     <case>_params.dat       the design as a parameter file (read_params and
-                             the design tool load it)
+     <case>.txt              the design as a component file, with the design
+                             space (load_component and the design tool load it)
      <case>_xcad_m.dat       the blade points for XCAD (para.py's sections, 53
                              points each, at settings.sections stations)
      <case>_design.json      the curves, their difference from the file, the checks
-     <case>_design_space.json
-                             the design space (load_blade_space reads it)
      <case>_check.png        the distributions against the file
    and with cad on: <case>.iges (the DRDC five surfaces and the hub sector,
    X_CAD_new.py) and <case>.step (the same shape).
 """
 
+import dataclasses
 import importlib.util
 from dataclasses import dataclass
 
 import blade_modify as BM
 
 # ---------------- FILES ----------------------------------------------------------
-PARAMS = "msc_blade_params.dat"        # the blade's parameter file
+PARAMS = "msc_blade.txt"               # the blade's component file (or an old parameter file, .dat)
 OUT_DIR = "outputs/blade"
 
 
@@ -88,24 +90,24 @@ def cases(design):
 
 
 if __name__ == "__main__":
-    s = settings
-    params = BM.read_params(PARAMS)
-    design, _ = BM.fit_design(params, ORDERS, SEGMENTS)
+    ld = BM.load_component(PARAMS, ORDERS, SEGMENTS, FREE)
+    s = dataclasses.replace(settings, **ld.settings)                 # a component file's settings over these
+    params, design = ld.params, ld.design
     print(f"{PARAMS}: R = {design.radius:g} m, hub radius {design.hub_radius:g} m (root r/R {design.r0:g}), hub "
           f"height {design.hub_height:g} m, {params.blades} blades, {len(params.r)} rows; section table "
           f"{params.section_path()}")
     for c, (e, rel) in BM.fit_report(params, design).items():
         cu = design.curves[c]
         if cu.segments == 0:
-            print(f"  {c:9s} as the file has it (vary N)")
+            print(f"  {c:9s} as the table has it (no variables)")
             continue
         form = "2 segments" if cu.segments == 2 else f"1 segment, {cu.order + 1} control points"
         print(f"  {c:9s} {form}: largest difference from the file {e:.2e} {BM.UNITS[c]} "
               f"({100 * rel:.2f} % of its range)")
-    space = BM.file_space(params, design, FREE)
-    free = BM.vary_free(params)
-    print("changed: " + (", ".join(free) if free else "nothing (every vary line N): the original blade only")
-          if free is not None else f"no vary line in {PARAMS}: FREE ({', '.join(FREE)})")
+    space = ld.space
+    free = tuple(dict.fromkeys(n.split(".")[0] for n in space.names))
+    print("changed: " + (", ".join(free) if free else "nothing (no free variable): the original blade only")
+          + ("" if not ld.legacy or BM.vary_free(params) is not None else f" (no vary line in {PARAMS}: FREE)"))
     out = BM.outside_bounds(space, design)
     if out:
         print("note: the file's blade lies outside the ranges of " + ", ".join(out))

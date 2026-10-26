@@ -84,7 +84,8 @@ def test_adapter(tmp):
            ad.is_free("rp"), ad.is_free("tail_rp.t6")], [4, 0, 2 + 7 + 6, 0, 1], 1e-12)
     ad.set("rp", 0.2)
     hs = HM.hydrostatics(ad.design)
-    check("r'* 0.2: breadth 0.4 m, depth 0.508 m", [hs["breadth"], hs["depth"]], [0.4, 0.508], 1e-9)
+    check("r'* 0.2: breadth 0.4 m, depth 0.508 m (the curves may rise above r* by 0.1 um)",
+          [hs["breadth"], hs["depth"]], [0.4, 0.508], 1e-7)
     path = ad.save_params(os.path.join(tmp, "flat.dat"))
     ad2 = XH.HullAdapter(path)
     check("the elliptical design as a parameter file, loaded again (order 5): elliptic, within 0.3 mm",
@@ -348,7 +349,7 @@ def test_rake(hull):
 
 def test_parts(hull):
     print("\nthe propeller and the rudder as the Vehicle tab gets them (their adapters)")
-    need = ["msc_blade_params.dat", "outputs/corner_points.dat", "outputs/thickness_params_H80_info.dat",
+    need = ["msc_blade.txt", "outputs/corner_points.dat", "outputs/thickness_params_H80_info.dat",
             "outputs/sections_xcad_with_cap_y0_y200_m.dat", "outputs/sections_stack_y0_y200_raw_mm.dat"]
     missing = [p for p in need if not os.path.exists(os.path.join(HERE, p))]
     if missing:

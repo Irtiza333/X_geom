@@ -11,16 +11,18 @@ shows the solid.
     python xgeom_tool.py rudder             the rudder alone
     python xgeom_tool.py rudder --space outputs/modified/gui_design_space.json
                                             start from a saved set-up
-    python xgeom_tool.py blade              the propeller blade of blade_control.PARAMS
-    python xgeom_tool.py blade --params my_blade.dat
-                                            the blade of another parameter file
+    python xgeom_tool.py blade              the propeller blade of blade_control.PARAMS (msc_blade.txt)
+    python xgeom_tool.py blade --file my_blade.txt
+                                            the blade of another component file (or an old
+                                            parameter file, .dat; --params is the same)
     python xgeom_tool.py blade --space outputs/blade/gui_design_space.json
-    python xgeom_tool.py hull               the hull of suboff_hull_params.dat
-    python xgeom_tool.py hull --params my_hull.dat
-    python xgeom_tool.py wing               the wing of wing_params.dat (fin: fin_params.dat)
-    python xgeom_tool.py fin --params my_fin.dat
-    python xgeom_tool.py vehicle --params my_hull.dat --space outputs/blade/gui_design_space.json
-                                            the vehicle: --params (a hull's, a blade's, a wing's
+                                            an old set-up JSON
+    python xgeom_tool.py hull               the hull of suboff_hull.txt
+    python xgeom_tool.py hull --file my_hull.txt
+    python xgeom_tool.py wing               the wing of wing.txt (fin: fin.txt)
+    python xgeom_tool.py fin --file my_fin.txt
+    python xgeom_tool.py vehicle --file my_hull.txt --file my_blade.txt
+                                            the vehicle: --file (a hull's, a blade's, a wing's
                                             or a fin's) and --space as often as needed, each
                                             goes to its component
 
@@ -102,14 +104,14 @@ Left panel (rudder)
               the original) down to the root (Cm); how many there are; whether
               C1 sits on the original's tangent at H (slope matched).
 Left panel (blade)
-    Parameter file
-              the blade's parameter file (blade_modify.py: D, blades, root r/R,
-              hub height, section table or airfoil name, the radial table and
-              the vary lines '# vary <name> Y|N [low high]'). Load reads another
-              one (the curves are fitted to it again): a parameter flagged N
-              starts as the file has it, one flagged Y with its variables free
-              (within low .. high when given). Save writes the design as one,
-              with vary lines for it as it stands (Y: a free variable).
+    File      the blade's component file (xgeom_files.py, claude/xgeom-file-formats.md:
+              D, blades, root r/R, hub height, the section, the settings, each
+              curve's form and every variable's value, bounds and free flag, the
+              radial table). Load reads another one, and the whole panel follows
+              it; or an old parameter file (blade_modify.py, .dat: the curves are
+              fitted to it, a parameter flagged N as the file has it, one flagged
+              Y with its variables free, within low .. high when given). Save
+              set-up (below) writes the design as it stands as a component file.
     Blade and hub
               the blade radius R, the hub radius and the hub height (m; the hub
               is centred at x = 0 and must cover the blade root). A change of
@@ -132,17 +134,17 @@ Left panel (blade)
               at the root .. Cm at the tip, as many as set) or 2 segments
               (x_blade's form: rational cubics P1 .. P4 and P4 .. P7, P2 = P3 and
               P5 = P6 at P4's value, so zero slope at P4; the weights w23 and w56
-              are variables) or file (the distribution as the parameter file has
+              are variables) or table (the distribution as the file's table has
               it, the cubic spline through its rows: no variables, the picker
-              notes "(file)"). Switching, or a new number of control points,
-              refits the curve: to the parameter file while none of its
-              variables has changed, else to its present shape.
+              notes "(table)"). Switching, or a new number of control points,
+              refits the curve: to the file's table while none of its variables
+              has changed, else to its present shape.
 Left panel (hull)
-    Parameter file
-              the hull's station table (hull_modify.py: the nose, middle-body,
-              tail and cap lengths, the half-height r and with elliptical sections
-              the half-width r' at stations). Load reads another one (the curves
-              are fitted to it again); Save writes the design as one.
+    File      the hull's component file (the nose, middle-body, tail and cap
+              lengths, each curve's order, every variable, the station table: the
+              half-height r and with elliptical sections the half-width r'). Load
+              reads another one, or an old station table (hull_modify.py, .dat:
+              the curves fitted to it); Save set-up writes the design as one.
     Body      the four lengths, the largest radius r* and the tail end's re (m);
               elliptical sections: the half-width r' (XY view) gets radii and
               curves of its own, r is then the half-height (XZ view).
@@ -152,10 +154,11 @@ Left panel (hull)
               are pinned (r* with zero slope there). A new number of control
               points refits the curve as for the blade.
 Left panel (wing, fin)
-    Parameter file
-              the wing's (or fin's) spanwise table (wing_modify.py: the span, the
-              airfoil by name, the pitch axis, and per row the chord, sweep, rake
-              (dihedral), pitch, t/c and f/c). Load and Save as for the blade.
+    File      the wing's (or fin's) component file (the span, the section by name
+              or as a coordinate file, the pitch axis, the settings, each curve's
+              form, every variable, and per row the pitch, chord, t/c, f/c, sweep
+              and rake (dihedral)). Load and Save set-up as for the blade; an old
+              parameter file (wing_modify.py, .dat) loads too.
     Span and sections
               the span (mm; the curves stretch over it); the sections of the XCAD
               file (evenly from the root to the flat tip); change points: how many
@@ -164,8 +167,8 @@ Left panel (wing, fin)
     Distributions
               pick chord, sweep, rake, pitch, thickness or camber, or a change dt1
               .. dc8, to edit its curve over the span, 1 or 2 segments as the
-              blade's. The root's sweep and rake are pinned at 0: the root's LE is
-              the origin.
+              blade's, or as the table has it. The root's sweep and rake are
+              pinned at 0: the root's LE is the origin.
 Each variable:  free | name | low | slider | high | value | where
     free      ticked: a design variable within low .. high; unticked: held
     d         the position of a control point, as the fraction d of the span
@@ -195,11 +198,14 @@ Right panel
     3D sections  the whole rudder as its sections: modified (blue), the cut at H
                  (red), unchanged (grey); all blades of the propeller; the hull's
                  sections by part; the wing's or fin's XCAD sections.
-Save set-up writes the design space as it stands (every variable with its value,
-bounds and free flag, each curve's control points and order, the settings and
-input files) to <output folder>/<case>_design_space.json; rudder_modify.
-load_design_space, blade_modify.load_blade_space, hull_modify.load_hull_space or
-wing_modify.load_wing_space reads it for the optimiser, --space for the tool.
+Save set-up ... writes the component as it stands as a component file (every
+variable with its value, bounds and free flag, each curve's form and points, the
+settings, the table; xgeom_files.py): a dialog opens on the file it came from (an
+old .dat gives a .txt beside it). Load ... and --file read it back exactly; the
+optimiser reads it (blade_modify.load_component, wing_modify.load_component,
+hull_modify.load_component, xgeom_files.load). The rudder (modified below H)
+keeps its set-up JSON: Save set-up writes <output folder>/<case>_design_space.json
+(rudder_modify.load_design_space, --space).
 The build button builds the component of its panel (in the vehicle its text
 names it): XCAD (rudder) writes the case to the output folder (XCAD file, section
 table, design and the same set-up JSON), lofts the XCAD file into a solid and
@@ -314,13 +320,13 @@ def then_save(res, kind, path):
 
 
 def file_kind(path):
-    """The geometry a set-up JSON ('geometry') or a parameter file (its first line) is for."""
+    """The geometry a set-up JSON ('geometry'), a component file (its kind) or an old parameter file (its first
+    line) is for."""
     if path.lower().endswith(".json"):
         with open(path) as fh:
             return json.load(fh).get("geometry")
-    with open(path) as fh:
-        first = fh.readline().lower()
-    return next((k for k in ("hull", "blade", "fin", "wing") if k in first), None)
+    import xgeom_files as XF
+    return XF.file_kind(path)
 
 
 class VarRow:
@@ -627,12 +633,12 @@ class App:
         top = ttk.Frame(box)
         top.pack(fill="x", pady=2)
         choice = getattr(ad, "segment_choice", False)
-        nseg = ad.segments(c) if choice else 1                   # blade: 0 is the file's own curve
+        nseg = ad.segments(c) if choice else 1                   # 0: as the table has it
         if choice:
             ttk.Label(top, text="segments").pack(side="left", padx=(4, 2))
             self.nseg = tk.IntVar(value=nseg)
             for n in getattr(ad, "segment_options", (1, 2)):
-                ttk.Radiobutton(top, text=str(n) if n else "file", value=n, variable=self.nseg,
+                ttk.Radiobutton(top, text=str(n) if n else "table", value=n, variable=self.nseg,
                                 command=self.on_segments).pack(side="left")
         if nseg == 2:
             ttk.Label(top, text="P1 .. P7: P2 = P3 and P5 = P6 at P4's value (zero slope at P4)",
@@ -671,7 +677,8 @@ class App:
         self.case = ttk.Entry(row, width=16)
         self.case.insert(0, case)
         self.case.pack(side="left")
-        ttk.Button(row, text="Save set-up", command=self.on_save).pack(side="left", padx=(6, 0))
+        ttk.Button(row, text="Save set-up ..." if hasattr(ad, "save_file") else "Save set-up",
+                   command=self.on_save).pack(side="left", padx=(6, 0))
         self.build_btn = ttk.Button(row, text=self.build_label(self.kind),
                                     command=lambda k=self.kind: self.on_build(k))
         self.build_btn.pack(side="left", padx=6)
@@ -743,7 +750,7 @@ class App:
                 self._note = f"{c}: {n + 1} control points, {msg}"
 
     def on_segments(self):
-        """Blade, wing, fin: the picked curve as 1 or 2 segments, fitted again; blade: or the file's own (0)."""
+        """Blade, wing, fin: the picked curve as 1 or 2 segments, fitted again, or as the table has it (0)."""
         c, n = self.curve.get(), self.nseg.get()
         if n == self.ad.segments(c):
             return
@@ -1192,29 +1199,47 @@ class App:
         except OSError:
             pass
 
+    def save_target(self):
+        """Where Save set-up's dialog opens: (folder, file name) of the file the component came from (an old
+        parameter file: a .txt beside it), else the output folder and the case."""
+        cur = getattr(self.ad, "file", None)
+        if cur:
+            name = os.path.basename(cur) if not self.ad.legacy else os.path.splitext(os.path.basename(cur))[0] + ".txt"
+            return os.path.dirname(cur), name
+        return os.path.join(HERE, self.ad.out_dir), f"{self.case.get().strip() or 'gui'}.txt"
+
     def on_save(self):
-        case = self.case.get().strip() or "gui"
-        path = self.guard(lambda: self.ad.save_space(os.path.join(self.ad.out_dir, f"{case}_design_space.json")))
-        if path:
-            self.say(f"set-up saved: {os.path.abspath(path)}")
+        """Save set-up: the component as a component file (the dialog opens on the file it came from); the
+        rudder (modified below H) its set-up JSON in the output folder."""
+        if not hasattr(self.ad, "save_file"):
+            case = self.case.get().strip() or "gui"
+            path = self.guard(lambda: self.ad.save_space(os.path.join(self.ad.out_dir, f"{case}_design_space.json")))
+            if path:
+                self.say(f"set-up saved: {os.path.abspath(path)}")
+            return
+        folder, name = self.save_target()
+        path = filedialog.asksaveasfilename(title=f"Save the {NAMES.get(self.kind, self.kind).lower()}'s set-up as a "
+                                                  f"component file", initialdir=folder, initialfile=name,
+                                            defaultextension=".txt",
+                                            filetypes=[("component files", "*.txt"), ("all files", "*")])
+        if path and self.guard(lambda: self.ad.save_file(path)):
+            self._title()
+            self.rebuild_panel()
+            self.say(f"set-up saved: {path}")
 
     def on_load_params(self):
-        path = filedialog.askopenfilename(title=f"{NAMES.get(self.kind, self.kind)} parameter file", initialdir=HERE,
-                                          filetypes=[("parameter files", "*.dat"), ("all files", "*")])
+        cur = getattr(self.ad, "file", None)
+        path = filedialog.askopenfilename(title=f"{NAMES.get(self.kind, self.kind)}: a component file (or an old "
+                                                f"parameter file)", initialdir=os.path.dirname(cur) if cur else HERE,
+                                          filetypes=[("component files", "*.txt"), ("old parameter files", "*.dat"),
+                                                     ("all files", "*")])
         if path:
-            self.say(f"fitting the curves to {os.path.basename(path)} ...")
+            self.say(f"reading {os.path.basename(path)} ...")
             self.root.update_idletasks()
             if self.guard(lambda: self.ad.load_params(path) or True):
                 self._title()
                 self.after_change(structure=True)
                 self.say(f"loaded {path}")
-
-    def on_save_params(self):
-        path = filedialog.asksaveasfilename(title="Save the design as a parameter file", initialdir=self.ad.out_dir,
-                                            initialfile=f"{self.case.get().strip() or 'gui'}_params.dat",
-                                            defaultextension=".dat", filetypes=[("parameter files", "*.dat")])
-        if path and self.guard(lambda: self.ad.save_params(path)):
-            self.say(f"parameter file written: {path}")
 
     def open_occ_viewer(self):
         if not self.step:
@@ -1267,15 +1292,26 @@ def rudder_panel(app):
         row=ad.degree + 1, column=0, columnspan=3, sticky="w")
 
 
+def file_box(app, path, info):
+    """The panel's first box: the component's file (relative to this folder when inside it), what it holds,
+    and Load ... (Save set-up below writes it)."""
+    box = ttk.LabelFrame(app.panel, text="File")
+    box.pack(fill="x", padx=6, pady=4)
+    ttk.Label(box, text=os.path.relpath(path, HERE) if path.startswith(HERE) else path,
+              wraplength=560).pack(anchor="w", padx=4)
+    ttk.Label(box, text=info, foreground=INK2, wraplength=560).pack(anchor="w", padx=4)
+    row = ttk.Frame(box)
+    row.pack(fill="x", pady=3)
+    ttk.Button(row, text="Load ...", command=app.on_load_params).pack(side="left", padx=4)
+    ttk.Label(row, text="a component file (.txt) or an old parameter file (.dat); Save set-up (below) writes the "
+                        "design as a component file", foreground=INK2, wraplength=470).pack(side="left", padx=6)
+
+
 def blade_panel(app):
-    """The blade's boxes: the parameter file, the blade and hub, the sections
-    and the distributions."""
+    """The blade's boxes: the file, the blade and hub, the sections and the
+    distributions."""
     import blade_modify as BM
     ad = app.ad
-    box = ttk.LabelFrame(app.panel, text="Parameter file")
-    box.pack(fill="x", padx=6, pady=4)
-    ttk.Label(box, text=os.path.relpath(ad.params.path, HERE) if ad.params.path.startswith(HERE) else ad.params.path,
-              wraplength=560).pack(anchor="w", padx=4)
     p = ad.params
     hub_h = f"not given ({BM.HUB_HEIGHT:g} m)" if p.hub_height is None else f"{p.hub_height:g} m"
     if p.airfoil:
@@ -1284,13 +1320,8 @@ def blade_panel(app):
     else:
         sections = f"sections: {p.section_table}"
     z_file = getattr(ad, "file_blades", p.blades)
-    ttk.Label(box, text=f"D {p.diameter:g} m, {z_file} blades, root r/R {p.root_r:g}, hub height {hub_h}, "
-                        f"{len(p.r)} rows; {sections}", foreground=INK2, wraplength=560).pack(anchor="w", padx=4)
-    row = ttk.Frame(box)
-    row.pack(fill="x", pady=3)
-    ttk.Button(row, text="Load ...", command=app.on_load_params).pack(side="left", padx=4)
-    ttk.Button(row, text="Save ...", command=app.on_save_params).pack(side="left")
-    ttk.Label(row, text="the design as a parameter file", foreground=INK2).pack(side="left", padx=6)
+    file_box(app, ad.file, f"D {p.diameter:g} m, {z_file} blades, root r/R {p.root_r:g}, hub height {hub_h}, "
+                           f"{len(p.r)} rows; {sections}")
 
     box = ttk.LabelFrame(app.panel, text="Blade and hub (the curves stretch over the span between them)")
     box.pack(fill="x", padx=6, pady=4)
@@ -1338,23 +1369,12 @@ def blade_panel(app):
 
 
 def hull_panel(app):
-    """The hull's boxes: the parameter file, the body (lengths, radii, elliptical sections) and the curves."""
+    """The hull's boxes: the file, the body (lengths, radii, elliptical sections) and the curves."""
     ad = app.ad
     p = ad.params
-    box = ttk.LabelFrame(app.panel, text="Parameter file")
-    box.pack(fill="x", padx=6, pady=4)
-    where = p.path or "(SUBOFF's equations: suboff_hull_params.dat is not here)"
-    ttk.Label(box, text=os.path.relpath(where, HERE) if where.startswith(HERE) else where,
-              wraplength=560).pack(anchor="w", padx=4)
-    ttk.Label(box, text=f"L {p.length:g} m: nose {p.nose:g}, middle {p.middle:g}, tail {p.tail:g}, cap {p.cap:g} m; "
-                        f"{len(p.x)} stations, " + ("axisymmetric" if p.axisymmetric else
-                                                   "elliptical sections (r and r')"),
-              foreground=INK2, wraplength=560).pack(anchor="w", padx=4)
-    row = ttk.Frame(box)
-    row.pack(fill="x", pady=3)
-    ttk.Button(row, text="Load ...", command=app.on_load_params).pack(side="left", padx=4)
-    ttk.Button(row, text="Save ...", command=app.on_save_params).pack(side="left")
-    ttk.Label(row, text="the design as a parameter file", foreground=INK2).pack(side="left", padx=6)
+    file_box(app, ad.file or "(SUBOFF's equations: suboff_hull.txt is not here)",
+             f"L {p.length:g} m: nose {p.nose:g}, middle {p.middle:g}, tail {p.tail:g}, cap {p.cap:g} m; "
+             f"{len(p.x)} stations, " + ("axisymmetric" if p.axisymmetric else "elliptical sections (r and r')"))
 
     box = ttk.LabelFrame(app.panel, text="Body: the parts' lengths and the radii (m)")
     box.pack(fill="x", padx=6, pady=4)
@@ -1379,27 +1399,17 @@ def hull_panel(app):
 
 
 def wing_panel(app):
-    """The wing's (or the fin's) boxes: the parameter file, the span and the sections, the distributions and
-    the section changes."""
+    """The wing's (or the fin's) boxes: the file, the span and the sections, the distributions and the section
+    changes."""
     import airfoils
     import wing_modify as WM
     ad = app.ad
     p = ad.params
-    box = ttk.LabelFrame(app.panel, text="Parameter file")
-    box.pack(fill="x", padx=6, pady=4)
-    ttk.Label(box, text=os.path.relpath(p.path, HERE) if p.path.startswith(HERE) else p.path,
-              wraplength=560).pack(anchor="w", padx=4)
     symmetric = WM.base_shape(p.airfoil, p.camber_xc)[2]["symmetric"]
-    ttk.Label(box, text=f"span {p.span:g} mm, {len(p.eta)} rows, pitch axis at {p.ref_xc:g} of the chord; airfoil "
-                        f"{airfoils.describe(p.airfoil)}"
-                        + (f" (symmetric: f/c scales the NACA 4-digit camber line, its maximum at {p.camber_xc:g} c)"
-                           if symmetric else "") + (f"; {p.changes} change points" if p.changes else ""),
-              foreground=INK2, wraplength=560).pack(anchor="w", padx=4)
-    row = ttk.Frame(box)
-    row.pack(fill="x", pady=3)
-    ttk.Button(row, text="Load ...", command=app.on_load_params).pack(side="left", padx=4)
-    ttk.Button(row, text="Save ...", command=app.on_save_params).pack(side="left")
-    ttk.Label(row, text="the design as a parameter file", foreground=INK2).pack(side="left", padx=6)
+    file_box(app, ad.file, f"span {p.span:g} mm, {len(p.eta)} rows, pitch axis at {p.ref_xc:g} of the chord; airfoil "
+                           f"{airfoils.describe(p.airfoil)}"
+                           + (f" (symmetric: f/c scales the NACA 4-digit camber line, its maximum at {p.camber_xc:g} c)"
+                              if symmetric else "") + (f"; {p.changes} change points" if p.changes else ""))
 
     box = ttk.LabelFrame(app.panel, text="Span and sections (the curves stretch over the span)")
     box.pack(fill="x", padx=6, pady=4)
@@ -1448,9 +1458,9 @@ def main():
                     help=f"what to design (default here: {default})")
     ap.add_argument("--space", action="append", default=[],
                     help="a <case>_design_space.json to start from (the vehicle: one per component)")
-    ap.add_argument("--params", action="append", default=[],
-                    help="the blade's, the hull's, the wing's or the fin's parameter file to start from (the "
-                         "vehicle: any of them)")
+    ap.add_argument("--file", "--params", dest="params", action="append", default=[],
+                    help="the blade's, the hull's, the wing's or the fin's component file (or old parameter file) to "
+                         "start from (the vehicle: any of them)")
     args = ap.parse_args()
     if args.geometry == "vehicle" and not available("hull"):
         ap.error("the vehicle needs xgeom_hull.py (the X_geom folder)")
@@ -1458,7 +1468,7 @@ def main():
         if not available(args.geometry):
             ap.error(f"{ADAPTERS[args.geometry][0]}.py is not in this folder")
         if len(args.space) > 1 or len(args.params) > 1:
-            ap.error("one --space and one --params for one geometry")
+            ap.error("one --space and one --file for one geometry")
     space = [os.path.abspath(s) for s in args.space]
     params = [os.path.abspath(p) for p in args.params]
     if args.geometry != "vehicle":

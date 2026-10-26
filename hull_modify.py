@@ -37,10 +37,15 @@ Parameter file (a station table; read_params, write_params):
 The fit densifies each part of the table (monotone cubic, the nose in sqrt(x)), fits the coefficients by least
 squares and each exponent by a one-dimensional search.
 
-Outputs (write_case, outputs/hull/): <case>_params.dat (the design as a station table), <case>_design.json (the
-design exactly), <case>_design_space.json (with a space), <case>_stations.dat and <case>_hydrostatics.dat
-(hull_extraction), <case>_sections_m.dat (section points: '#k', then x y z per point, m), <case>_check.png, and
-with OCC <case>.step: one NURBS face per part, the profile B-spline times the rational circle (exact ellipses).
+Component file (xgeom_files.py, kind hull; claude/xgeom-file-formats.md): the same lengths and station table
+with the axisymmetry, each curve's order ('# curve nose_r cst 5') and every variable's value, bounds and free
+flag; load_component reads one exactly (or an old parameter file, fitted), write_component writes one (the
+design tool's Save set-up, write_case's <case>.txt).
+
+Outputs (write_case, outputs/hull/): <case>.txt (the design as a component file), <case>_design.json (the design
+exactly), <case>_stations.dat and <case>_hydrostatics.dat (hull_extraction), <case>_sections_m.dat (section
+points: '#k', then x y z per point, m), <case>_check.png, and with OCC <case>.step: one NURBS face per part, the
+profile B-spline times the rational circle (exact ellipses).
 
     python hull_modify.py --suboff                 fit SUBOFF (suboff_hull_params.dat) and write the case
     python hull_modify.py params.dat [--case NAME] [--order 5] [--no-cad]
@@ -60,6 +65,7 @@ import numpy as np
 
 import hull_extraction as HE
 import xcad_loft as XL
+import xgeom_files as XF
 
 OUT_DIR = os.path.join("outputs", "hull")
 KINDS = ("nose", "tail")
@@ -329,7 +335,13 @@ class HullParams:
 
 
 def read_params(path):
-    """The HullParams of a parameter file (see the module docstring)."""
+    """The HullParams of a parameter file (see the module docstring), or of a component file (xgeom_files.py:
+    its lengths and station table; load_component gives its design and variables too)."""
+    if XF.is_component(path):
+        comp = XF.read_component(path)
+        if comp.kind != "hull":
+            raise ValueError(f"{path}: a {comp.kind} file, not a hull's")
+        return _component_params(comp)
     head, rows = {}, []
     with open(path) as fh:
         for line in fh:
@@ -646,6 +658,191 @@ def read_design(path):
 
 
 # --------------------------------------------------------------------------
+# The component file (xgeom_files.py)
+# --------------------------------------------------------------------------
+
+LENGTH_KEYS = {"nose": "nose_m", "middle": "middle_m", "tail": "tail_m", "cap": "cap_m"}
+TABLE_TOL = 1e-6                  # m: the r and rp columns of a design given by var lines may differ from it by this
+                                  # times max(1, the column's range) (the file writes 9 decimals)
+
+
+def _component_params(comp):
+    """The HullParams of a hull component: its lengths and its station table."""
+    g, path = comp.geometry, comp.path
+    missing = [k for k in ("nose_m", "middle_m", "tail_m") if k not in g]
+    if missing:
+        raise ValueError(f"{path}: the geometry misses {', '.join(missing)}")
+    try:
+        ln, lm, lt = (float(g[k]) for k in ("nose_m", "middle_m", "tail_m"))
+        lc = float(g.get("cap_m", 0.0))
+    except ValueError as exc:
+        raise ValueError(f"{path}: {exc}") from None
+    x, r = comp.column("x_m"), comp.column("r_m")
+    rp = comp.column("rp_m") if comp.has("rp_m") else r.copy()
+    if len(x) < 4 or np.any(np.diff(x) <= 0):
+        raise ValueError(f"{path}: x must rise from row to row, at least 4 rows")
+    if ln <= 0 or lt <= 0 or lm < 0 or lc < 0:
+        raise ValueError(f"{path}: nose and tail lengths must be positive, middle and cap not negative")
+    length = ln + lm + lt + lc
+    if abs(x[0]) > 1e-6 * length or abs(x[-1] - (length - lc)) > 1e-6 * length and \
+            abs(x[-1] - length) > 1e-6 * length:
+        raise ValueError(f"{path}: the table must run from x = 0 to the end of the tail (or of the cap)")
+    if "axisymmetric" in g:
+        axi = XF.as_bool(g["axisymmetric"], f"{path}: axisymmetric")
+        if not axi and not comp.has("rp_m"):
+            raise ValueError(f"{path}: elliptical sections (axisymmetric N) need the rp_m column")
+    else:
+        axi = not comp.has("rp_m") or bool(np.allclose(rp, r, atol=1e-12))
+    return HullParams(ln, lm, lt, lc, x, r, rp, axi, path)
+
+
+def _component_design(comp, params, orders=None):
+    """The HullDesign of a hull component: each curve exactly as its var lines give it (its order from its
+    curve line), else fitted to the table (fit_design); the lengths and the radii from their var lines, else the
+    geometry and the fit (a length given in both: they must agree)."""
+    path = comp.path
+    views = ("r",) if params.axisymmetric else VIEWS
+    names = [f"{kind}_{view}" for view in views for kind in KINDS]
+    bad = [c for c in comp.curves if c not in names]
+    if bad:
+        raise ValueError(f"{path}: curve lines for {', '.join(bad)}: this hull's curves are {', '.join(names)}")
+    order = {c: int(comp.curves[c][1]) if c in comp.curves else int((orders or {}).get(c, DEFAULT_ORDER))
+             for c in names}
+    if any(not 2 <= n <= MAX_ORDER for n in order.values()):
+        raise ValueError(f"{path}: a curve's order lies in 2 .. {MAX_ORDER}")
+    radii = ["r", "re"] + ([] if params.axisymmetric else ["rp", "rpe"])
+    curves, fit, exact = {}, None, True
+    for c in names:
+        kind = c.split("_")[0]
+        keys = CSTCurve.keys_of(kind, order[c])
+        given = [k for k in keys if f"{c}.{k}" in comp.vars]
+        stray = [q for q in comp.vars if q.startswith(c + ".") and q.split(".", 1)[1] not in keys]
+        if stray:
+            raise ValueError(f"{path}: {', '.join(stray)}: not variables of the {c} curve of order {order[c]}")
+        if given and len(given) < len(keys):
+            raise ValueError(f"{path}: the {c} curve has var lines for some of its variables only; missing: "
+                             + ", ".join(f"{c}.{k}" for k in keys if k not in given))
+        if given:
+            curves[c] = CSTCurve.from_keys(kind, {k: comp.vars[f"{c}.{k}"].value for k in keys}, order[c])
+            continue
+        exact = False
+        fit = fit or fit_design(params, order)
+        curves[c] = fit.curves[c]
+    vals = {}
+    for g in LENGTHS:
+        v0 = float(getattr(params, g))
+        if g in comp.vars:
+            v = comp.vars[g].value
+            if LENGTH_KEYS[g] in comp.geometry and abs(v - v0) > 1e-8 * max(abs(v0), 1e-6):
+                raise ValueError(f"{path}: var {g} {v:.10g} disagrees with the geometry's {LENGTH_KEYS[g]} "
+                                 f"{v0:.10g}; change both, or delete the var line")
+            v0 = v
+        vals[g] = v0
+    for g in radii:
+        if g in comp.vars:
+            vals[g] = comp.vars[g].value
+        else:
+            exact = False
+            fit = fit or fit_design(params, order)
+            vals[g] = float(getattr(fit, g))
+    d = HullDesign(vals["nose"], vals["middle"], vals["tail"], vals["cap"], vals["r"], vals["re"], curves)
+    if not params.axisymmetric:
+        d.rp, d.rpe = vals["rp"], vals["rpe"]
+    if exact:                                    # the stations of a design given by var lines are the design's
+        for view, col in (("r", "r_m"), ("rp", "rp_m")):
+            if not comp.has(col):
+                continue
+            want = comp.column(col)
+            e = np.abs(d.radius(view, params.x) - want)
+            if e.max() > TABLE_TOL * max(1.0, float(np.ptp(want))):
+                i = int(np.argmax(e))
+                raise ValueError(f"{path}: the {col} column differs from the hull of the var lines by {e[i]:.3g} m "
+                                 f"at x {params.x[i]:.6g} m: the var lines define the hull (to change it in the "
+                                 f"table instead, delete the curves' and radii's var lines and they are fitted)")
+    return d
+
+
+def _component_space(comp, design, free=None):
+    """The HullSpace of a hull component: each variable's bounds and free flag from its var line; one with
+    none: default_bounds (a vary range for a length or a radius) and free as the vary lines say (with none: the
+    names in free, default DEFAULT_FREE)."""
+    names = set(global_slots(design)) | set(design.curves)
+    bad = sorted(set(comp.vary) - names)
+    if bad:
+        raise ValueError(f"{comp.path}: vary lines for {', '.join(bad)}: not one of {', '.join(sorted(names))}")
+    bounds = {n: (lo, hi) for n, (on, lo, hi) in comp.vary.items() if on and lo is not None and n not in design.curves}
+    bounds.update({n: (q.lo, q.hi) for n, q in comp.vars.items()})
+    full = HullSpace(design, bounds=bounds, fixed={})
+    unknown = [n for n in comp.vars if n not in full.all_names]
+    if unknown:
+        raise ValueError(f"{comp.path}: var lines for {', '.join(unknown)}, which this hull does not have (its "
+                         f"variables: {', '.join(global_slots(design))} and those of its curves)")
+    free0 = (tuple(n for n, (on, _, _) in comp.vary.items() if on) if comp.vary else
+             tuple(DEFAULT_FREE if free is None else free))
+    vals = full.values(design)
+    fixed = {n: vals[n] for n in full.all_names
+             if not (comp.vars[n].free if n in comp.vars else n.split(".")[0] in free0)}
+    return HullSpace(design, bounds=bounds, fixed=fixed)
+
+
+def load_component(path, orders=None, free=None):
+    """A hull from a component file (xgeom_files.py, kind hull) or an old parameter file (read_params, its curves
+    fitted by fit_design, free the names in free, default DEFAULT_FREE): an XF.Loaded with the parameters (the
+    station table), the design, the design space (every variable, the held ones fixed), no settings, its name
+    and notes.
+
+        ld = load_component("suboff_hull.txt")
+        x0, bounds = ld.space.to_vector(ld.design), ld.space.bounds
+    """
+    name = os.path.splitext(os.path.basename(path))[0]
+    if not XF.is_component(path):
+        params = read_params(path)
+        design = fit_design(params, orders)
+        notes, _ = XF.legacy_header(path, tuple(LENGTH_KEYS.values()) + ("axisymmetric",))
+        return XF.Loaded("hull", params, design, HullSpace(design, free=free), {}, name, notes, {}, True)
+    comp = XF.read_component(path)
+    if comp.kind != "hull":
+        raise ValueError(f"{path}: a {comp.kind} file, not a hull's")
+    params = _component_params(comp)
+    design = _component_design(comp, params, orders)
+    return XF.Loaded("hull", params, design, _component_space(comp, design, free), {}, comp.name, list(comp.notes),
+                     {}, False)
+
+
+def _mapped_x(params, design):
+    """The station table's x moved part by part onto the design's parts (the same fractions of each part's
+    length), rounded as the file writes them, without repeats."""
+    jo, jn = params.joins, design.joins
+    out = []
+    for xi in np.asarray(params.x, dtype=float):
+        p = int(min(max(np.searchsorted(jo, xi, side="right") - 1, 0), 3))
+        s = (xi - jo[p]) / (jo[p + 1] - jo[p]) if jo[p + 1] > jo[p] else 0.0
+        out.append(jn[p] + s * (jn[p + 1] - jn[p]))
+    return np.unique(np.round(np.array(out), XF.DECIMALS["hull"]))
+
+
+def write_component(path, params, design, space, name=None, notes=()):
+    """Write the design as a component file, which load_component reads back exactly: the lengths, the
+    axisymmetry, each curve's order, every variable of space (value, bounds, free) and the half-height r (and
+    half-width r') at the station table's x (part by part on the design's lengths)."""
+    comp = XF.Component("hull", name or os.path.splitext(os.path.basename(path))[0], list(notes))
+    g = comp.geometry
+    for k, key in LENGTH_KEYS.items():
+        g[key] = XF.num(getattr(design, k))
+    g["axisymmetric"] = XF.yn(design.axisymmetric)
+    for c in sorted(design.curves, key=lambda k: (k.split("_")[1], KINDS.index(k.split("_")[0]))):
+        comp.curves[c] = ("cst", design.curves[c].order)
+    comp.vars = XF.vars_of(space, design)
+    x = _mapped_x(params, design)
+    cols = [x, design.radius("r", x)]
+    if not design.axisymmetric:
+        cols.append(design.radius("rp", x))
+    comp.columns = ("x_m", "r_m") + (() if design.axisymmetric else ("rp_m",))
+    comp.table = np.column_stack(cols)
+    return XF.write_component(path, comp)
+
+
+# --------------------------------------------------------------------------
 # Geometry
 # --------------------------------------------------------------------------
 
@@ -915,14 +1112,12 @@ def write_case(out_dir, case, design, params=None, space=None, cad=True, plot=Tr
     os.makedirs(out_dir, exist_ok=True)
     files = {}
     notes = [f"design of case {case} (hull_modify.py), {datetime.date.today().isoformat()}"]
-    files["params"] = write_params(os.path.join(out_dir, f"{case}_params.dat"), design_params(design), notes)
+    held = space or HullSpace(design, fixed=HullSpace(design, fixed={}).values(design))
+    files["component"] = write_component(os.path.join(out_dir, f"{case}.txt"), params or design_params(design),
+                                         design, held, case, notes)
     with open(os.path.join(out_dir, f"{case}_design.json"), "w") as fh:
         json.dump(design_record(design), fh, indent=1)
     files["design"] = os.path.join(out_dir, f"{case}_design.json")
-    if space is not None:
-        with open(os.path.join(out_dir, f"{case}_design_space.json"), "w") as fh:
-            json.dump(space_record(space, design, params), fh, indent=1)
-        files["space"] = os.path.join(out_dir, f"{case}_design_space.json")
     st = stations(design, 401)
     exact = {"pmb_start": design.joins[1], "pmb_end": design.joins[2]}
     cadline = None

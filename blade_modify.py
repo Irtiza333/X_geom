@@ -63,6 +63,14 @@ Parameter file (.dat; '#' header, np.loadtxt reads the table):
 Between the rows a distribution is the cubic spline through them: the file's
 shape, the reference the design is compared with.
 
+Component file (xgeom_files.py, kind blade; claude/xgeom-file-formats.md): the
+same geometry and table (the section by one key, 'section': a section table,
+a coordinate file or an airfoil name), with the settings, each curve's form
+('table' as the file has it, 'bezier1 <points>', 'bezier2') and every
+variable's value, bounds and free flag ('# var'). load_component reads one
+exactly (or an old parameter file, fitted as below); write_component writes
+one (the design tool's Save set-up, write_case's <case>.txt).
+
 Design (BladeDesign): the blade radius R and the hub radius (m), the hub height
 (m), and per distribution a curve in the (r/R, value) plane from the root (r/R =
 hub radius / R) to the tip. Positions along a curve are fractions of the span, so
@@ -91,6 +99,9 @@ squares); with vary lines only the distributions flagged Y.
     problems = design_problems(d, params)
     paths = write_case("outputs/blade", "case1", d, params, space, settings={"sections": 80})
 
+    ld = load_component("msc_blade.txt")                    # a component file: design and space exactly
+    d = ld.space.to_design(x)
+
 The XCAD points file has para.py's sections (53 points each) at section_stations:
 'sections' in all, the last 'tip_sections' from r/R 'tip_band' to the tip closer
 together (defaults 56, 14, 0.93). The clearance check keeps x_blade_new's
@@ -113,6 +124,7 @@ from scipy.interpolate import CubicSpline
 from scipy.optimize import least_squares
 from scipy.spatial import cKDTree
 
+import xgeom_files as XF
 from blade_vary import CURVES, GLOBAL_SLOTS, VARY_NAMES, Vary, read_vary   # the names; the vary lines
 from hub_new import DEFAULT_HUB_HEIGHT
 from rudder_modify import Bezier, fit_values, fractions_from_heights, heights_from_fractions, law_basis
@@ -241,7 +253,13 @@ def vary_bounds(params):
 
 
 def read_params(path):
-    """The BladeParams of a parameter file (see the module docstring)."""
+    """The BladeParams of a parameter file (see the module docstring), or of a component file (xgeom_files.py:
+    its geometry and table; load_component gives its design and variables too)."""
+    if XF.is_component(path):
+        comp = XF.read_component(path)
+        if comp.kind != "blade":
+            raise ValueError(f"{path}: a {comp.kind} file, not a blade's")
+        return _component_params(comp)
     head = {}
     with open(path) as fh:
         for line in fh:
@@ -981,6 +999,218 @@ def load_blade_space(path):
 
 
 # --------------------------------------------------------------------------
+# The component file (xgeom_files.py)
+# --------------------------------------------------------------------------
+
+SETTING_TYPES = {"sections": int, "tip_band": float, "tip_sections": int, "clearance_mm": float, "hub": bool}
+TABLE_TOL = 1e-6                  # a column of a curve with var lines may differ from the curve by this times
+                                  # max(1, the column's range) (the file writes 8 decimals)
+GLOBAL_HEAD = {"radius": "diameter_m", "hub_radius": "root_r", "hub_height": "hub_height_m"}
+
+
+def _component_params(comp):
+    """The BladeParams of a blade component: its geometry, its table and its vary lines. section: a section
+    table (para.py's, comma-separated) or a coordinate file when such a file is there (relative to the
+    component file), else an airfoil by name."""
+    g, path = comp.geometry, comp.path
+    missing = [k for k in ("diameter_m", "blades", "section") if k not in g]
+    if missing:
+        raise ValueError(f"{path}: the geometry misses {', '.join(missing)}")
+    sec = g["section"]
+    full = XF.resolve(sec, os.path.dirname(path))
+    table, airfoil = "", None
+    if os.path.isfile(full):
+        table, airfoil = (sec, None) if XF.is_section_table(full) else ("", full)
+    else:
+        airfoil = sec
+    r = comp.column("r/R")
+    try:
+        diameter, blades = float(g["diameter_m"]), int(g["blades"])
+        root = float(g.get("root_r", r[0]))
+        hub_h = float(g["hub_height_m"]) if "hub_height_m" in g else None
+    except ValueError as exc:
+        raise ValueError(f"{path}: {exc}") from None
+    if len(r) < 4 or np.any(np.diff(r) <= 0.0):
+        raise ValueError(f"{path}: r/R must rise from row to row, at least 4 rows")
+    if not r[0] - ROW_TOL <= root < r[-1] or np.sum(r > root + ROW_TOL) < 3:
+        raise ValueError(f"{path}: root_r {root:g} must lie in the table, with 4 rows from it to the tip")
+    vary = None
+    if comp.vary:
+        bad = sorted(set(comp.vary) - set(VARY_NAMES))
+        if bad:
+            raise ValueError(f"{path}: vary lines for {', '.join(bad)}: not one of {', '.join(VARY_NAMES)}")
+        vary = {n: Vary(*comp.vary[n]) if n in comp.vary else Vary(False) for n in VARY_NAMES}
+    params = BladeParams(diameter, blades, root, table, r,
+                         {c: comp.column(col) for c, col in XF.CURVE_COLUMNS["blade"].items()}, path, hub_h,
+                         airfoil, vary)
+    if params.airfoil:
+        try:
+            params.section_path()                    # the airfoil exists; its table is made
+        except ValueError as exc:
+            raise ValueError(f"{path}: section: {exc}") from None
+    return params
+
+
+def _component_curve(comp, c, form, n, r, v, segments=None, orders=None, vary=None):
+    """One curve of a component: exactly as its var lines give it, else fitted to (r, v) in its form (no curve
+    line: fit_design's choice from segments, orders and the vary lines)."""
+    if form is None:
+        seg = int((segments or {}).get(c, DEFAULT_SEGMENTS))
+        if vary is not None:
+            seg = (seg if seg in (1, 2) else DEFAULT_SEGMENTS) if vary[c].on else 0
+        order = int((orders or {}).get(c, DEFAULT_ORDER))
+    else:
+        seg = XF.SEGMENTS[form]
+        order = n - 1 if form == "bezier1" else DEFAULT_ORDER
+    keys = CURVE_TYPES[seg].keys_of(order) if seg else []
+    given = [k for k in keys if f"{c}.{k}" in comp.vars]
+    stray = [q for q in comp.vars if q.startswith(c + ".") and q.split(".", 1)[1] not in keys]
+    if stray:
+        raise ValueError(f"{comp.path}: {', '.join(stray)}: not variables of a {XF.FORM_OF[seg]} {c} curve"
+                         + (f" of {order + 1} points" if seg == 1 else ""))
+    if given and len(given) < len(keys):
+        raise ValueError(f"{comp.path}: the {c} curve has var lines for some of its variables only; missing: "
+                         + ", ".join(f"{c}.{k}" for k in keys if k not in given))
+    if given:
+        return CURVE_TYPES[seg].from_keys({k: comp.vars[f"{c}.{k}"].value for k in keys}, order), True
+    return fit_form(r, v, r[0], r[-1], seg, order)[0], False
+
+
+def check_columns(comp, design, exact, columns, position, at, from_root=()):
+    """A component's table against its design: the column of each curve in exact (given by var lines) must be
+    that curve at the rows, within TABLE_TOL times max(1, its range); ValueError otherwise. columns: curve ->
+    column, position: the rows' column, at(curve, rows): the design's values; from_root: curves whose column
+    counts from its root row."""
+    rows = comp.column(position)
+    for c in exact:
+        want = comp.column(columns[c])
+        if c in from_root:
+            want = want - want[0]
+        e = np.abs(np.asarray(at(c, rows), dtype=float) - want)
+        if e.max() > TABLE_TOL * max(1.0, float(np.ptp(want))):
+            i = int(np.argmax(e))
+            raise ValueError(f"{comp.path}: the {columns[c]} column differs from the {c} curve of its var lines "
+                             f"by {e[i]:.3g} at {position} {rows[i]:.6g}: the var lines define the curve (to "
+                             f"change it in the table instead, delete its var lines and it is fitted to the "
+                             f"column)")
+
+
+def _component_design(comp, params, orders=None, segments=None):
+    """The BladeDesign of a blade component: each curve exactly as its var lines give it, or fitted to its
+    column (_component_curve); the radius, hub radius and hub height from their var lines, else the geometry
+    (given in both: they must agree)."""
+    r, vals = params.rows()
+    curves, exact = {}, []
+    for c in CURVES:
+        form, n = comp.curves.get(c, (None, None))
+        curves[c], given = _component_curve(comp, c, form, n, r, vals[c], segments, orders, params.vary)
+        if given:
+            exact.append(c)
+    radius = 0.5 * params.diameter
+    glob = {"radius": radius, "hub_radius": params.root_r * radius,
+            "hub_height": HUB_HEIGHT if params.hub_height is None else params.hub_height}
+    for g, v0 in list(glob.items()):
+        if g not in comp.vars:
+            continue
+        v = comp.vars[g].value
+        if GLOBAL_HEAD[g] in comp.geometry and abs(v - v0) > 1e-8 * max(abs(v0), 1e-6):
+            raise ValueError(f"{comp.path}: var {g} {v:.10g} disagrees with the geometry's {GLOBAL_HEAD[g]} (which "
+                             f"gives {v0:.10g}); change both, or delete the var line")
+        glob[g] = v
+    design = BladeDesign(glob["radius"], glob["hub_radius"], glob["hub_height"], float(r[-1]), curves)
+    keep = comp.column("r/R") >= params.root_r - ROW_TOL
+    if not keep.all():
+        raise ValueError(f"{comp.path}: rows below root_r; the table starts at the root")
+    check_columns(comp, design, exact, XF.CURVE_COLUMNS["blade"], "r/R", design.at)
+    return design
+
+
+def _component_space(comp, params, design, free=None):
+    """The BladeSpace of a blade component: each variable's bounds and free flag from its var line; one with
+    none: default_bounds (its curve's vary range for the values) and free as the vary lines say (with none: the
+    names in free)."""
+    bounds = {**vary_bounds(params), **{n: (q.lo, q.hi) for n, q in comp.vars.items()}}
+    full = BladeSpace(params, design, bounds=bounds)
+    unknown = [n for n in comp.vars if n not in full.all_names]
+    if unknown:
+        raise ValueError(f"{comp.path}: var lines for {', '.join(unknown)}, which this blade does not have (its "
+                         f"variables: {', '.join(GLOBAL_SLOTS)} and those of its curves)")
+    names = vary_free(params)
+    free0 = names if names is not None else tuple(free or ())
+    vals = full.values(design)
+    fixed = {n: vals[n] for n in full.all_names
+             if not (comp.vars[n].free if n in comp.vars else n.split(".")[0] in free0)}
+    return BladeSpace(params, design, bounds=bounds, fixed=fixed)
+
+
+def load_component(path, orders=None, segments=None, free=None):
+    """A blade from a component file (xgeom_files.py, kind blade) or an old parameter file (read_params, its
+    curves fitted as fit_design fits them, free as its vary lines say, else the names in free): an XF.Loaded
+    with the parameters, the design, the design space (every variable, the held ones fixed), the file's
+    settings (SETTING_TYPES; an old file has none), its name, notes and extra geometry (section_tables).
+
+        ld = load_component("msc_blade.txt")
+        x0, bounds = ld.space.to_vector(ld.design), ld.space.bounds
+        d = ld.space.to_design(x)
+    """
+    name = os.path.splitext(os.path.basename(path))[0]
+    if not XF.is_component(path):
+        params = read_params(path)
+        design, _ = fit_design(params, orders, segments)
+        notes, extra = XF.legacy_header(path, GLOBALS, ("section_tables",))
+        return XF.Loaded("blade", params, design, file_space(params, design, free), {}, name, notes, extra, True)
+    comp = XF.read_component(path)
+    if comp.kind != "blade":
+        raise ValueError(f"{path}: a {comp.kind} file, not a blade's")
+    params = _component_params(comp)
+    design = _component_design(comp, params, orders, segments)
+    space = _component_space(comp, params, design, free)
+    extra = {k: comp.geometry[k] for k in ("section_tables",) if k in comp.geometry}
+    return XF.Loaded("blade", params, design, space, XF.typed_settings(comp, SETTING_TYPES), comp.name,
+                     list(comp.notes), extra, False)
+
+
+def write_component(path, params, design, space, settings=None, name=None, notes=(), extra=None):
+    """Write the design as a component file, which load_component reads back exactly: the geometry (the
+    design's D, root r/R and hub height; the blades, the section and extra of params), the settings
+    (SETTING_TYPES), each curve's form, every variable of space (value, bounds, free) and the distributions at
+    the parameter file's rows (their fractions of the span on the design's span, rounded as written)."""
+    folder = os.path.dirname(os.path.abspath(path))
+    base = os.path.dirname(params.path) if params.path else folder
+    comp = XF.Component("blade", name or os.path.splitext(os.path.basename(path))[0], list(notes))
+    g = comp.geometry
+    g["diameter_m"] = XF.num(design.diameter)
+    g["blades"] = str(int(params.blades))
+    g["root_r"] = XF.num(design.r0)
+    g["hub_height_m"] = XF.num(design.hub_height)
+    if params.airfoil:
+        own = os.path.isabs(params.airfoil) and os.path.isfile(params.airfoil)     # a coordinate file
+        g["section"] = XF.rel(params.airfoil, folder) if own else params.airfoil
+    else:
+        sp = params.section_path()
+        g["section"] = XF.rel(os.path.abspath(sp), folder) if os.path.exists(sp) else params.section_table
+    for k, v in (extra or {}).items():
+        full = XF.resolve(v, base)
+        g[k] = XF.rel(full, folder) if os.path.exists(full) else v
+    comp.settings = XF.settings_text(settings, SETTING_TYPES)
+    for c in CURVES:
+        cu = design.curves[c]
+        comp.curves[c] = (XF.FORM_OF[cu.segments], cu.order + 1 if cu.segments == 1 else None)
+    comp.vars = XF.vars_of(space, design)
+    r, _ = params.rows()
+    rn = design.r0 + (r - r[0]) / (r[-1] - r[0]) * (design.r1 - design.r0)
+    rn = np.round(rn, XF.DECIMALS["blade"])      # the rows as written, so the values are the curves' there
+    v = design.values(rn)
+    for c in CURVES:                             # a table curve: its own values at its rows
+        cu = design.curves[c]
+        if cu.segments == 0 and len(cu.v) == len(rn):
+            v[c] = np.asarray(cu.v, dtype=float)
+    comp.columns = XF.COLUMNS["blade"]
+    comp.table = np.column_stack([rn] + [v[c] for c in CURVES])
+    return XF.write_component(path, comp)
+
+
+# --------------------------------------------------------------------------
 # Geometry (the MSc code)
 # --------------------------------------------------------------------------
 
@@ -1131,14 +1361,13 @@ def design_record(design, params, space=None, problems=(), gap_mm=None, settings
     return rec
 
 
-def write_case(out_dir, case, design, params, space=None, cad=True, settings=None, plot=True):
-    """Write the case: <case>_params.dat (the design as a parameter file, which
-    read_params and the tool load), <case>_xcad_m.dat (the blade points at the
-    settings' sections, settings_stations), <case>_design.json,
-    <case>_design_space.json (with a space), <case>_check.png (plot), and with
-    cad the DRDC five-surface CAD: <case>.iges (blade and hub sector,
-    X_CAD_new.X_CAD) and <case>.step (the same shape). Returns the paths and the
-    checks."""
+def write_case(out_dir, case, design, params, space=None, cad=True, settings=None, plot=True, extra=None):
+    """Write the case: <case>.txt (the design as a component file, with the variables of space, every one held
+    without one, and the settings: write_component; load_component and the tool load it), <case>_xcad_m.dat
+    (the blade points at the settings' sections, settings_stations), <case>_design.json, <case>_check.png
+    (plot), and with cad the DRDC five-surface CAD: <case>.iges (blade and hub sector, X_CAD_new.X_CAD) and
+    <case>.step (the same shape). extra: geometry keys kept in the component file (section_tables). Returns the
+    paths and the checks."""
     os.makedirs(out_dir, exist_ok=True)
     st = dict(settings or {})
     pts, stations = blade_points(design, params, settings_stations(design.r0, st))
@@ -1146,17 +1375,15 @@ def write_case(out_dir, case, design, params, space=None, cad=True, settings=Non
     gap = clearance(check_pts, params.blades) * 1000.0
     problems, warnings = design_checks(design, params, st.get("clearance_mm", CLEARANCE_MM), points=check_pts,
                                        gap_mm=gap, hub=st.get("hub", True))
-    paths = {k: os.path.join(out_dir, f"{case}_{k}") for k in ("params.dat", "xcad_m.dat", "design.json")}
-    write_params(paths["params.dat"], design_params(design, params),
-                 notes=(f"design {case} from {os.path.basename(params.path) or 'memory'}, "
-                        f"{datetime.date.today().isoformat()}",))
+    paths = {k: os.path.join(out_dir, f"{case}_{k}") for k in ("xcad_m.dat", "design.json")}
+    held = space or BladeSpace(params, design, fixed=BladeSpace(params, design).values(design))
+    paths["component"] = write_component(
+        os.path.join(out_dir, f"{case}.txt"), params, design, held, st, case,
+        [f"design {case} from {os.path.basename(params.path) or 'memory'}, {datetime.date.today().isoformat()}"],
+        extra)
     write_points(paths["xcad_m.dat"], pts)
     with open(paths["design.json"], "w") as fh:
         json.dump(design_record(design, params, space, problems, gap, st, warnings), fh, indent=1)
-    if space is not None:
-        paths["space"] = os.path.join(out_dir, f"{case}_design_space.json")
-        with open(paths["space"], "w") as fh:
-            json.dump(space_record(space, design, params, st), fh, indent=1)
     if plot:
         paths["check"] = plot_case(os.path.join(out_dir, f"{case}_check.png"), case, design, params)
     out = {"paths": paths, "problems": problems, "warnings": warnings, "clearance_mm": gap,

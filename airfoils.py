@@ -13,7 +13,9 @@ Names: case, spaces, '-' and '_' and a '.dat' ending are ignored ("NACA 2416",
 "naca-2416" and "naca2416.dat" are one name). A file airfoils/<name>.dat wins;
 then naca + 4 digits (mptt) or 5 digits (LPSTT, L P S = 2 3 0 for the 230
 series) are computed; anything else is an error naming the closest files. Own
-airfoils: put <name>.dat (Selig or Lednicer format) into airfoils/.
+airfoils: put <name>.dat (Selig or Lednicer format) into airfoils/, or give the
+path of a coordinate file (absolute, or with a folder in it), which is read as
+it is (its section table: airfoils/sections/file_<name>_<8 hex>.dat).
 
 The database is installed once from the UIUC archive (coord_seligFmt.zip, the
 whole database in Selig format, from the page's Archives section) or the folder
@@ -41,6 +43,7 @@ from __future__ import annotations
 
 import datetime
 import difflib
+import hashlib
 import os
 import re
 import sys
@@ -158,10 +161,19 @@ def _files(folder):
             and f.lower() != "index.dat"}
 
 
+def is_path(name):
+    """Is the name the path of a coordinate file (absolute, or with a folder in it, and there)?"""
+    name = str(name)
+    return (os.path.isabs(name) or os.sep in name or "/" in name) and os.path.isfile(name)
+
+
 def coordinates(name, folder=None):
     """(xy, source) of a named airfoil: Selig order, normalized (LE at (0, 0),
     TE midpoint at (1, 0)). source: the file it came from, or 'NACA 4-digit
-    equations' / 'NACA 5-digit equations'."""
+    equations' / 'NACA 5-digit equations'. A path (is_path) is read as it is."""
+    if is_path(name):
+        path = os.path.abspath(str(name))
+        return normalize(read_file(path)[1]), path
     folder = folder or AIRFOIL_DIR
     key = norm_name(name)
     quick = os.path.join(folder, key + ".dat")                 # the installed names are lower case
@@ -261,7 +273,10 @@ def section_table(name, folder=None, out_dir=None):
     folder = folder or AIRFOIL_DIR
     xy, src = coordinates(name, folder)
     out_dir = out_dir or os.path.join(folder, "sections")
-    path = os.path.join(out_dir, f"{norm_name(name)}.dat")
+    key = norm_name(name)
+    if is_path(name):                                         # a file of its own: not one of the folder's names
+        key = f"file_{key}_{hashlib.md5(os.path.abspath(str(name)).encode()).hexdigest()[:8]}"
+    path = os.path.join(out_dir, f"{key}.dat")
     made_from = [f for f in (src, os.path.abspath(__file__)) if os.path.isfile(f)]
     if os.path.exists(path) and all(os.path.getmtime(path) >= os.path.getmtime(f) for f in made_from):
         return path

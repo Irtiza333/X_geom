@@ -198,22 +198,22 @@ def test_case(tmp):
     paths = out["paths"]
     loops = XL.read_loops(paths["xcad_m.dat"], "m")
     z = np.array([lp[:, 2] for lp in loops])
-    check("written: parameter file, XCAD file, sections table, design, set-up, plot; 31 loops of 121 points, each "
+    check("written: component file, XCAD file, sections table, design, plot; 31 loops of 121 points, each "
           "flat at its span station (XCAD Z = y)", [all(os.path.exists(q) for q in paths.values()), len(loops),
                                                     len(loops[0]), np.ptp(z, axis=1).max(), z[-1, 0], z[0, 0]],
           [1, 31, 121, 0, 200, 0], 1e-6)
     tab = np.loadtxt(paths["sections.dat"])
     check("the sections table: t_max/c is t/c (the thickness has no change), f_max/c above f/c (dc2 adds camber)",
           [np.abs(tab[:, 9] - tab[:, 7]).max(), (tab[1:, 11] > tab[1:, 8]).all()], [0, 1], 1e-5)
-    p2 = WM.read_params(paths["params.dat"])
+    p2 = WM.read_params(paths["component"])
     d2, _ = WM.fit_design(p2)
     e = np.linspace(0.0, 1.0, 51)
-    check("the design as a parameter file, read and fitted again: the same curves, its change columns",
+    check("the design's component file, its table read and fitted again: the same curves, its change columns",
           [p2.changes, max(np.abs(d2.at(c, e) - d.at(c, e)).max() for c in d.names)], [3, 0], 1e-5)
-    space, d3, rec = WM.load_wing_space(paths["space"])
-    check("load_wing_space: the design and the free slots", [rec["geometry"] == "wing", space.names == sp.names,
-                                                           max(np.abs(d3.at(c, e) - d.at(c, e)).max() for c in d.names)],
-          [1, 1, 0], 1e-12)
+    ld = WM.load_component(paths["component"])
+    check("load_component: the kind, the design and the free variables",
+          [ld.kind == "wing", ld.space.names == sp.names, max(np.abs(ld.design.at(c, e) - d.at(c, e)).max()
+                                                              for c in d.names)], [1, 1, 0], 1e-9)
     if not XL.occ_available():
         print("       the loft skipped: no OCCT binding")
         return
