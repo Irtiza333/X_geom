@@ -223,6 +223,12 @@ runs first (as its button does, the case written to the output folder too). The
 IGES of the blade is its own DRDC IGES; the others are converted from their STEP
 (faces as trimmed surfaces, mm). Every build's outcome (and the error of a
 failed one) is added to outputs/xgeom_tool_log.txt.
+Half body: the rudder, the fin, the wing and the hull have a 'half body'
+switch under Output: their build and Save CAD then write the CAD cut at the
+plane of symmetry (the rudder, fin and wing at their section plane, the hull
+at its vertical centre plane), for CFD on half the domain; the switch is
+saved with the set-up. The sections must be symmetric (a cambered wing or
+fin is refused with a message), and the Vehicle CAD always uses full bodies.
 The bar at the bottom: green ok, amber a build running (the build button counts
 the seconds), orange a warning (e.g. blades closer than the clearance; the
 build still runs), red a problem or an error; a design with a problem (e.g. a
@@ -686,6 +692,11 @@ class App:
         self.save_btn.pack(side="left", padx=(0, 6))
         self._buttons()
         ttk.Button(row, text="OCC viewer", command=self.open_occ_viewer).pack(side="left")
+        if "half" in getattr(ad, "settings", {}):
+            self.vhalf = tk.BooleanVar(value=bool(ad.settings.get("half", False)))
+            ttk.Checkbutton(box, text="half body: the CAD cut at the plane of symmetry (for CFD on half the "
+                                      "domain; the Vehicle CAD always uses full bodies)",
+                            variable=self.vhalf, command=self.on_half).pack(anchor="w", padx=4, pady=(0, 3))
         self.refresh_labels()
 
     def _pick(self, parent, r, c, name, text):
@@ -732,6 +743,13 @@ class App:
             self.refresh_labels()
         if views:
             self.schedule_update()
+
+    def on_half(self):
+        """The half-body switch: the next build or Save CAD writes the half (the component alone, not the
+        vehicle)."""
+        self.ad.settings["half"] = bool(self.vhalf.get())
+        self.say("half body: the next build writes the CAD cut at the plane of symmetry"
+                 if self.ad.settings["half"] else "full body again")
 
     def on_curve(self):
         self.rebuild_panel()
@@ -1054,7 +1072,7 @@ class App:
                 return
             info = XV.assemble(parts, placement)[1]
             case = self.case.get().strip() or "gui"
-            tasks = {k: self.adapters[k].build_task(case) for k in parts}   # the designs as they are now
+            tasks = {k: self.adapters[k].build_task(case, half=False) for k in parts}   # as they are, full bodies
             keys = {k: self._design_key(k) for k in parts}
             keys["vehicle"] = self._design_key("vehicle")
         except Exception as exc:

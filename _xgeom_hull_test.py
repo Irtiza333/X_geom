@@ -115,6 +115,22 @@ def test_adapter(tmp):
         v_st = HM.hydrostatics(ad.design)["volume"]
         check("build: the solid's volume against the stations' (fraction)", res["hydrostatics"]["volume"] / v_st - 1,
               0.0, 1e-3)
+        import hull_extraction as HE
+        full = HM.build_solid(ad.design)
+        halfs = HM.build_solid(ad.design, half=True)
+        vf = HE.solid_properties(full)[0]
+        vh = HE.solid_properties(halfs)[0]
+        check("the half hull (y >= 0): valid, one face per part plus the plane of symmetry, half the volume",
+              [HE.is_valid(halfs), XL.count_faces(halfs) - XL.count_faces(full), vh / vf], [1, 1, 0.5], 1e-5)
+        ad.settings["half"] = True
+        res_h = ad.build_task("bh")()
+        v_cad = HE.solid_properties(XL.read_step(res_h["files"]["step"]))[0]
+        check("the half setting: the build's STEP is the half body, the hydrostatics the whole hull's",
+              [v_cad / vf, res_h["hydrostatics"]["volume"] / v_st], [0.5, 1.0], 1e-3)
+        res_f = ad.build_task("bf", half=False)()
+        v_cad2 = HE.solid_properties(XL.read_step(res_f["files"]["step"]))[0]
+        check("build_task(half=False) overrides it (the vehicle builds full bodies)", v_cad2 / vf, 1.0, 1e-6)
+        ad.settings["half"] = False
     return XH.HullAdapter()
 
 
@@ -582,8 +598,9 @@ def test_gui():
             app.switch(kind)
             ad = app.adapters[kind]
             real = ad.build_task
-            ad.build_task = lambda case, k=kind: (lambda: calls.append((k, case)) or
-                                                  {"report": [], "message": f"{k} built", "error": False, "view": None})
+            ad.build_task = lambda case, k=kind, **kw: (lambda: calls.append((k, case)) or
+                                                        {"report": [], "message": f"{k} built", "error": False,
+                                                         "view": None})
             labels[kind] = app.build_btn.cget("text")
             app.build_btn.invoke()
             wait()
@@ -595,8 +612,9 @@ def test_gui():
                all(said[k].startswith(f"{labels[k]} done") and f"{k} built" in said[k] for k in said)], [1, 1, 1], 0)
         stubs = {k: app.adapters[k].build_task for k in app.adapters}
         for k in app.adapters:
-            app.adapters[k].build_task = lambda case, k=k: (lambda: {"report": [], "message": f"{k}: no CAD here",
-                                                                     "error": True, "view": None})
+            app.adapters[k].build_task = lambda case, k=k, **kw: (lambda: {"report": [],
+                                                                           "message": f"{k}: no CAD here",
+                                                                           "error": True, "view": None})
         app.vbuild_btn.invoke()
         busy = (str(app.vbuild_btn.cget("state")), str(app.build_btn.cget("state")))
         wait()

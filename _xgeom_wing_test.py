@@ -223,6 +223,20 @@ def test_case(tmp):
           "sections' (fraction)", [lr.valid, lr.free_edges, XL.count_faces(lr.shape),
                                    lr.volume / out["volume_mm3"] - 1.0, os.path.exists(cad["cad_paths"]["step"])],
           [1, 0, 4, 0, 1], 2e-3)
+    try:
+        WM.write_cad(tmp, "c1h", paths["xcad_m.dat"], half=True)
+        refused = 0
+    except ValueError:
+        refused = 1
+    check("a half body of the cambered wing is refused", refused, 1, 0)
+    pf = WM.read_params(FIN)
+    df, _ = WM.fit_design(pf)
+    outf = WM.write_case(tmp, "fh", df, pf, cad=False, settings={"sections": 21}, plot=False)
+    lrf = WM.write_cad(tmp, "fh_full", outf["paths"]["xcad_m.dat"])["loft"]
+    lrh = WM.write_cad(tmp, "fh_half", outf["paths"]["xcad_m.dat"], half=True)["loft"]
+    check("the fin's half body: valid, closed, 4 faces (side, half root, half tip, the plane of symmetry), "
+          "half the volume", [lrh.valid, lrh.free_edges, lrh.half, XL.count_faces(lrh.shape),
+                              lrh.volume / lrf.volume], [1, 0, 1, 4, 0.5], 1e-6)
 
 
 def test_adapter(tmp):

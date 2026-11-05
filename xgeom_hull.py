@@ -48,7 +48,7 @@ class HullAdapter:
 
     def __init__(self, params=None):
         self.out_dir = HM.OUT_DIR
-        self.settings = {"plot": True}
+        self.settings = {"plot": True, "half": False}
         self.load_params(params or (DEFAULT_FILE if os.path.exists(DEFAULT_FILE) else HM.SUBOFF_PARAMS))
 
     # ---------------------------------------------------------------- the file
@@ -61,6 +61,7 @@ class HullAdapter:
             ld = HM.load_component(path)
             params, design, space, source = ld.params, ld.design, ld.space, os.path.basename(path)
             self.file, self.legacy, self.notes = os.path.abspath(path), ld.legacy, ld.notes
+            self.settings["half"] = bool(ld.settings.get("half", self.settings.get("half", False)))
         elif os.path.basename(path) == HM.SUBOFF_PARAMS:
             params, source = HM.suboff_params(), "SUBOFF's equations"
             design = HM.fit_design(params)
@@ -78,7 +79,8 @@ class HullAdapter:
         """Write the design and its variables (bounds, free flags) as a component file (hull_modify.
         write_component), which load_params reads back exactly; it is the file in use then."""
         HM.write_component(path, self.params, self.design, self.free_space(),
-                           os.path.splitext(os.path.basename(path))[0], self.notes)
+                           os.path.splitext(os.path.basename(path))[0], self.notes,
+                           settings={"half": self.settings.get("half", False)})
         self.file, self.legacy, self.source = os.path.abspath(path), False, os.path.basename(path)
         return path
 
@@ -382,25 +384,28 @@ class HullAdapter:
         self.meta = {q["name"]: {"lo": q["lo"], "hi": q["hi"], "free": q["free"]} for q in rec["space"]["slots"]}
         self._rebuild()
 
-    def build_task(self, case):
+    def build_task(self, case, half=None):
         """A function that writes the case as the design is now (hull_modify.write_case: the component file,
-        the design, stations, hydrostatics, section points, the check plot and the STEP). The state is copied
-        here, so it can run off the GUI thread."""
+        the design, stations, hydrostatics, section points, the check plot and the STEP; the half body with
+        the half setting, which half overrides: the vehicle builds full bodies). The state is copied here, so
+        it can run off the GUI thread."""
         design, params, space = self.design.copy(), self.params, self.free_space()
         out_dir, plot = self.out_dir, self.settings["plot"]
+        half = bool(self.settings.get("half", False)) if half is None else bool(half)
 
         def run():
             import xcad_loft as XL
             cad = XL.occ_available()
-            files, hs = HM.write_case(out_dir, case, design, params, space, cad=cad, plot=plot)
+            files, hs = HM.write_case(out_dir, case, design, params, space, cad=cad, plot=plot, half=half)
             out = {"files": files, "hydrostatics": hs, "view": files.get("step"), "error": not cad,
                    "report": [f"{case}: L {design.length:.4f} m, V {hs['volume']:.6f} m^3, S "
                               f"{hs['wetted_surface']:.5f} m^2, LCB {hs['lcb'] / design.length:.4f} L, Cp "
                               f"{hs['cp']:.4f}", "  written: " + ", ".join(files.values())]}
             names = f"{case}.txt, {case}_design.json"
             if cad:
+                body = "the half body; V, S of the whole hull" if half else "from the solid"
                 out["message"] = (f"{names} and {case}.step (V {hs['volume']:.5g} m^3, S {hs['wetted_surface']:.5g} "
-                                  f"m^2 from the solid); OCC viewer shows it")
+                                  f"m^2, {body}); OCC viewer shows it")
             else:
                 out["message"] = f"{names}; no CAD: needs pythonocc-core or cadquery-ocp"
             return out

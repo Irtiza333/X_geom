@@ -228,7 +228,8 @@ def write_params(path, params, notes=()):
     cols = COLUMNS + tuple(names[len(CURVES):])
     lines = [f"# XGeom {params.kind} parameters"]
     lines += [f"# {n}" for n in notes]
-    lines += [f"# span_mm     {params.span:.10g}", f"# airfoil     {params.airfoil}", f"# ref_xc      {params.ref_xc:.10g}"]
+    lines += [f"# span_mm     {params.span:.10g}", f"# airfoil     {params.airfoil}",
+              f"# ref_xc      {params.ref_xc:.10g}"]
     if base_shape(params.airfoil, params.camber_xc)[2]["symmetric"]:
         lines.append(f"# camber_xc   {params.camber_xc:.10g}")
     lines.append("# " + "  ".join(cols))
@@ -726,7 +727,7 @@ def load_wing_space(path):
 # The component file (xgeom_files.py)
 # --------------------------------------------------------------------------
 
-SETTING_TYPES = {"sections": int, "change_points": int}
+SETTING_TYPES = {"sections": int, "change_points": int, "half": bool}
 
 
 def _component_params(comp):
@@ -1034,13 +1035,14 @@ def write_case(out_dir, case, design, params, space=None, cad=True, settings=Non
     return out
 
 
-def write_cad(out_dir, case, xcad_path):
+def write_cad(out_dir, case, xcad_path, half=False):
     """The solid lofted through the XCAD file's sections (xcad_loft.loft_loops: the root and the flat tip
-    closed by planar faces), mm, the XCAD frame, as <case>.step."""
+    closed by planar faces), mm, the XCAD frame, as <case>.step. half=True: the half body cut at the plane of
+    symmetry (refused with a message when the sections are not symmetric: a cambered wing has no half)."""
     import time
     import xcad_loft as XL
     t0 = time.time()
-    loft = XL.loft_loops(XL.read_loops(xcad_path, "m"))
+    loft = XL.loft_loops(XL.read_loops(xcad_path, "m"), half=half)
     step = XL.write_step(loft.shape, os.path.join(out_dir, f"{case}.step"))
     return {"cad_paths": {"step": step}, "loft": loft, "cad_seconds": time.time() - t0}
 

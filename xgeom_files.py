@@ -84,8 +84,8 @@ GEOMETRY = {"blade": ("diameter_m", "blades", "root_r", "hub_height_m", "section
             **{k: _PLANAR_GEOMETRY for k in PLANAR},
             "hull": ("nose_m", "middle_m", "tail_m", "cap_m", "axisymmetric")}
 SETTINGS = {"blade": ("sections", "tip_band", "tip_sections", "clearance_mm", "hub"),
-            **{k: ("sections", "change_points") for k in PLANAR},
-            "hull": ()}
+            **{k: ("sections", "change_points", "half") for k in PLANAR},
+            "hull": ("half",)}
 ALIASES = {"blade": {"section_table": "section", "airfoil": "section"},          # old files' keys, read as these
            **{k: {"airfoil": "section"} for k in PLANAR}, "hull": {}}
 COLUMNS = {"blade": ("r/R", "P/D", "c/D", "t/c", "f/c", "skew_deg", "rake/D"),

@@ -58,6 +58,12 @@ class ModifySettings:
     fit_free_heights: bool = False # fits to the original shape: False for evenly spaced control heights (least
                                    # squares, exact), True to search the inner heights too (Main_PSO), for
                                    # distributions too curved for a polynomial of the order below
+    half: bool = False             # the CAD as the half body, cut at the plane of symmetry (CFD on half the
+                                   # domain; the sections are symmetric, so either side is the same)
+    collar_mm: float = 10.0        # the side patch splits at a collar this far below the highest horizontal
+                                   # section (xcad_loft; 0: no collar)
+    crown: float = 0.5             # where the cap splits into rim and crown when its cross profile never
+                                   # flattens into a deck (xcad_loft; the wind-tunnel rudder's cap has one)
     plot: bool = True              # write <case>_check.png
 
 settings = ModifySettings( # SET PARAMETERS HERE

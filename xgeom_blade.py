@@ -479,11 +479,12 @@ class BladeAdapter:
                 self.settings[k] = rec["settings"][k]
         self._rebuild()
 
-    def build_task(self, case):
+    def build_task(self, case, half=None):
         """A function that writes the case as the design is now (blade_modify.
         write_case: the component file, the XCAD points, the design, the check
-        plot) and then the CAD (<case>.iges, <case>.step). The state is copied
-        here, so it can run off the GUI thread."""
+        plot) and then the CAD (<case>.iges, <case>.step). half is ignored (a
+        blade has no half body); the vehicle passes it to every component. The
+        state is copied here, so it can run off the GUI thread."""
         design, params, space, st = self.design.copy(), self.params, self.free_space(), self._case_settings()
         out_dir, plot, extra = self.out_dir, self.settings["plot"], dict(self.extra)
 

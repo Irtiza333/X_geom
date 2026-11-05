@@ -180,8 +180,8 @@ def test_planar(tmp):
             d = WM.refit_to_file(ld.params, WM.refit_to_file(ld.params, d, "pitch", 0), "rake", 0)
             space = WM.WingSpace(ld.params, d, bounds=dict(zip(space.all_names, map(tuple, space.all_bounds))),
                                  free=("chord",))
-        p1 = WM.write_component(os.path.join(tmp, f"{kind}.txt"), ld.params, d, space, {"sections": 33}, kind,
-                                ld.notes, kind)
+        p1 = WM.write_component(os.path.join(tmp, f"{kind}.txt"), ld.params, d, space,
+                                {"sections": 33, "half": kind == "rudder"}, kind, ld.notes, kind)
         back = WM.load_component(p1)
         p2 = WM.write_component(os.path.join(tmp, f"{kind}2.txt"), back.params, back.design, back.space,
                                 back.settings, back.name, back.notes)
@@ -191,10 +191,11 @@ def test_planar(tmp):
               [same_design(d, back.design, d.names, lambda q, c, x: q.at(c, x), e),
                max(abs(v1[n] - v2[n]) for n in v1)], 0, 1e-9)
         forms = [back.design.curves[c].segments for c in ("pitch", "rake")]
-        check(f"{kind}: kind, span, change points, sections, forms, free, the rewrite the same file",
+        check(f"{kind}: kind, span, change points, sections, half, forms, free, the rewrite the same file",
               [back.kind == kind, back.design.span, back.design.changes, back.settings["sections"],
+               back.settings.get("half", False) == (kind == "rudder"),
                forms == ([0, 0] if kind == "rudder" else [1, 1]), back.space.names == space.names,
-               filecmp.cmp(p1, p2, shallow=False)], [1, 210, 3, 33, 1, 1, 1], 0)
+               filecmp.cmp(p1, p2, shallow=False)], [1, 210, 3, 33, 1, 1, 1, 1], 0)
     comp = XF.read_component(os.path.join(tmp, "rudder.txt"))
     check("the rudder's table: 0 in pitch and rake, sweep from 0 at the root",
           [np.abs(comp.column("pitch_deg")).max(), np.abs(comp.column("rake_mm")).max(), comp.column("sweep_mm")[0]],
@@ -217,19 +218,22 @@ def test_hull(tmp):
         vals.update({"nose": 1.05 * vals["nose"], "middle": 0.9 * vals["middle"], "tail_r.N2": 2.2})
         d = ld.space.design_of(vals)
         name = os.path.basename(src)[:-len("_params.dat")]
-        p1 = HM.write_component(os.path.join(tmp, f"{name}.txt"), ld.params, d, ld.space, name, ld.notes)
+        p1 = HM.write_component(os.path.join(tmp, f"{name}.txt"), ld.params, d, ld.space, name, ld.notes,
+                                settings={"half": True})
         back = HM.load_component(p1)
         p2 = HM.write_component(os.path.join(tmp, f"{name}2.txt"), back.params, back.design, back.space, back.name,
-                                back.notes)
+                                back.notes, settings=back.settings)
         x = np.linspace(0.0, d.length * (1.0 - 1e-9), 2001)
         v1, v2 = ld.space.values(d), back.space.values(back.design)
         check(f"{name}: written and read back: half-heights (m), variables; the rewrite the same file",
               [float(np.abs(d.radius("r", x) - back.design.radius("r", x)).max()),
                max(abs(v1[n] - v2[n]) for n in v1), 1 - filecmp.cmp(p1, p2, shallow=False),
                1 - (back.space.names == ld.space.names)], 0, 1e-9)
-        check(f"{name}: the stations on the new lengths (from 0 to the end, rising; m), the notes kept",
+        check(f"{name}: the stations on the new lengths (from 0 to the end, rising; m), the notes and the half "
+              "setting kept",
               [back.params.x[0], back.params.x[-1] - (d.length - (d.cap if back.params.x[-1] < d.length else 0)),
-               float(np.diff(back.params.x).min() > 0), back.notes == ld.notes], [0, 0, 1, 1], 1e-6 * d.length)
+               float(np.diff(back.params.x).min() > 0), back.notes == ld.notes,
+               back.settings.get("half", False)], [0, 0, 1, 1, 1], 1e-6 * d.length)
     ld = HM.load_component("suboff_hull_params.dat")
     el = ld.space.values(ld.design)
     design = HM.HullDesign(ld.design.nose, ld.design.middle, ld.design.tail, ld.design.cap, ld.design.r,
@@ -350,9 +354,27 @@ def test_gui(tmp):
             if kind == "blade":
                 check("blade: pitch 2 segments and the sections setting back from the file, in its boxes",
                       [ad.segments("pitch"), ad.settings["sections"], int(app.sec["sections"].get())], [2, 40, 40], 0)
-            elif kind != "hull":
+                check("blade: no half-body setting (a blade has none)", "half" in ad.settings, 0, 0)
+            if kind in ("fin", "wing"):
                 check(f"{kind}: the sections setting back from the file, in its box",
                       [ad.settings["sections"], int(app.wsec["sections"].get())], [29, 29], 0)
+            if kind in ("fin", "hull"):
+                app.vhalf.set(True)
+                app.on_half()
+                target2 = os.path.join(tmp, f"gui_{kind}_half.txt")
+                XT.filedialog.asksaveasfilename = lambda **kw: target2
+                app.on_save()
+                settle()
+                XT.filedialog.askopenfilename = lambda **kw: target2
+                app.vhalf.set(False)
+                app.ad.settings["half"] = False
+                app.on_load_params()
+                settle()
+                check(f"{kind}: the half-body switch saves with the set-up and loads back (box ticked)",
+                      [app.ad.settings.get("half"), bool(app.vhalf.get()),
+                       XF.load(target2).settings.get("half")], [1, 1, 1], 0)
+                app.vhalf.set(False)
+                app.on_half()
     finally:
         XT.filedialog.asksaveasfilename, XT.filedialog.askopenfilename = save, open_
         root.destroy()

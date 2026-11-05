@@ -54,7 +54,7 @@ class WingAdapter:
 
     def __init__(self, params=None):
         r = ROLES[self.role]
-        self.settings = {"sections": WM.SECTIONS, "points": WM.POINTS, "plot": True, "free": FREE}
+        self.settings = {"sections": WM.SECTIONS, "points": WM.POINTS, "plot": True, "free": FREE, "half": False}
         self.out_dir = r["out_dir"]
         self.load_params(params or r["params"])
 
@@ -400,7 +400,7 @@ class WingAdapter:
         return WM.WingSpace(self.params, self.design, bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()},
                             fixed=fixed)
 
-    CASE_KEYS = ("sections", "points")
+    CASE_KEYS = ("sections", "points", "half")
 
     def _case_settings(self):
         return {k: self.settings[k] for k in self.CASE_KEYS}
@@ -432,13 +432,15 @@ class WingAdapter:
                 self.settings[k] = rec["settings"][k]
         self._rebuild()
 
-    def build_task(self, case):
+    def build_task(self, case, half=None):
         """A function that writes the case as the design is now (wing_modify.write_case: the component file,
         the XCAD file, the sections table, the design, the check plot), then lofts the XCAD file into the solid
-        (<case>.step). The state is copied here, so it can run off the GUI thread."""
+        (<case>.step; the half body with the half setting, which half overrides: the vehicle builds full
+        bodies). The state is copied here, so it can run off the GUI thread."""
         import xcad_loft as XL
         design, params, space, st = self.design.copy(), self.params, self.free_space(), self._case_settings()
         out_dir, plot, role = self.out_dir, self.settings["plot"], self.role
+        half = bool(self.settings.get("half", False)) if half is None else bool(half)
 
         def run():
             res = WM.write_case(out_dir, case, design, params, space, cad=False, settings=st, plot=plot,
@@ -454,14 +456,18 @@ class WingAdapter:
             if not XL.occ_available():
                 out.update(message=f"{files}; no CAD: no OCCT binding (pythonocc-core or cadquery-ocp)", error=True)
                 return out
-            cad = WM.write_cad(out_dir, case, res["paths"]["xcad_m.dat"])
+            try:
+                cad = WM.write_cad(out_dir, case, res["paths"]["xcad_m.dat"], half=half)
+            except ValueError as exc:                                        # no half body: not symmetric
+                out.update(message=f"{files}; {exc}", error=True)
+                return out
             res["paths"].update(cad["cad_paths"])
             lr = cad["loft"]
-            out["report"].append(f"  CAD: the loft in {cad['cad_seconds']:.1f} s, {cad['cad_paths']['step']} (solid "
-                                 f"{'valid' if lr.valid else 'NOT valid'}, {lr.volume / 1e3:.2f} cm^3)")
+            body = ("half body, " if lr.half else "") + ("solid valid" if lr.valid else "solid NOT valid")
+            out["report"].append(f"  CAD: the loft in {cad['cad_seconds']:.1f} s, {cad['cad_paths']['step']} "
+                                 f"({body}, {lr.volume / 1e3:.2f} cm^3)")
             out.update(view=cad["cad_paths"]["step"], loft=lr,
-                       message=f"{files}, {case}.step (solid {'valid' if lr.valid else 'NOT valid'}, "
-                               f"{lr.volume / 1e3:.2f} cm^3); OCC viewer shows it")
+                       message=f"{files}, {case}.step ({body}, {lr.volume / 1e3:.2f} cm^3); OCC viewer shows it")
             return out
         return run
 

@@ -805,8 +805,8 @@ def load_component(path, orders=None, free=None):
         raise ValueError(f"{path}: a {comp.kind} file, not a hull's")
     params = _component_params(comp)
     design = _component_design(comp, params, orders)
-    return XF.Loaded("hull", params, design, _component_space(comp, design, free), {}, comp.name, list(comp.notes),
-                     {}, False)
+    return XF.Loaded("hull", params, design, _component_space(comp, design, free),
+                     XF.typed_settings(comp, SETTING_TYPES), comp.name, list(comp.notes), {}, False)
 
 
 def _mapped_x(params, design):
@@ -821,11 +821,13 @@ def _mapped_x(params, design):
     return np.unique(np.round(np.array(out), XF.DECIMALS["hull"]))
 
 
-def write_component(path, params, design, space, name=None, notes=()):
+def write_component(path, params, design, space, name=None, notes=(), settings=None):
     """Write the design as a component file, which load_component reads back exactly: the lengths, the
-    axisymmetry, each curve's order, every variable of space (value, bounds, free) and the half-height r (and
-    half-width r') at the station table's x (part by part on the design's lengths)."""
+    axisymmetry, each curve's order, every variable of space (value, bounds, free), the settings
+    (SETTING_TYPES: half) and the half-height r (and half-width r') at the station table's x (part by part on
+    the design's lengths)."""
     comp = XF.Component("hull", name or os.path.splitext(os.path.basename(path))[0], list(notes))
+    comp.settings = XF.settings_text(settings, SETTING_TYPES)
     g = comp.geometry
     for k, key in LENGTH_KEYS.items():
         g[key] = XF.num(getattr(design, k))
@@ -954,12 +956,16 @@ def _profile_parts(design, n):
 _SQ = math.sqrt(0.5)
 _CIRCLE = ((1, 0, 1), (1, 1, _SQ), (0, 1, 1), (-1, 1, _SQ), (-1, 0, 1), (-1, -1, _SQ), (0, -1, 1), (1, -1, _SQ),
            (1, 0, 1))                                     # the unit circle as a quadratic NURBS (y, z, weight)
+_HALF_CIRCLE = ((0, 1, 1), (1, 1, _SQ), (1, 0, 1), (1, -1, _SQ), (0, -1, 1))   # y >= 0, top to bottom
+_HALF_KNOTS = ((0.0, 0.5, 1.0), (3, 2, 3))
 
 
-def build_solid(design, n=150, scale=1000.0):
+def build_solid(design, n=150, scale=1000.0, half=False):
     """The CAD solid (mm): one NURBS face per part, the profile (x, r', r) interpolated by a cubic B-spline
     (GeomAPI_Interpolate, n points evenly spaced along it, its end tangents) times the rational unit circle,
-    so every section is an exact ellipse; the faces sewn into a shell and made a solid."""
+    so every section is an exact ellipse; the faces sewn into a shell and made a solid. half=True: the
+    starboard half body (y >= 0): each part a half revolution, closed by one planar face on the plane of
+    symmetry (its boundary the top and bottom meridians)."""
     occ = XL._occ
     gp_Pnt, gp_Vec = occ("gp", "gp_Pnt", "gp_Vec")
     TColgp_HArray1OfPnt, TColgp_Array2OfPnt = occ("TColgp", "TColgp_HArray1OfPnt", "TColgp_Array2OfPnt")
@@ -979,9 +985,11 @@ def build_solid(design, n=150, scale=1000.0):
             a.SetValue(i, v)
         return a
 
-    vknots = array1([0.0, 0.25, 0.5, 0.75, 1.0], TColStd_Array1OfReal)
-    vmults = array1([3, 2, 2, 2, 3], TColStd_Array1OfInteger)
+    circle = _HALF_CIRCLE if half else _CIRCLE
+    vknots = array1(list(_HALF_KNOTS[0]) if half else [0.0, 0.25, 0.5, 0.75, 1.0], TColStd_Array1OfReal)
+    vmults = array1(list(_HALF_KNOTS[1]) if half else [3, 2, 2, 2, 3], TColStd_Array1OfInteger)
     sew = Sewing(1e-4 * scale)
+    sym_edges = []
     for pts, t0, t1 in _profile_parts(design, int(n)):
         arr = TColgp_HArray1OfPnt(1, len(pts))
         for i, p in enumerate(pts * scale, start=1):
@@ -995,17 +1003,25 @@ def build_solid(design, n=150, scale=1000.0):
             raise RuntimeError("the B-spline through a profile part failed")
         c = it.Curve()
         nu = c.NbPoles()
-        poles = TColgp_Array2OfPnt(1, nu, 1, len(_CIRCLE))
-        w = TColStd_Array2OfReal(1, nu, 1, len(_CIRCLE))
+        poles = TColgp_Array2OfPnt(1, nu, 1, len(circle))
+        w = TColStd_Array2OfReal(1, nu, 1, len(circle))
         for i in range(1, nu + 1):
             q = c.Pole(i)
-            for jj, (cy, cz, cw) in enumerate(_CIRCLE, start=1):
+            for jj, (cy, cz, cw) in enumerate(circle, start=1):
                 poles.SetValue(i, jj, gp_Pnt(q.X(), q.Y() * cy, q.Z() * cz))
                 w.SetValue(i, jj, c.Weight(i) * cw)
         uk = array1([c.Knot(k) for k in range(1, c.NbKnots() + 1)], TColStd_Array1OfReal)
         um = array1([c.Multiplicity(k) for k in range(1, c.NbKnots() + 1)], TColStd_Array1OfInteger)
         surf = Geom_BSplineSurface(poles, w, uk, vknots, um, vmults, c.Degree(), 2, False, False)
         sew.Add(MakeFace(surf, 1e-7).Face())
+        if half:                                   # the part's top and bottom meridians, on the plane y = 0
+            cp = np.array([[c.Pole(i).X(), 0.0, c.Pole(i).Z()] for i in range(1, nu + 1)])
+            full = np.concatenate([[c.Knot(k)] * c.Multiplicity(k) for k in range(1, c.NbKnots() + 1)])
+            sym_edges.append((cp, full, c.Degree()))
+    if half:                                       # one planar face on the plane of symmetry
+        edges = [XL._bspline_edge(cp, kn, dg) for cp, kn, dg in sym_edges]
+        edges += [XL._bspline_edge(cp * np.array([1.0, 1.0, -1.0]), kn, dg) for cp, kn, dg in sym_edges]
+        sew.Add(XL._wire_face(edges))
     sew.Perform()
     ex = TopExp_Explorer(sew.SewedShape(), TopAbs_SHELL)
     shells = []
@@ -1099,22 +1115,27 @@ def plot_case(path, case, design, params=None):
     return path
 
 
-def write_cad(out_dir, case, design):
-    """<case>.step; returns (path, valid, volume m^3, area m^2, centre (m))."""
-    solid = build_solid(design)
+SETTING_TYPES = {"half": bool}
+
+
+def write_cad(out_dir, case, design, half=False):
+    """<case>.step (half=True: the starboard half body); returns (path, valid, volume m^3, area m^2,
+    centre (m))."""
+    solid = build_solid(design, half=half)
     path = XL.write_step(solid, os.path.join(out_dir, f"{case}.step"))
     vol, area, c = HE.solid_properties(solid)
     return path, HE.is_valid(solid), vol, area, c
 
 
-def write_case(out_dir, case, design, params=None, space=None, cad=True, plot=True):
-    """Write a case (see the module docstring). Returns {name: path} and the hydrostatics."""
+def write_case(out_dir, case, design, params=None, space=None, cad=True, plot=True, half=False):
+    """Write a case (see the module docstring; half: the STEP as the starboard half body, the hydrostatics
+    still the whole hull's). Returns {name: path} and the hydrostatics."""
     os.makedirs(out_dir, exist_ok=True)
     files = {}
     notes = [f"design of case {case} (hull_modify.py), {datetime.date.today().isoformat()}"]
     held = space or HullSpace(design, fixed=HullSpace(design, fixed={}).values(design))
     files["component"] = write_component(os.path.join(out_dir, f"{case}.txt"), params or design_params(design),
-                                         design, held, case, notes)
+                                         design, held, case, notes, settings={"half": half})
     with open(os.path.join(out_dir, f"{case}_design.json"), "w") as fh:
         json.dump(design_record(design), fh, indent=1)
     files["design"] = os.path.join(out_dir, f"{case}_design.json")
@@ -1122,10 +1143,13 @@ def write_case(out_dir, case, design, params=None, space=None, cad=True, plot=Tr
     exact = {"pmb_start": design.joins[1], "pmb_end": design.joins[2]}
     cadline = None
     if cad and XL.occ_available():
-        path, valid, vol, area, c = write_cad(out_dir, case, design)
+        path, valid, vol, area, c = write_cad(out_dir, case, design, half=half)
         files["step"] = path
-        exact.update({"volume": vol, "wetted_surface": area, "lcb": float(c[0])})
-        cadline = f"V, S and LCB from the solid ({'valid' if valid else 'NOT valid'})"
+        if half:
+            cadline = f"V, S and LCB from the stations; the STEP is the half body ({'valid' if valid else 'NOT valid'})"
+        else:
+            exact.update({"volume": vol, "wetted_surface": area, "lcb": float(c[0])})
+            cadline = f"V, S and LCB from the solid ({'valid' if valid else 'NOT valid'})"
     hs = HE.hydrostatics(st, exact=exact)
     title = f"hull case {case}"
     files["stations"] = HE.write_stations(os.path.join(out_dir, f"{case}_stations.dat"), st, hs, title)

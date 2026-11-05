@@ -70,7 +70,9 @@ class RudderAdapter:
                          "n_sections": int(s.n_sections), "num_pts": int(s.num_pts),
                          "te_radius_mm": float(s.te_radius_mm), "gap_mm": s.gap_mm, "xcad_units": s.xcad_units,
                          "plot": bool(s.plot), "fit_orders": dict(MC.FIT_ORDERS),
-                         "fit_free_heights": bool(s.fit_free_heights)}
+                         "fit_free_heights": bool(s.fit_free_heights), "half": bool(getattr(s, "half", False)),
+                         "collar_mm": float(getattr(s, "collar_mm", 10.0)),
+                         "crown": float(getattr(s, "crown", 0.5))}
         self.title = "Rudder, modified below H"
         self.stack = self._stack0 = RM.read_stack(MC.STACK)
         self.loops0 = self._loops00 = [RM.xcad_to_working(pts, "m") for _, pts in RM.read_xcad(MC.XCAD_ORIGINAL)]
@@ -368,7 +370,7 @@ class RudderAdapter:
             rec = json.load(fh)
         if rec.get("geometry") != "rudder":
             raise ValueError(f"{path} is not a rudder design space")
-        for k in ("n_sections", "te_radius_mm"):
+        for k in ("n_sections", "te_radius_mm", "half", "collar_mm", "crown"):
             if k in rec.get("settings", {}):
                 self.settings[k] = rec["settings"][k]
         self._apply_scale(float(rec.get("settings", {}).get("height_scale") or 1.0))     # its full height
@@ -379,7 +381,7 @@ class RudderAdapter:
         self.settings["h_min"], self.settings["h_max"] = self.meta["H"]["lo"], self.meta["H"]["hi"]
         self._rebuild()
 
-    def xcad_task(self, case, plot=None, cad=True):
+    def xcad_task(self, case, plot=None, cad=True, half=None):
         """A function that writes the case as the design is now (rudder_modify.
         write_case: the XCAD file, the section table, the thickness format when
         it applies, the design JSON, plus <case>_design_space.json), then lofts
@@ -390,6 +392,7 @@ class RudderAdapter:
         import xcad_loft as XL
         s = dict(self.settings)
         plot = s["plot"] if plot is None else bool(plot)
+        half = bool(s.get("half", False)) if half is None else bool(half)
         design, space, record = self.design.copy(), self.free_space(), self.space_record()
         orig, stack, out_dir, xcad0 = self.orig, self.stack, self.out_dir, self.files["xcad_original"]
 
@@ -409,29 +412,32 @@ class RudderAdapter:
             if not XL.occ_available():
                 out["cad_error"] = "no OCCT binding (pythonocc-core or cadquery-ocp): no solid"
                 return out
-            loft = XL.loft_loops(XL.read_loops(res["paths"]["xcad"], s["xcad_units"]))
+            loft = XL.loft_loops(XL.read_loops(res["paths"]["xcad"], s["xcad_units"]),
+                                 collar_mm=s.get("collar_mm", 10.0), crown=s.get("crown", 0.5), half=half)
             step = os.path.splitext(res["paths"]["xcad"])[0] + ".step"
             XL.write_step(loft.shape, step)
             out.update(loft=loft, step=step)
             return out
         return run
 
-    def build_xcad(self, case, plot=False, cad=True):
-        """xcad_task(case, plot, cad)(), in one go."""
-        return self.xcad_task(case, plot, cad)()
+    def build_xcad(self, case, plot=False, cad=True, half=None):
+        """xcad_task(case, plot, cad, half)(), in one go."""
+        return self.xcad_task(case, plot, cad, half)()
 
-    def build_task(self, case):
+    def build_task(self, case, half=None):
         """xcad_task(case) for the tool's XCAD button: its result also carries
-        the status line ('message', 'error') and the file the viewer opens ('view')."""
-        run = self.xcad_task(case)
+        the status line ('message', 'error') and the file the viewer opens
+        ('view'). half overrides the half-body setting (the vehicle builds
+        full bodies)."""
+        run = self.xcad_task(case, half=half)
 
         def task():
             out = run()
             msg = os.path.basename(out["case"]["paths"]["xcad"])
             if out["loft"] is not None:
                 lr = out["loft"]
-                msg += (f", {os.path.basename(out['step'])} (solid {'valid' if lr.valid else 'NOT valid'}, "
-                        f"{lr.volume / 1e3:.2f} cm^3); OCC viewer shows it")
+                msg += (f", {os.path.basename(out['step'])} ({'half body, ' if lr.half else ''}solid "
+                        f"{'valid' if lr.valid else 'NOT valid'}, {lr.volume / 1e3:.2f} cm^3); OCC viewer shows it")
             if out["cad_error"]:
                 msg += "; " + out["cad_error"]
             out.update(message=msg, error=bool(out["cad_error"]), view=out["step"])

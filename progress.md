@@ -134,6 +134,26 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   stays responsive): `outputs/vehicle/<case>_vehicle.step` (one solid, mm, the hull's frame),
   `<case>_vehicle_parts.step` (the parts placed, not fused), `<case>_vehicle.json` and `<case>_vehicle_setup.json`
   (`python vehicle_cad.py <setup>` builds the vehicle again from it).
+- **CAD patch topology, ripples and half bodies** (`xcad_loft.py`; 5 Nov 2026, from the user's screenshots of
+  the rudder database in the mesher): the loft now builds one bicubic B-spline surface per patch, fitted by
+  least squares through the section curves' pole rows (degree 3 both ways, interior knots placed from the row
+  spacing), in place of interpolating ThruSections. Patches as the user drew them: the side from the root to a
+  collar (`collar_mm` below the highest horizontal section, default 10, 0 for none), the tip band from the
+  collar over the tip's side walls onto the tip section, the cap rim from the tip section to the line where
+  its edge rounding meets the deck (found from the cap loops' cross profiles and smoothed along the chord),
+  and the cap crown from that line to the ridge; seams at the LE and the TE; the rudder is 9 faces (was 8 with
+  a ruled sliver at 199.5 mm and a thin closing face at the crest). The ripples are gone: the old cap
+  interpolated the extraction's cap loops at spanwise degree 6 and its curvature swung +4200 to -1700 1/m
+  across the cap (the bands the user circled); the fitted cap rounds once (one positive hump, the deck under
+  10 1/m), and the side's ringing at the H join (+-60 1/m) drops to +-6. The fit stays on the data: largest
+  deviation 60 um at the loops' points, volume within 4 mm^3 of the old solid (584 L), booleans and the
+  vehicle fuse unchanged. Half bodies: `loft_loops(half=True)` builds the half on the LE-to-TE side of the
+  plane of symmetry (one planar face closes it; the loops must be symmetric within 0.2 mm, so a cambered wing
+  is refused with a message), and `hull_modify.build_solid(half=True)` the starboard half of the hull (half
+  revolutions plus the centre-plane face); both exactly half the volume, valid. The tool: a 'half body' switch
+  under Output for the rudder, the fin, the wing and the hull, saved with the set-up (the component files'
+  `half`; the rudder's JSON); build and Save CAD then write the half; the Vehicle CAD always builds full
+  bodies (`build_task(case, half=False)`).
 - **Input files** (`xgeom_files.py`, claude/xgeom-file-formats.md; 26 Oct 2026): one component file layout
   (`.txt`) for the blade, the rudder, the fin, the wing and the hull: the geometry, the tool's settings, each
   curve's form (`table`, `bezier1 <points>`, `bezier2`; the hull's `cst <order>`) and every variable's value,
@@ -279,6 +299,11 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   Save set-up) of 5 done. Checked in the cloud (all checks, the windows with `--gui`, OCC) and here
   (`_xgeom_files_test.py`). Saving the SUBOFF hull puts its CST curves' half-heights into the table (within
   0.12 mm of SUBOFF's equations); a fit at another order then fits to them.
+
+- CAD topology and half bodies (5 Nov 2026): installed in X_geom and the Rudder folder. All checks pass in
+  the cloud (the windows with `--gui`, OCC: the new patch counts, the half bodies, the vehicle fuse) and here
+  (CAD and window skipped). The collar height and the cap split are `collar_mm` and `crown` in
+  `modify_control.ModifySettings`.
 
 ## Next steps
 
