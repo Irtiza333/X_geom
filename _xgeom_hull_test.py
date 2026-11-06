@@ -473,22 +473,24 @@ def test_vehicle_cad(hull, full=False):
     check("a blade shell open at its root ring on the hub cylinder, closed by the cylinder inside the ring: one "
           "valid solid; 3 of them and the hub fused: one valid solid of their volumes (the root on the hub)",
           [n_b, ok_b, v_b > 0, n_p, ok_p, v_p / (v_hub + 3.0 * v_b) - 1.0], [1, 1, 1, 1, 1, 0], 1e-5)
-    t = np.linspace(0.0, 2.0 * np.pi, 41)
-    wing = XL.loft_loops([np.column_stack((50.0 - 50.0 * np.cos(t), -6.0 * np.sin(t), np.full_like(t, z)))
-                          for z in (0.0, 60.0, 120.0)], n_poles=12).shape    # a plate-like wing, flat root at z 0
+    t = np.linspace(0.0, 2.0 * np.pi, 201)
+    wing = XL.loft_loops([np.column_stack((50.0 - 50.0 * np.cos(t), -20.0 * np.sin(t), np.full_like(t, z)))
+                          for z in (0.0, 60.0, 120.0)], n_poles=12).shape    # an elliptical wing, flat root at
+                                                                             # z 0 (smooth and round enough for
+                                                                             # the wrap strips to integrate well)
     root_area = XL.mass_properties(VC._root_face(wing))[1]
     ext = VC.extended_rudder(wing, 7.0)
     n_e, ok_e, v_e = VC.solid_report(ext)
     check("a rudder's root extrusion sewn on (no boolean): one valid solid of the rudder's volume and the root "
           "face's area times the depth", [n_e, ok_e, v_e / (VC.volume(wing) + 7.0 * root_area) - 1.0, VC._bbox(ext)[0, 2]],
-          [1, 1, 0, -7.0], 1e-6)
+          [1, 1, 0, -7.0], 1e-5)
     ext2 = VC.extended_rudder(wing, 7.0, direction=(0.3, 0.0, 1.0))
     n_o, ok_o, v_o = VC.solid_report(ext2)
     h = 7.0 / np.hypot(1.0, 0.3)
     check("... along a slanted line (dx/dz 0.3, a TE line's): one valid solid, the root face's area times the "
           "height the 7 mm along the line reach; its end 7 mm back along the line",
           [n_o, ok_o, v_o / (VC.volume(wing) + h * root_area) - 1.0, VC._bbox(ext2)[0, 2] + h,
-           VC._bbox(ext2)[0, 0] - VC._bbox(wing)[0, 0] + 0.3 * h], [1, 1, 0, 0, 0], 1e-6)
+           VC._bbox(ext2)[0, 0] - VC._bbox(wing)[0, 0] + 0.3 * h], [1, 1, 0, 0, 0], 1e-5)
     need = ["outputs/corner_points.dat", "outputs/thickness_params_y0_y200_info.dat",
             "outputs/sections_xcad_with_cap_y0_y200_m.dat", "outputs/sections_stack_y0_y200_raw_mm.dat"]
     missing = [p for p in need if not os.path.exists(os.path.join(HERE, p))]

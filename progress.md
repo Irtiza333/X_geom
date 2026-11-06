@@ -316,8 +316,22 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
 
 - `temp_rudder_cad.py` (5 Nov 2026): rebuilt on `xcad_loft.loft_loops`, so its solid carries the new patch
   topology (nine faces); the same files in, the same `.step` out. The full section file gives the same solid
-  as the topology work's loft (583,340 mm^3, fit 0.074 mm, valid). In X_geom and the Rudder folder
-  (byte-identical).
+  as the topology work's loft (583,340 mm^3, fit 0.074 mm, valid). The sections may differ in point
+  count (resampled by cosine arc into the original file's layout, the point farthest from the LE taken
+  as the TE), and a file without '#' marks is split where the height column changes. In X_geom and the
+  Rudder folder (byte-identical).
+
+- Five patches (6 Nov 2026): `xcad_loft.loft_loops` rebuilt on the blade's topology (DRDC TM 2013-178): LE and
+  TE strips (`strip_frac`, default 0.07 of the root chord), two central panels, and a tensor-product tip patch
+  over the top `tip_frac` (0.15) of the span, fitted to wrap curves cut from an interim smooth loft; six faces
+  every case, the root flat, the half body a boolean half (0.5 by volume to 8e-7). `ModifySettings` carries
+  `strip_frac` and `tip_frac` in place of `collar_mm` and `crown`; set-up files save and restore them. The wind
+  tunnel rudder re-exported (`outputs/wind_tunnel_rudder_full.igs`, `_half.igs`, Rudder folder): worst 0.43 mm
+  against the extraction data, the sides 0.02. The BB2 set relofted (`bb2/outputs/`, `TIP_FRAC = 0.03`, about
+  17 min): cuts against the original within 0.8 mm except the two tip corner blends (to 4.4 mm over the last
+  40 mm or so) and just under the cap foot (4.0); the nine-face loft held 0.7 there, the price of one
+  four-sided tip patch on the blunt cap corners. Volume outside the hull within 3.2e-4 of the original. All
+  four test suites pass. In X_geom and the Rudder folder (byte-identical shared files).
 
 ## Next steps
 

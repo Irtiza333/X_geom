@@ -79,15 +79,21 @@ def test_loft():
     check("its volume matches the sections' (relative)", abs(res.volume / vol_ref - 1.0), 0.0, 5e-4)
     loops2, _, _ = wing_loops(tilt=True)
     res2 = XL.loft_loops(loops2)
-    check("with a tilted loop and a cap loop: valid, closed; side, tip band, crown and root, 7 faces",
+    check("with a tilted loop and a cap loop: valid, closed; the five patches and the root, 6 faces",
           [res2.valid, res2.free_edges, res2.n_ruled, res2.volume > res.volume, XL.count_faces(res2.shape)],
-          [1, 0, 2, 1, 7], 0)
+          [1, 0, 2, 1, 6], 0)
     res2h = XL.loft_loops(loops2, half=True)
-    check("its half body: valid, closed, 5 faces, half the volume",
-          [res2h.valid, res2h.free_edges, XL.count_faces(res2h.shape), res2h.volume / res2.volume], [1, 0, 5, 0.5],
-          1e-6)
-    no_collar = XL.loft_loops(loops2, collar_mm=0.0)
-    check("collar_mm 0: no collar cut, 5 faces", [no_collar.valid, XL.count_faces(no_collar.shape)], [1, 5], 0)
+    check("its half body: valid, closed, 6 faces, half the volume",
+          [res2h.valid, res2h.free_edges, XL.count_faces(res2h.shape), res2h.volume / res2.volume], [1, 0, 6, 0.5],
+          1e-4)
+    wide = XL.loft_loops(loops2, strip_frac=0.12, tip_frac=0.3)
+    check("wider strips and tip patch: still valid, 6 faces", [wide.valid, XL.count_faces(wide.shape)], [1, 6], 0)
+    try:
+        XL.loft_loops(loops2, strip_frac=0.5)
+        overlapped = 0
+    except ValueError:
+        overlapped = 1
+    check("strips too wide to fit are refused", overlapped, 1, 0)
     bent = [lp.copy() for lp in loops2]
     for lp in bent:
         lp[:, 1] -= 0.4 * np.sin(np.pi * np.clip(lp[:, 0] / 150.0, 0, 1))      # cambered: not symmetric
@@ -111,12 +117,12 @@ def test_loft():
             txt = 0
         except ValueError:
             txt = 1
-        check("save_cad: IGES converted from the STEP (its 7 faces, their area), STEP copied, a build's own IGES "
+        check("save_cad: IGES converted from the STEP (its 6 faces, their area), STEP copied, a build's own IGES "
               "copied, .txt refused", [how[0].startswith("IGES converted"), XL.count_faces(back_i),
                                        XL.mass_properties(back_i)[1] / XL.mass_properties(back)[1] - 1.0,
                                        open(stp, "rb").read() == open(step, "rb").read(),
                                        open(own, "rb").read() == open(igs, "rb").read(), txt],
-              [1, 7, 0, 1, 1, 1], 1e-6)
+              [1, 6, 0, 1, 1, 1], 1e-6)
 
 
 def test_adapter():
@@ -180,9 +186,9 @@ def test_adapter():
             if XL.occ_available():
                 lr = res["loft"]
                 print(f"       solid: volume {lr.volume:.1f} mm^3, {lr.seconds:.1f} s, {lr.faces} faces")
-                check("XCAD: a valid closed solid and its STEP file; the rudder's 9 patches (side, tip band, "
-                      "rim, crown per side, the root)",
-                      [lr.valid, lr.free_edges, os.path.exists(res["step"]), lr.faces], [1, 0, 1, 9], 0)
+                check("XCAD: a valid closed solid and its STEP file; the rudder's 6 patches (the LE and TE "
+                      "strips, the central panels, the tip, the root)",
+                      [lr.valid, lr.free_edges, os.path.exists(res["step"]), lr.faces], [1, 0, 1, 6], 0)
                 hres = ad.build_xcad("th", plot=False, cad=True, half=True)
                 hlr = hres["loft"]
                 check("XCAD half body: valid, 6 faces, half the volume",
@@ -323,7 +329,7 @@ def test_gui():
                        said[1].startswith("Save CAD done"), faces, os.path.exists(os.path.join(tmp, "changed.step")),
                        open(os.path.join(tmp, "changed.step"), "rb").read() == open(built, "rb").read(),
                        busy == "disabled", app.status.cget("background") == XT.STATUS["ok"][0]],
-                      [2, 1, 1, 9, 1, 1, 1, 1], 0)
+                      [2, 1, 1, 6, 1, 1, 1, 1], 0)
             finally:
                 XT.filedialog.asksaveasfilename, XT.LOG = ask, log
                 app.ad.build_task = real

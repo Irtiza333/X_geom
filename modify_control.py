@@ -60,10 +60,10 @@ class ModifySettings:
                                    # distributions too curved for a polynomial of the order below
     half: bool = False             # the CAD as the half body, cut at the plane of symmetry (CFD on half the
                                    # domain; the sections are symmetric, so either side is the same)
-    collar_mm: float = 10.0        # the side patch splits at a collar this far below the highest horizontal
-                                   # section (xcad_loft; 0: no collar)
-    crown: float = 0.5             # where the cap splits into rim and crown when its cross profile never
-                                   # flattens into a deck (xcad_loft; the wind-tunnel rudder's cap has one)
+    strip_frac: float = 0.07       # the LE and TE wrap strips reach this fraction of the root chord along the
+                                   # arc to both sides of their edge (xcad_loft, the blade's constant width)
+    tip_frac: float = 0.15         # the tip patch owns this fraction of the span, down from the top
+                                   # (xcad_loft; clamped under the highest horizontal section)
     plot: bool = True              # write <case>_check.png
 
 settings = ModifySettings( # SET PARAMETERS HERE

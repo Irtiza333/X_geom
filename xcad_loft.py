@@ -8,40 +8,51 @@ of Rudder_geom_extraction.write_xcad and rudder_modify.write_modified_xcad).
 
 How the solid is built
 ----------------------
-- Each side of each loop becomes a cubic B-spline fitted by least squares
-  (its end points held) with the same knots in every loop, so every surface
-  below is built from compatible pole rows. The LE and TE points are snapped
-  onto the plane of symmetry (thickness 0) when they are within a hair of it,
-  so the seams between the two sides lie exactly on it.
-- Each patch is then one bicubic B-spline surface fitted by least squares
-  through its loops' pole rows (the end rows held exactly, so neighbouring
-  patches share their boundary curve): degree 3 both ways, v_poles rows of
-  poles at most. Fewer rows of poles than loops smooth the measurement noise
-  of extracted sections out, which keeps the surfaces free of the ripples
-  that interpolation (and the high spanwise degrees it needs) put near the
-  rudder's tip.
-- The patches (the mesh topology): the side from the root up to the collar
-  (a cut collar_mm below the highest horizontal section, 0 for none), the
-  tip band from the collar over the tip's side walls onto the tip section,
-  the cap rim from the tip section to the line where the cap's edge
-  rounding meets its deck (found per chord station from the cap loops'
-  cross profile, smoothed along the chord; at the fraction crown of the
-  cross arc when the cap never flattens), and the cap crown from that line
-  to the ridge (the midline of the last cap loop, snapped onto the plane of
-  symmetry). The rim's and the crown's rows are resampled along each chord
-  station's cross profile, which also evens the cap loops' spacing out.
-  Every cap loop runs through the tip section's LE and TE corners, so the
-  rim and the crown pinch to those two points. Each patch is two faces, one
-  per side, with their seams at the LE and the TE; a flat end loop (the
-  root, a flat tip) is closed by a planar face.
+The patch layout is the propeller blade's five-surface decomposition (DRDC
+TM 2013-178, tip_surfaces_new.py / X_CAD_new.py; user, 6 Nov 2026): a
+leading-edge strip and a trailing-edge strip wrapping their edges, the
+central pressure and suction panels between them, and one tip patch over
+the top. With the flat root face every solid has six faces, the half body
+too.
+
+- First the old smooth loft is built internally as the geometry source (the
+  interim): each side of each loop a cubic least-squares B-spline on common
+  knots (end points held; the LE and TE snapped onto the plane of symmetry),
+  the side surface, and the cap resampled into rim and crown rows. Fewer
+  rows of poles than loops (v_poles) smooth the measurement noise of
+  extracted sections out, which keeps the surfaces free of the ripples that
+  interpolation puts near the rudder's tip.
+- The five patches then resample that geometry. The strips are strip_frac of
+  the root chord wide, measured along each section's arc on both sides of
+  the LE and the TE (the blade's constant-width rule); the strips and the
+  central panels run from the root up to one height, top minus tip_frac of
+  the span (clamped under the highest horizontal section), where the tip
+  patch begins, like the blade's eta_top. Below that height every section
+  loop splits into the four arcs at exact shared arc stations, each arc is
+  fitted with held ends (so neighbouring patches share their seam poles row
+  by row), and each family is fitted along the span on the common height
+  parameters: identical boundary data, parameters and knots make the shared
+  boundary curves identical, so the faces sew watertight.
+- The tip patch is a single grid over everything above that height: its
+  u = 0 and u = 1 edges are the strips' top rows, its v = 0 and v = 1 edges
+  the central panels' top rows (the pole rows are shared verbatim), and its
+  inside comes from wrap curves cut from the interim solid by planes through
+  a point of each central top row and the point of the outline (the LE seam,
+  the ridge, the TE seam of the interim) steering the family from chordwise
+  cuts over the crest to near-horizontal cuts around the LE and the TE, as
+  the blade's tip cuts rotate. Each wrap curve is resampled in two halves
+  that meet exactly on the plane of symmetry, fitted with held ends, and the
+  interior pole tracks are fitted along the chord with the strips' top poles
+  held at the ends.
 - half=True builds the half body on the LE-to-TE side of the plane of
-  symmetry (the working frame's z >= 0): the side faces of that side only,
-  the half root (its section side closed by the straight chord line), and
-  one planar face on the plane of symmetry (root chord, LE seams, ridge, TE
-  seams). The loops must be symmetric about the plane within sym_tol.
-- The faces are sewn into one shell and made a solid: nine faces for the
-  rudder with its cap (six as the half body), four for a wing or fin with
-  its flat tip (four as the half body too).
+  symmetry: the half strips (apex to split), the central panel of that side,
+  the half tip (boundary row to the outline), the half root closed by the
+  chord line, and one planar face on the plane of symmetry (root chord, the
+  LE apex column, the tip outline row, the TE apex column). The loops must
+  be symmetric about the plane within sym_tol.
+- A wing or fin whose loops are all horizontal gets no tip patch: the four
+  wrap patches run the whole span and the flat top is closed by a planar
+  face, six faces again.
 
 Coordinates: the XCAD frame (x chordwise, y thickness, z the height) in mm;
 point files in metres are scaled by 1000, as X_CAD.py does.
@@ -403,20 +414,24 @@ def _densify(rows, factor=2.0):
     return np.asarray(out)
 
 
-def _fit_grid(rows, v_poles, degree=3):
+def _fit_grid(rows, v_poles, degree=3, params=None):
     """A pole grid fitted through pole rows along the span by least squares,
     the end rows held exactly: (grid (n_v, n_poles, 3), v knots, v degree,
-    largest distance of the rows from the grid, mm)."""
+    largest distance of the rows from the grid, mm). params: the rows'
+    parameters (families that must share their boundary curves pass the same
+    ones, so their boundary pole tracks solve the same problem)."""
     rows = np.asarray(rows, dtype=float)
     m = len(rows)
     n_v = int(min(max(v_poles, 2), m))
     deg = int(min(degree, n_v - 1))
+    if params is None:
+        params = _v_params(rows)
     if n_v == 2:
         grid = rows[[0, -1]]
         knots = np.array([0.0, 0.0, 1.0, 1.0])
-        pred = np.array([grid[0] + t * (grid[1] - grid[0]) for t in _v_params(rows)])
+        pred = np.array([grid[0] + t * (grid[1] - grid[0]) for t in params])
         return grid, knots, 1, float(np.abs(pred - rows).max())
-    a, knots = _basis_at(_v_params(rows), n_v, deg, spaced=True)
+    a, knots = _basis_at(params, n_v, deg, spaced=True)
     flat = rows.reshape(m, -1)
     grid = _fit_poles(flat, a).reshape(n_v, rows.shape[1], 3)
     return grid, knots, deg, float(np.abs(a @ grid.reshape(n_v, -1) - flat).max())
@@ -508,6 +523,214 @@ class _Patch:
         return _bspline_edge(self.up[row], self.fitter.k_up, self.fitter.degree)
 
 
+# --------------------------------------------------------------------------
+# The five patches (the blade's decomposition)
+# --------------------------------------------------------------------------
+
+N_CEN = 97                                 # samples along a central panel's arc
+N_STRIP = 161                              # samples along a strip's wrap (odd: the apex at the middle)
+N_VHALF = 61                               # samples per half of a tip wrap curve (odd total, 2 * N_VHALF - 1)
+N_CUT = 61                                 # tip wrap stations (cosine; the two ends are the strips' top rows)
+
+
+def _mixed(n):
+    """n stations 0 to 1: mostly even, mildly clustered at both ends (the tip
+    wraps need the cap's rounding resolved mid-arc too)."""
+    t = np.linspace(0.0, 1.0, n)
+    return 0.65 * t + 0.35 * 0.5 * (1.0 - np.cos(np.pi * t))
+
+
+def _cosine(n):
+    """n stations 0 to 1, clustered at both ends."""
+    return 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, n)))
+
+
+def _clustered(n, c=0.6):
+    """n stations 0 to 1, denser around the middle (the strips' apexes)."""
+    t = np.linspace(0.0, 1.0, n)
+    return t + c * np.sin(2.0 * np.pi * t) / (2.0 * np.pi)
+
+
+def _loop_arc(p):
+    return np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(p, axis=0), axis=1))]
+
+
+def _at_arc(p, s, stations):
+    """Points of the polyline p (arc s) at the arc stations."""
+    out = np.empty((len(np.atleast_1d(stations)), p.shape[1]))
+    for c in range(p.shape[1]):
+        out[:, c] = np.interp(stations, s, p[:, c])
+    return out
+
+
+def _row_arcs(lp, i_te, w_le, w_te, u_strip, u_cen):
+    """One loop split into the four wrap families' sample rows: (le strip,
+    central A, te strip, central B), the strips wrapping their apexes from
+    the A side (indices 0 to i_te) to the B side, the centrals running from
+    the LE split to the TE split of their side; the four split points are
+    shared exactly, the apexes sit exactly at the strips' middle sample."""
+    lp = np.asarray(lp, dtype=float)
+    if np.linalg.norm(lp[0] - lp[-1]) > 1.0e-9:
+        lp = np.vstack((lp, lp[:1]))
+    s = _loop_arc(lp)
+    S, s_te = s[-1], s[i_te]
+    lim = 0.45 * min(s_te, S - s_te)
+    if not (w_le < lim and w_te < lim):
+        raise ValueError(f"the strips ({w_le:.6g} and {w_te:.6g} mm about the LE and the TE) overlap on the "
+                         f"section at height {lp[0, 2]:.6g}: its sides are {s_te:.6g} and {S - s_te:.6g} mm "
+                         f"long (lower strip_frac)")
+    dbl = np.vstack((lp[:-1], lp))
+    s2 = np.r_[s[:-1], S + s]
+    p_le_a, p_te_a = _at_arc(lp, s, [w_le])[0], _at_arc(lp, s, [s_te - w_te])[0]
+    p_te_b, p_le_b = _at_arc(lp, s, [s_te + w_te])[0], _at_arc(lp, s, [S - w_le])[0]
+    le = _at_arc(dbl, s2, (S - w_le) + u_strip * (2.0 * w_le))[::-1]
+    te = _at_arc(lp, s, (s_te - w_te) + u_strip * (2.0 * w_te))
+    cen_a = _at_arc(lp, s, w_le + u_cen * (s_te - w_te - w_le))
+    cen_b = _at_arc(lp, s, (s_te + w_te) + u_cen * (S - w_le - s_te - w_te))[::-1]
+    mid = (len(u_strip) - 1) // 2
+    le[mid], te[mid] = lp[0], lp[i_te]                     # the apexes exactly
+    le[0], le[-1] = p_le_a, p_le_b
+    te[0], te[-1] = p_te_a, p_te_b
+    cen_a[0], cen_a[-1] = p_le_a, p_te_a
+    cen_b[0], cen_b[-1] = p_le_b, p_te_b
+    return le, cen_a, te, cen_b
+
+
+def _edge_polyline(edge, n=400):
+    BRepAdaptor_Curve = _occ("BRepAdaptor", "BRepAdaptor_Curve")
+    c = BRepAdaptor_Curve(edge)
+    u0, u1 = c.FirstParameter(), c.LastParameter()
+    out = np.empty((n, 3))
+    for i, u in enumerate(np.linspace(u0, u1, n)):
+        p = c.Value(float(u))
+        out[i] = (p.X(), p.Y(), p.Z())
+    return out
+
+
+def _section_pieces(shape, origin, normal, n=400):
+    """The cut of a shape by a plane: one polyline per section edge."""
+    gp_Pln, gp_Pnt, gp_Dir = _occ("gp", "gp_Pln", "gp_Pnt", "gp_Dir")
+    Section = _occ("BRepAlgoAPI", "BRepAlgoAPI_Section")
+    TopExp_Explorer = _occ("TopExp", "TopExp_Explorer")
+    TopAbs_EDGE = _occ("TopAbs", "TopAbs_EDGE")
+    as_edge = _topods("Edge")
+    algo = Section(shape, gp_Pln(gp_Pnt(*[float(v) for v in origin]), gp_Dir(*[float(v) for v in normal])))
+    algo.Build()
+    out, ex = [], TopExp_Explorer(algo.Shape(), TopAbs_EDGE)
+    while ex.More():
+        out.append(_edge_polyline(as_edge(ex.Current()), n))
+        ex.Next()
+    return out
+
+
+def _chain_pieces(pieces, tol=1.0e-2):
+    """Section polylines chained into continuous curves by their end points."""
+    pieces = [np.asarray(p) for p in pieces if len(p) > 1]
+    chains = []
+    while pieces:
+        chain = pieces.pop(0)
+        grown = True
+        while grown:
+            grown = False
+            for i, q in enumerate(pieces):
+                if np.linalg.norm(chain[-1] - q[0]) < tol:
+                    chain = np.vstack((chain, q[1:]))
+                elif np.linalg.norm(chain[-1] - q[-1]) < tol:
+                    chain = np.vstack((chain, q[::-1][1:]))
+                elif np.linalg.norm(chain[0] - q[-1]) < tol:
+                    chain = np.vstack((q, chain[1:]))
+                elif np.linalg.norm(chain[0] - q[0]) < tol:
+                    chain = np.vstack((q[::-1], chain[1:]))
+                else:
+                    continue
+                pieces.pop(i)
+                grown = True
+                break
+        chains.append(chain)
+    return chains
+
+
+def _wrap_arc(interim, pa, pb, o, thick):
+    """The wrap curve of the tip patch at one chord station: the interim solid
+    cut by the plane through pa (on the pressure boundary), pb (suction) and o
+    (the outline), the arc from pa over o to pb; returns the arc's two halves
+    resampled (each _cosine(N_VHALF)), meeting exactly on the plane of
+    symmetry (the crossing nearest o, or the point nearest o)."""
+    pa, pb, o = (np.asarray(v, dtype=float) for v in (pa, pb, o))
+    nrm = np.cross(pb - pa, o - pa)
+    ln = np.linalg.norm(nrm)
+    if ln < 1.0e-12:
+        raise RuntimeError("a degenerate tip cut plane")
+    pieces = _section_pieces(interim, pa, nrm / ln)
+    chains = _chain_pieces(pieces)
+    if not chains:
+        raise RuntimeError("a tip cut met nothing")
+    chain = min(chains, key=lambda c: np.linalg.norm(c - o, axis=1).min())
+    closed = np.linalg.norm(chain[0] - chain[-1]) < 1.0e-2
+    pts = chain[:-1] if closed else chain
+    ia = int(np.argmin(np.linalg.norm(pts - pa, axis=1)))
+    ib = int(np.argmin(np.linalg.norm(pts - pb, axis=1)))
+    m = len(pts)
+    if closed:
+        fwd = np.arange(ia, ia + (ib - ia) % m + 1) % m
+        bwd = np.arange(ia, ia - (ia - ib) % m - 1, -1) % m
+        arcs = [pts[fwd], pts[bwd]]
+        arc = min(arcs, key=lambda c: np.linalg.norm(c - o, axis=1).min())
+    else:
+        lo, hi = min(ia, ib), max(ia, ib)
+        arc = pts[lo:hi + 1] if ia <= ib else pts[hi:lo - 1 if lo else None:-1]
+    arc = np.vstack(([pa], arc[1:-1], [pb]))
+    s = _loop_arc(arc)
+    io = int(np.argmin(np.linalg.norm(arc - o, axis=1)))
+    y = arc[:, thick]
+    cross = [j for j in range(len(arc) - 1) if y[j] * y[j + 1] <= 0.0 and max(abs(y[j]), abs(y[j + 1])) > 0.0]
+    if cross:
+        j = min(cross, key=lambda jj: abs(jj - io))
+        t = y[j] / (y[j] - y[j + 1]) if y[j] != y[j + 1] else 0.0
+        split = arc[j] + t * (arc[j + 1] - arc[j])
+        s_split = s[j] + t * (s[j + 1] - s[j])
+    else:
+        split, s_split = arc[io].copy(), s[io]
+    if cross:
+        split[thick] = 0.0
+    h1 = _at_arc(arc, s, s_split * _mixed(N_VHALF))
+    h2 = _at_arc(arc, s, s_split + (s[-1] - s_split) * _mixed(N_VHALF))
+    h1[0], h1[-1] = pa, split
+    h2[0], h2[-1] = split, pb
+    return h1, h2
+
+
+def _held_track_fit(data, a, p0, p1):
+    """Poles through data at the basis a, the end poles held at p0 and p1."""
+    poles = np.empty((a.shape[1], data.shape[1]))
+    poles[0], poles[-1] = p0, p1
+    rhs = data - np.outer(a[:, 0], poles[0]) - np.outer(a[:, -1], poles[-1])
+    poles[1:-1] = np.linalg.lstsq(a[:, 1:-1], rhs, rcond=None)[0]
+    return poles
+
+
+def _half_cut(solid, loops, thick, cen_a_row):
+    """The half body: the solid cut by the plane of symmetry, keeping the
+    LE-to-TE side (the side of the loops' indices 0 to i_te). The six faces
+    keep the full body's surfaces, trimmed; the section face closes it."""
+    BRepPrimAPI_MakeBox = _occ("BRepPrimAPI", "BRepPrimAPI_MakeBox")
+    gp_Pnt = _occ("gp", "gp_Pnt")
+    Common = _occ("BRepAlgoAPI", "BRepAlgoAPI_Common")
+    pts = np.vstack(loops)
+    lo = pts.min(axis=0) - (0.05 * np.ptp(pts, axis=0) + 10.0)
+    hi = pts.max(axis=0) + (0.05 * np.ptp(pts, axis=0) + 10.0)
+    if float(np.mean(cen_a_row[:, thick])) >= 0.0:
+        lo[thick] = 0.0
+    else:
+        hi[thick] = 0.0
+    algo = Common(solid, BRepPrimAPI_MakeBox(gp_Pnt(*[float(v) for v in lo]),
+                                             gp_Pnt(*[float(v) for v in hi])).Shape())
+    algo.Build()
+    if not algo.IsDone():
+        raise RuntimeError("the half body's cut on the plane of symmetry failed")
+    return algo.Shape()
+
+
 def _sew_solid(parts, sew_tol):
     """The faces sewn into one shell and made a solid: (solid, free edges)."""
     BRepBuilderAPI_Sewing, BRepBuilderAPI_MakeSolid = _occ("BRepBuilderAPI", "BRepBuilderAPI_Sewing",
@@ -535,21 +758,64 @@ def _sew_solid(parts, sew_tol):
     return fx.Solid(), free
 
 
-def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3, v_poles=30,
-               collar_mm=10.0, crown=0.5, half=False, sym_tol=0.2):
-    """The solid through closed loops (each (n, 3), mm, the same point count,
-    LE first), bottom to top; see the module docstring for the patches.
+def _interim_solid(loops, fitter, up_rows, lo_rows, flat, k, v_poles, sew_tol, thick, z_axis):
+    """The old smooth loft (the side split at a collar under the cap, the
+    cap's rim and crown), sewn as one full solid: the geometry source the tip
+    patch's wrap cuts resample. Returns (solid, ridge poles)."""
+    n = len(loops)
+    patches = []
+    end = k if k == n else k + 1
+    c_i = 0
+    if k >= 2:
+        if k < n:                                      # a collar 4 % of the span under the highest section,
+            heights = np.array([lp[0, z_axis] for lp in loops[:k]])        # so the band at the cap keeps its
+            span = float(max(lp[:, z_axis].max() for lp in loops)) - heights[0]    # own spanwise resolution
+            c_i = int(np.argmin(np.abs(heights - (heights[k - 1] - 0.04 * span))))
+            c_i = c_i if 1 <= c_i <= k - 2 else 0
+        if c_i:
+            patches.append(_Patch("side", up_rows[:c_i + 1], lo_rows[:c_i + 1], v_poles, fitter))
+        b_up, b_lo = _densify(up_rows[c_i:end]), _densify(lo_rows[c_i:end])
+        patches.append(_Patch("tip band" if c_i else "side", b_up, b_lo,
+                              v_poles if not c_i and k == n else max(6, min(v_poles, len(b_up))), fitter))
+    elif k == 1 and k < n:
+        patches.append(_Patch("side", up_rows[:2], lo_rows[:2], 2, fitter))
+    ridge = None
+    if k < n:
+        ridge = 0.5 * (up_rows[n - 1] + lo_rows[n - 1][::-1])
+        ridge[:, thick] = 0.0
+        if n - k >= 3:
+            rim_up, crown_up = _cap_rows(np.concatenate([up_rows[k:], ridge[None]]), z_axis, 0.5)
+            rim_lo, crown_lo = _cap_rows(np.concatenate([lo_rows[k:], ridge[::-1][None]]), z_axis, 0.5)
+            patches.append(_Patch("rim", rim_up, rim_lo, len(rim_up), fitter, pinched=True, thick=thick))
+            patches.append(_Patch("crown", crown_up, crown_lo, len(crown_up), fitter, pinched=True, thick=thick))
+        else:
+            crown_up = np.concatenate([up_rows[k:], ridge[None]])
+            crown_lo = np.concatenate([lo_rows[k:], ridge[::-1][None]])
+            patches.append(_Patch("crown", crown_up, crown_lo, len(crown_up), fitter, pinched=True, thick=thick))
+    parts = []
+    for q in patches:
+        parts += q.faces(False)
+    parts.append(_planar_face(fitter.wire(loops[0])[0]) if flat[0] else fitter.closing_face(loops[0]))
+    if k == n:
+        parts.append(_planar_face(fitter.wire(loops[-1])[0]) if flat[-1] else fitter.closing_face(loops[-1]))
+    solid, _ = _sew_solid(parts, sew_tol)
+    return solid, ridge
 
-    v_poles     rows of poles of the side patch at most (the tip band, the rim
-                and the crown use fewer, their loops being few); fewer rows
-                than loops smooth extraction noise out, degree 3 either way
-    collar_mm   the side is split this far (mm) below the highest horizontal
-                section (0: no collar; none either when every loop is
-                horizontal)
-    crown       where the cap splits into rim and crown when its cross
-                profile never flattens into a deck: this fraction of the
-                cross arc (with a deck, the split follows the line where the
-                edge rounding meets it)
+
+def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3, v_poles=30,
+               strip_frac=0.07, tip_frac=0.15, half=False, sym_tol=0.2):
+    """The solid through closed loops (each (n, 3), mm, the same point count,
+    LE first), bottom to top, with the blade's five-patch topology; see the
+    module docstring for how it is built.
+
+    v_poles     rows of poles along the span, and across the wrap of the
+                strips and of the tip patch; fewer rows than loops smooth
+                extraction noise out, degree 3 either way
+    strip_frac  each strip reaches this fraction of the root chord along the
+                section's arc to both sides of its edge (the blade's
+                constant-width rule)
+    tip_frac    the tip patch owns this fraction of the span, measured down
+                from the top (clamped under the highest horizontal section)
     half        True: the half body on the LE-to-TE side of the plane of
                 symmetry (thickness 0), the loops symmetric within sym_tol (mm)
     """
@@ -560,6 +826,7 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
     if len({len(lp) for lp in loops}) != 1:
         raise ValueError("every loop must have the same number of points")
     thick = 1 if height_axis == 2 else 2
+    z_axis = height_axis
     n = len(loops)
     n_pts = len(loops[0])
     i_te = (n_pts + 1) // 2 - 1
@@ -568,15 +835,16 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
         for i in (0, i_te, n_pts - 1):
             if abs(lp[i, thick]) < 1.0e-3:
                 lp[i, thick] = 0.0
-    flat = [np.ptp(lp[:, height_axis]) <= flat_tol * max(1.0, size) for lp in loops]
+    flat = [np.ptp(lp[:, z_axis]) <= flat_tol * max(1.0, size) for lp in loops]
+    if not flat[0]:
+        raise ValueError("the root loop must be horizontal (the five-patch layout closes it with a plane)")
     k = next((i for i, f in enumerate(flat) if not f), n)          # leading loops at one height each
     fitter = _SectionFitter(n_pts, n_poles)
-    up_rows, lo_rows, err = [], [], 0.0
+    up_rows, lo_rows = [], []
     for lp in loops:
-        p_up, p_lo, e = fitter.sides(lp)
+        p_up, p_lo, _ = fitter.sides(lp)
         up_rows.append(p_up)
         lo_rows.append(p_lo)
-        err = max(err, e)
     up_rows, lo_rows = np.array(up_rows), np.array(lo_rows)
     if half:
         mirror = up_rows.copy()
@@ -585,92 +853,140 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
         if sym > sym_tol:
             raise ValueError(f"no half body: the loops are not symmetric about the plane of symmetry "
                              f"(they differ by {sym:.3g} mm, the allowance is {sym_tol:g} mm)")
-    notes, patches = [], []
-    z_axis = height_axis
+    notes = []
 
-    # the side, split at the collar
-    c_i = 0
-    if k >= 2:
-        if collar_mm and collar_mm > 0.0 and k < n:
-            z_top = loops[k - 1][0, z_axis]
-            heights = np.array([lp[0, z_axis] for lp in loops[:k]])
-            c_i = int(np.argmin(np.abs(heights - (z_top - float(collar_mm)))))
-            c_i = c_i if 1 <= c_i <= k - 2 else 0
-        if c_i:
-            patches.append(_Patch("side", up_rows[:c_i + 1], lo_rows[:c_i + 1], v_poles, fitter))
-            notes.append(f"the side split at the collar (loop {c_i + 1}, {loops[c_i][0, z_axis]:.6g} mm)")
-        end = k if k == n else k + 1                   # the tip band runs onto the tilted tip section
-        b_up, b_lo = _densify(up_rows[c_i:end]), _densify(lo_rows[c_i:end])
-        patches.append(_Patch("tip band" if c_i else "side", b_up, b_lo,
-                              v_poles if not c_i and k == n else max(6, min(v_poles, len(b_up))), fitter))
-    elif k == 1 and k < n:
-        patches.append(_Patch("side", up_rows[:2], lo_rows[:2], 2, fitter))
-
-    # the cap: rim and crown, split where the edge rounding meets the deck
-    ridge = None
+    # the strips' width and the tip patch's boundary
+    chord_root = float(np.linalg.norm(loops[0][0] - loops[0][i_te]))
+    h_flats = np.array([loops[i][0, z_axis] for i in range(k)])
+    z0 = float(h_flats[0])
+    z_top = float(max(lp[:, z_axis].max() for lp in loops))
+    span = z_top - z0
+    w_strip = float(strip_frac) * chord_root
     if k < n:
-        tip_i = k
-        ridge = 0.5 * (up_rows[n - 1] + lo_rows[n - 1][::-1])
-        ridge[:, thick] = 0.0
-        if n - tip_i >= 3:
-            rim_up, crown_up = _cap_rows(np.concatenate([up_rows[tip_i:], ridge[None]]), z_axis, crown)
-            rim_lo, crown_lo = _cap_rows(np.concatenate([lo_rows[tip_i:], ridge[::-1][None]]), z_axis, crown)
-            patches.append(_Patch("rim", rim_up, rim_lo, len(rim_up), fitter, pinched=True, thick=thick))
-            patches.append(_Patch("crown", crown_up, crown_lo, len(crown_up), fitter, pinched=True, thick=thick))
-            notes.append("cap: the rim from the tip section to the line where its edge rounding meets the "
-                         "deck, the crown from it to the ridge")
-        else:
-            crown_up = np.concatenate([up_rows[tip_i:], ridge[None]])
-            crown_lo = np.concatenate([lo_rows[tip_i:], ridge[::-1][None]])
-            patches.append(_Patch("crown", crown_up, crown_lo, len(crown_up), fitter, pinched=True, thick=thick))
-            notes.append("the end loop closed by the crown to its ridge")
+        h_tip = min(z_top - float(tip_frac) * span, float(h_flats[-1]) - 0.02 * span)
+        below = [i for i in range(k) if h_flats[i] < h_tip - 1.0e-9]
+        if len(below) < 2:
+            raise ValueError("tip_frac leaves fewer than two horizontal sections under the tip patch")
+        j = below[-1]
+        t = (h_tip - h_flats[j]) / (h_flats[j + 1] - h_flats[j])
+        brow = (1.0 - t) * loops[j] + t * loops[j + 1]
+        brow[:, z_axis] = h_tip
+        row_loops = [loops[i] for i in below] + [brow]
+        row_h = np.r_[h_flats[below], h_tip]
+        notes.append(f"the tip patch above {h_tip:.6g} mm; the strips {w_strip:.6g} mm wide about the LE "
+                     f"and the TE")
+    else:
+        row_loops = list(loops)
+        row_h = h_flats
+        h_tip = float(h_flats[-1])
+        notes.append(f"all sections horizontal: the flat top closed by a plane; the strips {w_strip:.6g} mm "
+                     f"wide about the LE and the TE")
 
-    v_err = max(q.error for q in patches)
+    # the four wrap families: per-row arc fits (shared split poles), then the span fits (shared parameters)
+    u_strip = _clustered(N_STRIP, 0.35)
+    u_cen = _cosine(N_CEN)
+    p_wrap = max(12, min(int(n_poles), 60))        # the strips' and the tip wrap's poles: a section budget
+    a_strip, k_strip = _basis_at(u_strip, p_wrap)
+    a_cen, k_cen = _basis_at(u_cen, n_poles)
+    raw = [_row_arcs(lp, i_te, w_strip, w_strip, u_strip, u_cen) for lp in row_loops]
+    err = 0.0
+    fams = {"le": [], "cen_a": [], "te": [], "cen_b": []}
+    for le, ca, te, cb in raw:
+        for name, row, a in (("le", le, a_strip), ("cen_a", ca, a_cen), ("te", te, a_strip),
+                             ("cen_b", cb, a_cen)):
+            poles = _fit_poles(row, a)
+            err = max(err, float(np.abs(a @ poles - row).max()))
+            fams[name].append(poles)
+    vpar = (row_h - row_h[0]) / (row_h[-1] - row_h[0])
+    grids, v_err, vk, vd = {}, 0.0, None, 3
+    for name, rows in fams.items():
+        g, vk, vd, e = _fit_grid(np.array(rows), v_poles, params=vpar)
+        grids[name] = g
+        v_err = max(v_err, e)
+
+    # the tip patch: wrap curves cut from the interim solid (cropped to its top for speed)
+    tip = k_wrap = None
+    if k < n:
+        interim, ridge = _interim_solid(loops, fitter, up_rows, lo_rows, flat, k, v_poles, sew_tol,
+                                        thick, z_axis)
+        try:
+            BRepPrimAPI_MakeBox = _occ("BRepPrimAPI", "BRepPrimAPI_MakeBox")
+            gp_Pnt = _occ("gp", "gp_Pnt")
+            Common = _occ("BRepAlgoAPI", "BRepAlgoAPI_Common")
+            pts_all = np.vstack(loops)
+            blo = pts_all.min(axis=0) - (0.05 * np.ptp(pts_all, axis=0) + 10.0)
+            bhi = pts_all.max(axis=0) + (0.05 * np.ptp(pts_all, axis=0) + 10.0)
+            blo[z_axis] = h_tip - 0.03 * span
+            algo = Common(interim, BRepPrimAPI_MakeBox(gp_Pnt(*[float(v) for v in blo]),
+                                                       gp_Pnt(*[float(v) for v in bhi])).Shape())
+            algo.Build()
+            if algo.IsDone() and count_faces(algo.Shape()):
+                interim = algo.Shape()
+        except Exception:
+            pass
+        a_r, _ = _basis(401, n_poles)
+        ridge_pts = a_r @ ridge                        # the crest line, LE to TE
+        above = [i for i in range(k) if h_flats[i] > h_tip + 1.0e-9]
+        head = [brow[0]] + [loops[i][0] for i in above] + [loops[k][0]]
+        tail = [loops[k][i_te]] + [loops[i][i_te] for i in reversed(above)] + [brow[i_te]]
+        outline = np.vstack(head + [ridge_pts] + tail)
+        s_out = _loop_arc(outline)
+        r_s = s_out[len(head):len(head) + len(ridge_pts)]
+        c_ax = 3 - z_axis - thick
+        n_cut = max(N_CUT, int(1.6 * n_poles) + 1)     # comfortably more stations than chordwise poles
+        u_cut = _cosine(n_cut)[1:-1]
+        a_cut, _ = _basis_at(u_cut, n_poles)
+        pas, pbs = a_cut @ grids["cen_a"][-1], a_cut @ grids["cen_b"][-1]
+        xr = ridge_pts[:, c_ax]
+        order = np.argsort(xr)
+        xm = np.clip(0.5 * (pas[:, c_ax] + pbs[:, c_ax]), xr.min(), xr.max())
+        arc_match = np.interp(xm, xr[order], r_s[order])
+        t_bl = np.clip(np.minimum(u_cut, 1.0 - u_cut) / 0.3, 0.0, 1.0)
+        wgt = t_bl * t_bl * (3.0 - 2.0 * t_bl)
+        arc_o = np.maximum.accumulate((1.0 - wgt) * (u_cut * s_out[-1]) + wgt * arc_match)
+        os_ = _at_arc(outline, s_out, arc_o)
+        # o sits over the chord station of pa and pb through the middle, which keeps the cut planes parallel
+        # (steered by the outline's arc alone they tilt against one another and the fitted surface folds at
+        # the cap's rounding); near the ends o blends onto the outline and down its legs, turning the family
+        # around the corners as the blade's tip cuts do
+        vfrac = np.r_[0.5 * _mixed(N_VHALF), 0.5 + 0.5 * _mixed(N_VHALF)[1:]]
+        a_wrap, k_wrap = _basis_at(vfrac, p_wrap)
+        rows_w = []
+        for pa, pb, o in zip(pas, pbs, os_):
+            h1, h2 = _wrap_arc(interim, pa, pb, o, thick)
+            w = np.vstack((h1, h2[1:]))
+            poles = _held_track_fit(w, a_wrap, pa, pb)
+            v_err = max(v_err, float(np.abs(a_wrap @ poles - w).max()))
+            rows_w.append(poles)
+        rows_w = np.array(rows_w)
+        le_top, te_top = grids["le"][-1], grids["te"][-1]
+        tip = np.empty((p_wrap, n_poles, 3))
+        tip[0], tip[-1] = grids["cen_a"][-1], grids["cen_b"][-1]
+        for m in range(1, p_wrap - 1):
+            tip[m] = _held_track_fit(rows_w[:, m], a_cut, le_top[m], te_top[m])
+            v_err = max(v_err, float(np.abs(a_cut @ tip[m] - rows_w[:, m]).max()))
+
+    # the faces
     parts = []
-    for q in patches:
-        parts += q.faces(half)
-
-    # the flat ends (the root, and a flat tip when no other loop follows)
-    ends = [(0, patches[0], 0)] + ([(n - 1, patches[-1], -1)] if k == n else [])
-    for i, patch, row in ends:
-        if not flat[i]:
-            if half:
-                raise ValueError("no half body: the end loop is not flat")
-            parts.append(fitter.closing_face(loops[i]))
-            notes.append(f"loop {i + 1} closed by the ruled face across it")
-        elif half:
-            row_i = 0 if row == 0 else len(patch.up) - 1
-            chord = _line_edge(patch.up[row_i, -1], patch.up[row_i, 0])      # TE back to LE, on the plane
-            parts.append(_wire_face([patch.up_row(row_i), chord]))
-        else:
-            parts.append(_planar_face(fitter.wire(loops[i])[0]))
-
-    if half:                                           # the face on the plane of symmetry
-        edges = []
-        root = patches[0]
-        edges.append(_line_edge(root.up[0, 0], root.up[0, -1]))              # the root chord, LE to TE
-        for q in patches:                                                    # up the LE seams
-            e = q.up_column(0)
-            if e is not None:
-                edges.append(e)
-        if ridge is not None:
-            edges.append(patches[-1].up_row(len(patches[-1].up) - 1))        # the ridge, LE to TE
-        elif k == n:
-            top = patches[-1]
-            edges.append(_line_edge(top.up[-1, 0], top.up[-1, -1]))          # a flat tip's chord
-        for q in reversed(patches):                                          # down the TE seams
-            e = q.up_column(-1)
-            if e is not None:
-                edges.append(e)
-        parts.append(_wire_face(edges))
-        notes.append("half body: the LE-to-TE side, closed on the plane of symmetry")
+    for name, uk in (("le", k_strip), ("cen_a", k_cen), ("te", k_strip), ("cen_b", k_cen)):
+        parts.append(_surface_face(grids[name], uk, vk, 3, vd))
+    if k < n:
+        parts.append(_surface_face(tip, k_cen, k_wrap, 3, 3))
+    else:
+        parts.append(_wire_face([_bspline_edge(grids[nm][-1], uk, 3) for nm, uk in
+                                 (("le", k_strip), ("cen_a", k_cen), ("te", k_strip), ("cen_b", k_cen))]))
+    parts.append(_wire_face([_bspline_edge(grids[nm][0], uk, 3) for nm, uk in
+                             (("le", k_strip), ("cen_a", k_cen), ("te", k_strip), ("cen_b", k_cen))]))
 
     solid, free = _sew_solid(parts, sew_tol)
+    if half:                                           # cut on the plane of symmetry: the surfaces stay the
+        solid = _half_cut(solid, loops, thick, raw[0][1])            # full body's, the volume exactly half
+        notes.append("half body: the LE-to-TE side, cut on the plane of symmetry")
     BRepCheck_Analyzer = _occ("BRepCheck", "BRepCheck_Analyzer")
     valid = bool(BRepCheck_Analyzer(solid).IsValid())
     vol, area = mass_properties(solid)
     return LoftResult(solid, valid, vol, area, free, err, k, n - k, time.time() - t0, notes,
-                      len(parts), v_err, bool(half))
+                      count_faces(solid), v_err, bool(half))
 
 
 # --------------------------------------------------------------------------

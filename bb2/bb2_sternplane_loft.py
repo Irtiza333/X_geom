@@ -1,22 +1,23 @@
 """
 bb2_sternplane_loft.py
 
-BB2's stern plane rebuilt with the mesh patch topology of xcad_loft (user, 5 Nov 2026), and the set-up files
-of bb2_sternplanes.py written again with it; the hull and the propeller stay as bb2_build.py made them.
+BB2's stern plane rebuilt with xcad_loft's mesh patch topology, the blade's five-patch decomposition (user,
+6 Nov 2026), and the set-up files of bb2_sternplanes.py written again with it; the hull and the propeller
+stay as bb2_build.py made them.
 
 The stern plane of hull.iges (bb2_sternplane.step) is one imported B-rep whose patches do not follow the mesh
 blocking. It is sectioned here and lofted again: cuts normal to its span (the 45 deg direction, planes at
 constant s = (y + z) / sqrt(2)) from S0, about 130 mm under the hull at the trailing edge, up to the foot of
-the tip cap at s = 6811.5 mm, close together over the collar band (the last 200 mm), where the TE-tip
-corner's rounding sweeps the TE forward; above it the cap is resampled into rings (cuts normal to x at the chord
+the tip cap at s = 6811.5 mm, close together over the last 200 mm, where the TE-tip corner's rounding
+sweeps the TE forward; above it the cap is resampled into rings (cuts normal to x at the chord
 stations give the cap's cross profile from the base over the crest; a ring holds the points at one fraction
 of each profile's arc, symmetrized onto +-w, runs through the cap's two base corners, and is resampled by
 arc into the flat sections' layout, which keeps the loft's columns coherent at the corners). Each loop is laid out as
 xcad_loft expects (201 points, the LE first, the w < 0 side to the TE and back) in the frame (x, w, s), w
 along (0, 1, -1)/sqrt(2) so the triad is right-handed; loft_loops builds the solid there, and it is turned
-to the STP frame after: the side up to the collar (COLLAR_MM below the cap's foot), the tip band,
-the cap rim to the line where its edge rounding meets the deck, the crown to the ridge, seams at the LE and
-the TE; nine faces. Below s = 2920 the plane's buried root is chopped by its sloping root face, so the
+to the STP frame after: the LE and TE strips wrapping their edges (strip_frac of the root chord wide), the
+central pressure and suction panels, the tip patch over the top TIP_FRAC of the span, and the flat root; six
+faces. Below s = 2920 the plane's buried root is chopped by its sloping root face, so the
 sections there are synthesized instead: the straight taper continued, a linear fit per loop point over the
 full sections at s = 2920 to 3720 (which lie within 0.1 mm of it). The chop sits 150 mm or more inside the
 hull, so wherever the synthetic root differs from the solid the difference is buried; against the true
@@ -30,7 +31,7 @@ bb2_vehicle6_rudders (.step/.iges), bb2_hull_hub_rudder_quadrant.iges, bb2_hull_
 (.step/.iges) and bb2_quadrant_sector (.step/.iges); and the lofted plane itself as
 bb2_sternplane_loft.step/.iges (bb2_sternplane.step stays the extracted original).
 
-    python bb2_sternplane_loft.py [out_dir]        (reads bb2_build.py's outputs; about 14 min)
+    python bb2_sternplane_loft.py [out_dir]        (reads bb2_build.py's outputs; about 17 min)
 """
 
 import os
@@ -55,19 +56,22 @@ S0 = 1850.0                                                # the loft's root, mm
 S_FULL = 2920.0                                            # the chop ends at 2918: full sections above
 FIT_S = np.arange(2920.0, 3721.0, 80.0)                    # the root taper's fit runs over sections here
 S_CAP = 6811.5                                             # the cap's foot: the side faces end at 6812
-N_FLATS = 112                                              # sections from S0 up to the collar
-N_TIP = 40                                                 # sections over the collar band, 5 mm apart: the
-                                                           # TE-tip corner's rounding (s 6787 on) needs them,
-                                                           # and the band must hold more rows than poles;
-                                                           # they stop 2.5 mm under the cap's foot, the first
-                                                           # ring being the band's next row
+N_FLATS = 112                                              # sections from S0 up to the dense band
+N_TIP = 40                                                 # sections over the band (the last BAND_MM), 5 mm
+                                                           # apart: the TE-tip corner's rounding (s 6787 on)
+                                                           # needs them in the smooth interim the tip patch
+                                                           # resamples; they stop 2.5 mm under the cap's
+                                                           # foot, the first ring being the next row
 N_PTS = 201                                                # points per loop (the LE first, TE at index 100)
+TIP_FRAC = 0.03                                            # the tip patch owns the top 3 % of the span: the
+                                                           # cap is 1 % of it, and a taller tip patch makes
+                                                           # the wrap family too uneven to fit cleanly
 N_POLES = 60                                               # poles of a section curve: 40 leaves the fit at
                                                            # the TE's blunt roll near 0.65 mm and lets the
                                                            # seam fold there; 60 holds it near 0.3 mm, valid
 N_CHORD = 99                                               # interior chord stations of a cap ring
 RING_F = (0.03, 0.07, 0.12, 0.19, 0.28, 0.38, 0.50, 0.62, 0.74, 0.85, 0.93, 0.98)   # arc fractions, base to crest
-COLLAR_MM = 200.0                                          # the side splits this far below the cap's foot
+BAND_MM = 200.0                                            # the dense station band under the cap's foot
 CHECK_S = (2100.0, 2500.0, 3000.0, 4000.0, 5000.0, 6000.0, 6600.0, 6800.0)
 CHECK_X = (5400.0, 5600.0, 6000.0, 7000.0, 8000.0, 8050.0, 8075.0)
 
@@ -276,11 +280,11 @@ def main():
     base = flat_loop(plane, S_CAP)
     corners = float(base[:, 0].min()), float(base[:, 0].max())
     a, b = root_fit(plane)
-    stations = np.r_[np.linspace(S0, S_CAP - COLLAR_MM, N_FLATS, endpoint=False),
-                     np.linspace(S_CAP - COLLAR_MM, S_CAP - 2.5, N_TIP)]
+    stations = np.r_[np.linspace(S0, S_CAP - BAND_MM, N_FLATS, endpoint=False),
+                     np.linspace(S_CAP - BAND_MM, S_CAP - 2.5, N_TIP)]
     loops = [synth_loop(a, b, s) if s < S_FULL else flat_loop(plane, s) for s in stations]
     loops += cap_rings(plane, corners)
-    res = XL.loft_loops(loops, n_poles=N_POLES, v_poles=30, collar_mm=COLLAR_MM)
+    res = XL.loft_loops(loops, n_poles=N_POLES, v_poles=30, tip_frac=TIP_FRAC)
     if res.shape is None or not res.valid or res.free_edges:
         raise RuntimeError(f"the loft failed: {res}")
     m = np.column_stack((np.array([1.0, 0.0, 0.0]), E_THICK, E_SPAN))      # x -> m x: to the STP frame

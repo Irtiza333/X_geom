@@ -219,10 +219,11 @@ def test_case(tmp):
         return
     cad = WM.write_cad(tmp, "c1", paths["xcad_m.dat"])
     lr = cad["loft"]
-    check("the loft: one valid solid, closed, 4 faces (the two sides, the flat root and tip), its volume the "
-          "sections' (fraction)", [lr.valid, lr.free_edges, XL.count_faces(lr.shape),
-                                   lr.volume / out["volume_mm3"] - 1.0, os.path.exists(cad["cad_paths"]["step"])],
-          [1, 0, 4, 0, 1], 2e-3)
+    check("the loft: one valid solid, closed, 6 faces (the four wrap patches, the flat root and top), its "
+          "volume the sections' (fraction)", [lr.valid, lr.free_edges, XL.count_faces(lr.shape),
+                                              lr.volume / out["volume_mm3"] - 1.0,
+                                              os.path.exists(cad["cad_paths"]["step"])],
+          [1, 0, 6, 0, 1], 2e-3)
     try:
         WM.write_cad(tmp, "c1h", paths["xcad_m.dat"], half=True)
         refused = 0
@@ -234,9 +235,10 @@ def test_case(tmp):
     outf = WM.write_case(tmp, "fh", df, pf, cad=False, settings={"sections": 21}, plot=False)
     lrf = WM.write_cad(tmp, "fh_full", outf["paths"]["xcad_m.dat"])["loft"]
     lrh = WM.write_cad(tmp, "fh_half", outf["paths"]["xcad_m.dat"], half=True)["loft"]
-    check("the fin's half body: valid, closed, 4 faces (side, half root, half tip, the plane of symmetry), "
-          "half the volume", [lrh.valid, lrh.free_edges, lrh.half, XL.count_faces(lrh.shape),
-                              lrh.volume / lrf.volume], [1, 0, 1, 4, 0.5], 1e-6)
+    check("the fin's half body: valid, closed, 6 faces (the wrap patches and the ends cut on the plane of "
+          "symmetry, and the plane itself), half the volume",
+          [lrh.valid, lrh.free_edges, lrh.half, XL.count_faces(lrh.shape),
+           lrh.volume / lrf.volume], [1, 0, 1, 6, 0.5], 1e-5)
 
 
 def test_adapter(tmp):
