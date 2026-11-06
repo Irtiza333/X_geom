@@ -305,6 +305,20 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   (CAD and window skipped). The collar height and the cap split are `collar_mm` and `crown` in
   `modify_control.ModifySettings`.
 
+- BB2 set-up with the relofted stern plane (5 Nov 2026): `bb2/bb2_sternplane_loft.py` rebuilds the stern
+  plane with the mesh patch topology (nine faces; the chopped buried root continued as the straight taper,
+  the cap as symmetrized rings resampled by arc into the sections' layout, 60 section poles for the blunt
+  TE roll) and writes the set-up files again under the 22 Oct names; `bb2_sternplane.step` stays the
+  extracted original, `bb2_sternplane_loft.step/.iges` is the rebuilt plane. Every output one valid solid;
+  cuts against the original within 0.7 mm (the exposed span 0.17 to 0.38), the part outside the hull within
+  1.5e-4 by volume, the sector turn unchanged. The hull and the propeller as bb2_build.py made them. About
+  14 min. In `bb2/` and `bb2/outputs/` here; `claude/bb2.md` has the details.
+
+- `temp_rudder_cad.py` (5 Nov 2026): rebuilt on `xcad_loft.loft_loops`, so its solid carries the new patch
+  topology (nine faces); the same files in, the same `.step` out. The full section file gives the same solid
+  as the topology work's loft (583,340 mm^3, fit 0.074 mm, valid). In X_geom and the Rudder folder
+  (byte-identical).
+
 ## Next steps
 
 - Wings and fins: the tips (next; user, 8 Oct 2026), then a check on the user's machine of the wing, the fin and
