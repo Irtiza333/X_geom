@@ -333,6 +333,11 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   four-sided tip patch on the blunt cap corners. Volume outside the hull within 3.2e-4 of the original. All
   four test suites pass. In X_geom and the Rudder folder (byte-identical shared files).
 
+- Input files, LF (6 Nov 2026): `write_component` and `write_assembly` write LF line endings on every
+  platform, so a saved component or assembly file is byte-identical across machines (`_xgeom_files_test.py`
+  checks both); the file-format spec is in the repo as `claude/xgeom-file-formats.md` (the path
+  xgeom_files.py's docstring names), for the web front end building on these files.
+
 ## Next steps
 
 - Wings and fins: the tips (next; user, 8 Oct 2026), then a check on the user's machine of the wing, the fin and

@@ -127,6 +127,7 @@ def test_blade(tmp):
     p2 = BM.write_component(os.path.join(tmp, "blade2.txt"), back.params, back.design, back.space, back.settings,
                             back.name, back.notes)
     check("written again from what was read: the same file", filecmp.cmp(p1, p2, shallow=False), 1, 0)
+    check("LF line endings on every platform", open(p1, "rb").read().count(b"\r"), 0, 0)
     lines = open(p1).read().splitlines()
     i = next(k for k, s in enumerate(lines) if not s.startswith("#")) + 10
     edited = lines[:i] + [lines[i].replace(lines[i].split()[1], f"{float(lines[i].split()[1]) + 0.01:.8f}", 1)] \
@@ -261,6 +262,7 @@ def test_assembly(tmp):
                       {"prop_dx": "0", "rudders": "4", "rudder_rake": "none"}, {"samples": "30", "seed": "1"})
     path = XF.write_assembly(os.path.join(tmp, "asm.txt"), asm)
     back = XF.read_assembly(path)
+    check("the assembly file: LF line endings on every platform", open(path, "rb").read().count(b"\r"), 0, 0)
     check("written and read back: name, notes, components, placement, run; the component paths resolved",
           [back.name == "suboff", back.notes == asm.notes, back.components == asm.components,
            back.placement == asm.placement, back.run == asm.run,

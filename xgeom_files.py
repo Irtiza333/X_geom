@@ -5,7 +5,8 @@ The XGeom input files (claude/xgeom-file-formats.md): the component file, one la
 (propeller blade, rudder, fin, wing, hull), and the assembly file, which places the components on the hull and
 defines an optimization run. This module reads and writes their text; blade_modify, wing_modify and hull_modify
 turn a component into their parameters, design and design space and back (load_component, write_component).
-Standard library and numpy only.
+Standard library and numpy only. Files are written with LF line endings on every platform, so the same
+content gives the same bytes on any machine.
 
 Component file ('#' lines are the header, the rest is one table, which np.loadtxt reads):
 
@@ -514,10 +515,10 @@ def component_text(comp):
 
 
 def write_component(path, comp):
-    """Write a component file (read_component reads it back)."""
+    """Write a component file (read_component reads it back; LF line endings on every platform)."""
     folder = os.path.dirname(os.path.abspath(path))
     os.makedirs(folder, exist_ok=True)
-    with open(path, "w") as fh:
+    with open(path, "w", newline="\n") as fh:
         fh.write(component_text(comp))
     return path
 
@@ -641,7 +642,7 @@ def assembly_text(asm):
 
 def write_assembly(path, asm):
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    with open(path, "w") as fh:
+    with open(path, "w", newline="\n") as fh:
         fh.write(assembly_text(asm))
     return path
 

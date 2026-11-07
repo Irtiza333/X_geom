@@ -1,0 +1,160 @@
+# XGeom input files
+
+The standard input and output files of the XGeom tool: one layout for every component (propeller blade,
+rudder, fin, wing, hull) and an assembly file that places the components and defines an optimization run.
+The GUI loads the files and writes them back (Save set-up); Initial_sampling.py and the infill read the
+assembly. XGeom is the pre-optimization design step.
+
+## Decisions (26 Oct 2026)
+
+- One component file per part, plain text `.txt`: a `#` header and one table (np.loadtxt reads the table).
+- Every lifting surface has the same six distributions in one column order; a rudder has 0 in pitch and rake.
+- Only the span coordinate is normalized: r/R for the blade, eta = y/span for the others (0 to 1). The values
+  keep each kind's usual units: blade P/D, c/D, skew deg, rake/D; rudder, fin, wing deg and mm; hull x and r
+  in m.
+- The file holds everything the tool sets: geometry, settings, each distribution's form (as the table has it,
+  1-segment Bezier with its number of points, 2-segment Bezier) and per variable its value, bounds and free flag.
+- The table is the design: the var lines define each Bezier curve and its column is that curve at the rows
+  (a table-form curve is its column). Saving a design replaces the reference data it was fitted to (SUBOFF's
+  hull: the CST half-heights, within 0.12 mm of its equations); the original file keeps them.
+- The rudder is a planar lifting surface on the fin's engine: six distributions over eta, its section shape
+  from the extracted rudder, the section's spanwise changes as dt columns. The wind-tunnel rudder is fitted
+  into one such file. Tip flat and TE closed for now. The modified-below-H model stays as modify_control.py
+  and as its own entry in the tool (rudder-h), outside the standard files.
+- Optimization runs vary the propeller only for now: the run's variables are the blade file's free variables;
+  the hull and the appendages are fixed (their CAD written once); each sample's CAD is the blade with its hub
+  sector, as the mesh step takes it. Initial_sampling.py takes the assembly beside the MSc path, so a running
+  campaign is unaffected; the infill reads the same variables and bounds from the assembly.
+- Old .dat parameter files still load; the JSON set-ups are replaced by the component files (the rudder-h
+  model keeps its JSON).
+- Case outputs: `<case>.txt` (the design as a component file) in place of `<case>_params.dat` and
+  `<case>_design_space.json`.
+
+## Component file
+
+```
+# XGeom component
+# kind          blade
+# name          bb2_propeller
+# note          MARIN stock propeller S7371R of BB2
+# ---- geometry
+# diameter_m    5
+# blades        6
+# root_r        0.2
+# hub_height_m  1
+# section       bb2_section_table.dat
+# ---- settings
+# sections      56
+# tip_band      0.93
+# tip_sections  14
+# clearance_mm  25
+# hub           Y
+# ---- curves and variables
+# var    radius     2.5     2.25  2.75  N
+# curve  pitch      bezier2
+# var    pitch.v1   1.2413  0.60  1.40  Y
+# curve  skew       table
+# ---- distributions
+# r/R     P/D     c/D     t/c     f/c     skew_deg  rake/D
+  0.2000  1.2413  0.2452  0.2159  0.0304  0.2758    0.0000
+```
+
+Header lines:
+- `# XGeom component` first; `# kind`, `# name`, `# note` (free text, repeatable).
+- Geometry and settings keys, per kind (below). An unknown key is an error.
+- `# curve <name> <form>`: `table` (the column as it is: the cubic spline through the rows, no variables),
+  `bezier1 <points>`, `bezier2` (x_blade's form, P1 to P7), and for the hull `cst <order>`.
+- `# var <name> <value> <low> <high> <Y|N>`: one line per variable, Y free (values written to 12 figures).
+- `# vary <name> Y|N [low high]`: accepted in hand-written files (blade_vary.py), not written.
+- `# ---- <title>`: separators, ignored. The last `#` line before the table names the columns.
+
+Keys and columns:
+
+| kind | geometry | settings | columns |
+|---|---|---|---|
+| blade | diameter_m, blades, root_r, hub_height_m, section, section_tables | sections, tip_band, tip_sections, clearance_mm, hub | r/R P/D c/D t/c f/c skew_deg rake/D |
+| rudder, fin, wing | span_mm, section, ref_xc, camber_xc | sections, change_points | eta pitch_deg chord_mm t/c f/c sweep_mm rake_mm [dt1 .. dtk dc1 .. dck] |
+| hull | nose_m, middle_m, tail_m, cap_m, axisymmetric | | x_m r_m [rp_m] |
+
+Rules:
+- The var lines define a Bezier curve exactly; its column is the curve at the rows, so Save and Load
+  round-trip (a rewrite gives the same file). A column edited under its curve's var lines is refused with a
+  message; delete the curve's var lines and it is fitted to the column (default bounds; free per vary lines,
+  else held).
+- A geometry value and the var line of the same quantity (diameter_m and radius, span_mm and span, the hull's
+  lengths) must agree.
+- `section`: a file relative to the component file when one exists (a para.py section table, told apart by its
+  comma-separated rows of 4 numbers, or airfoil coordinates, x y per line), else an airfoil by name
+  (airfoils.py). A name that is no known airfoil fails the load with the file and the close matches named, so
+  a missing table is never papered over silently.
+- `section_tables` (blade only): the per-radius section tables, one para.py table per r/R station in one file
+  (`# r/R <value>` block headers; bb2_section_tables.dat has 34). The key is kept and written back
+  (load_component returns it under `extra`), and the path is read like `section`, relative to the component
+  file; the tool itself builds with `section` alone for now. Only bb2_build.py consumes per-radius shapes.
+- Component and assembly files are written with LF line endings on every platform (write_component,
+  write_assembly), so the same design gives byte-identical files on any machine, and a rewrite of a loaded
+  file gives the same bytes (round-trip tested with filecmp in `_xgeom_files_test.py`).
+
+Code: `xgeom_files.py` (the text, `load` and `convert`); `load_component` and `write_component` in
+`blade_modify.py`, `wing_modify.py` and `hull_modify.py`. Old files: `python xgeom_files.py convert old.dat
+new.txt`. Examples in X_geom (the tool's defaults): `msc_blade.txt`, `wing.txt`, `fin.txt`, `suboff_hull.txt`.
+
+## Assembly file
+
+```
+# XGeom assembly
+# name           bb2
+# hull           bb2_hull.txt
+# blade          bb2_blade.txt
+# rudder         bb2_sternplane.txt
+# ---- placement
+# prop_dx        0
+# prop_d         5
+# rudder_dx      -0.36
+# rudder_angle   45
+# rudders        4
+# rudder_scale   1
+# rudder_rake    0
+# fins           0
+# wings          0
+# view           stern
+# ---- optimization run
+# samples        30
+# batch          10
+# seed           20261010
+# cad_timeout_s  2000
+```
+
+- Component paths are relative to the assembly file.
+- The placement keys are the Vehicle tab's (xgeom_vehicle.Placement); rudder_rake is `none` (pitched to the
+  hull's slope) or deg.
+- The run's design vector is the components' free var lines, named `<kind>.<var>` (for example
+  `blade.pitch.v1`), with the file values as the baseline. samples: round-0 designs; batch: designs per infill
+  round.
+
+## GUI
+
+- The File box's Load ... reads a component file (or an old .dat) and sets the whole panel. Save set-up ...
+  writes the component file; the dialog opens on the file it came from (an old .dat gives a .txt beside it).
+- Vehicle tab (step 4): Load assembly ... and Save assembly ... (each component written to its file; old .dat
+  sources as new .txt files beside the assembly).
+- `python xgeom_tool.py --file <component file>` (`--params` the same); `--assembly <file>` (step 4).
+
+## Steps
+
+1. File layer and the mapping per kind, round-trip tests; the example files converted. Done 26 Oct 2026.
+2. GUI load and save. Done 26 Oct 2026.
+3. The planar rudder; the wind-tunnel rudder fitted into a file.
+4. The assembly: file, Vehicle tab, SUBOFF and BB2 examples.
+5. Initial_sampling.py and the infill read the assembly.
+
+## Status
+
+26 Oct 2026: design agreed (all three questions answered with the recommended option). Steps 1 and 2 done and
+installed in X_geom (xgeom_tool.py also in the Rudder folder): checked in the cloud (`_xgeom_files_test.py
+--gui` and the blade, wing, hull and tool checks with `--gui` and OCC) and on the user's machine
+(`_xgeom_files_test.py`).
+
+6 Nov 2026: LF line endings pinned in the writers, with checks in `_xgeom_files_test.py`, so saved files are
+byte-identical across machines; this spec added to the repo as `claude/xgeom-file-formats.md` (the path
+xgeom_files.py's docstring names).
