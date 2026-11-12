@@ -33,6 +33,16 @@ fit rippled there).
   span on common parameters and knots: identical boundary data, parameters
   and knots make the shared boundary curves identical, so the faces sew
   watertight.
+- A small rounded TE gets the TE strip to itself (user, 12 Nov 2026: the TE
+  showed a row of teeth in the mesher). With one strip_frac given, a TE
+  strip more than twice as wide as the TE's rounding is narrowed to it: 1.5
+  times the arc from the TE to where the curvature has fallen to a quarter
+  of its peak (_edge_rounding; the wind-tunnel rudder's 0.75 mm round: 1.7
+  mm to each side instead of 12.6). The surface was smooth either way; but a
+  viewer or a mesher draws a patch with triangles sized for the patch, and
+  a round a tenth of the patch wide in its middle comes out as teeth along
+  the edge. As its own narrow patch between two straight edges, as the TE
+  round is in the original CAD, it is drawn clean. A pair is used as given.
 - The tip patch is one grid over the cap: its u = 0 and u = 1 edges are the
   strips' top rows, its v = 0 and v = 1 edges the central panels' top rows
   (the pole rows are shared verbatim). The cap is meshed from the rim, the
@@ -42,17 +52,20 @@ fit rippled there).
   the grid is the least-squares tensor fit to the map's inverse. The knots
   are denser towards the patch's edges, where the tip's wall and edge
   rounding sit.
-- A step from one horizontal loop to the next (modified sections under
-  the original ones: the sections' fits differ from the extracted loops by
-  a tenth of a mm where the two meet) cannot be followed without a ripple
-  round the body. It is found where loops miss a fit of their points along
-  the span, and taken out of the loops over a band below it and one above,
-  tall enough for the surface to tilt by 0.1 deg at most (_ease_flats;
-  ease names the side that gives way, both by default), so the patches
-  cross it smoothly. The step and the bands are reported in the notes and
-  in the result's steps; the distances reported are those of the loops as
-  given. A step right under a tilted tip section (modified sections up to
-  the top one) has no loops above it to ease into and stays a blend.
+- A step from one horizontal loop to the next (sections from another
+  source under the extracted ones: a rudder's Bezier model alone lies a
+  tenth of a mm off its extracted loops, which is why rudder_modify writes
+  the extracted sections plus the model's change since 12 Nov 2026; a TE
+  radius other than the original's still steps) cannot be followed without
+  a ripple round the body. It is found where loops miss a fit of their
+  points along the span, and taken out of the loops over a band below it
+  and one above, tall enough for the surface to tilt by 0.1 deg at most
+  (_ease_flats; ease names the side that gives way, both by default), so
+  the patches cross it smoothly. The step and the bands are reported in
+  the notes and in the result's steps; the distances reported are those of
+  the loops as given. A step right under a tilted tip section (sections
+  that step up to the top one) has no loops above it to ease into and
+  stays a blend.
 - half=True cuts the sewn full body on the plane of symmetry and keeps the
   LE-to-TE side: the same surfaces, trimmed, closed by one planar face. The
   loops must be symmetric about the plane within sym_tol.
@@ -270,6 +283,8 @@ class LoftResult:
     steps: list = field(default_factory=list)      # steps between horizontal loops eased out of them: (the
                                    # loop under the step counted from 1, the step mm, how far it is eased
                                    # below and above mm, the shares of it taken below and above)
+    strips: tuple = (0.0, 0.0)     # how far the LE strip and the TE strip reach to each side of their edge, mm
+    te_round: bool = False         # the TE strip was narrowed to the TE's rounding
 
 
 def _thru(wires, solid, ruled, max_degree=None):
@@ -438,8 +453,8 @@ def _ease_flats(flats, z_axis, v_poles, tol, side="both", ease_deg=EASE_DEG):
     """The horizontal loops with the steps between them eased out: (loops, [(the loop under the step counted
     from 1, the step mm, how far it is eased below and above mm, the shares of it taken below and above)]).
 
-    A step from one loop to the next (modified sections under the original ones: the sections' fits differ
-    from the extracted loops by a tenth of a mm where the two meet) cannot be followed by a smooth surface;
+    A step from one loop to the next (sections from another source under the extracted ones, as a rudder's
+    Bezier model alone, a tenth of a mm off its extracted loops) cannot be followed by a smooth surface;
     fitted as it is, it leaves a ripple round the body. The loops' points are fitted along the span as the
     patches' rows will be; where loops still miss that fit by more than tol, the pair of neighbouring loops
     with the largest jump (what the loops' own trend on both sides does not explain) marks a step. The jump
@@ -553,6 +568,11 @@ def _wire_face(edges):
 # --------------------------------------------------------------------------
 
 N_DENSE = 1501                             # points per side of a row's smooth polyline
+ROUND_DROP = 0.25                          # the TE's rounding ends where the curvature has fallen to this
+                                           # share of its peak round the TE (_edge_rounding)
+ROUND_MARGIN = 1.5                         # a TE strip narrowed to the rounding reaches this many times the
+                                           # rounding's arc to each side of the TE
+ROUND_SMALL = 0.5                          # ... which is done when that is under this share of the strip
 CAP_STATIONS = 401                         # stations along the chord of the cap's mesh
 CAP_ACROSS = 81                            # points from the rim to the ridge on each wrap of the cap's mesh
 SPAN_TOL = 3.0e-5                          # the span fit adds knots where a pole row misses its grid by this
@@ -614,65 +634,106 @@ def _at_arc(p, s, stations):
     return out
 
 
-def _smooth_loop(lp, i_te, n=N_DENSE):
-    """A loop as a dense smooth polyline in the loops' layout (LE first, the TE at index n - 1, closing on
+class _SmoothLoop:
+    """A loop as its smooth curve, in the loops' layout (LE first, the A side to the TE, the B side back to
     the LE): the cubic spline through its points over their chord length, periodic unless the TE is a corner
-    (a closed sharp TE: one open curve from the TE round the LE back to the TE). Sampling the rows from it
-    rather than from the points' polygon keeps the polygon's corners out of the patches."""
-    from scipy.interpolate import CubicSpline
-    lp = np.asarray(lp, dtype=float)
-    if np.linalg.norm(lp[0] - lp[-1]) > 1.0e-9:
-        lp = np.vstack((lp, lp[:1]))
-    m = len(lp)
-    a, b = lp[i_te] - lp[i_te - 1], lp[i_te + 1] - lp[i_te]
-    cosang = float(a @ b) / max(float(np.linalg.norm(a) * np.linalg.norm(b)), 1e-300)
-    seg = np.maximum(np.linalg.norm(np.diff(lp, axis=0), axis=1), 1e-12)
-    if np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0))) > 100.0:
-        q = np.vstack((lp[i_te:], lp[1:i_te + 1]))                 # TE -> B side -> LE -> A side -> TE
-        s = np.r_[0.0, np.cumsum(np.r_[seg[i_te:], seg[:i_te]])]
-        cs = CubicSpline(s, q, axis=0)
-        s_le = s[m - 1 - i_te]
-        side_b = cs(np.linspace(0.0, s_le, n))                     # TE -> LE
-        side_a = cs(np.linspace(s_le, s[-1], n))                   # LE -> TE
-    else:
-        s = np.r_[0.0, np.cumsum(seg)]
-        q = lp.copy()
-        q[-1] = q[0]
-        cs = CubicSpline(s, q, axis=0, bc_type="periodic")
-        side_a = cs(np.linspace(0.0, s[i_te], n))
-        side_b = cs(np.linspace(s[i_te], s[-1], n))
-    out = np.vstack((side_a, side_b[1:]))
-    out[0], out[n - 1], out[-1] = lp[0], lp[i_te], lp[0]
-    return out, n - 1
+    (a closed sharp TE: one open curve from the TE round the LE back to the TE).
+
+    dense   the curve as a polyline of 2 n - 1 points (the LE at 0 and at the end, the TE at it = n - 1)
+    s       the polyline's arc at its points; S its length, s_te the arc at the TE
+    at()    points of the curve itself at arcs measured along that polyline: rows are sampled from the curve,
+            not from the polyline, whose corners a strip a few mm wide would otherwise take up
+    """
+
+    def __init__(self, lp, i_te, n=N_DENSE):
+        from scipy.interpolate import CubicSpline, PchipInterpolator
+        lp = np.asarray(lp, dtype=float)
+        if np.linalg.norm(lp[0] - lp[-1]) > 1.0e-9:
+            lp = np.vstack((lp, lp[:1]))
+        m = len(lp)
+        a, b = lp[i_te] - lp[i_te - 1], lp[i_te + 1] - lp[i_te]
+        cosang = float(a @ b) / max(float(np.linalg.norm(a) * np.linalg.norm(b)), 1e-300)
+        seg = np.maximum(np.linalg.norm(np.diff(lp, axis=0), axis=1), 1e-12)
+        self.corner = bool(np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0))) > 100.0)
+        if self.corner:
+            q = np.vstack((lp[i_te:], lp[1:i_te + 1]))             # TE -> B side -> LE -> A side -> TE
+            s = np.r_[0.0, np.cumsum(np.r_[seg[i_te:], seg[:i_te]])]
+            cs = CubicSpline(s, q, axis=0)
+            s_le = s[m - 1 - i_te]
+            t_b = np.linspace(0.0, s_le, n)                         # TE -> LE
+            t_a = np.linspace(s_le, s[-1], n)                       # LE -> TE
+        else:
+            s = np.r_[0.0, np.cumsum(seg)]
+            q = lp.copy()
+            q[-1] = q[0]
+            cs = CubicSpline(s, q, axis=0, bc_type="periodic")
+            t_a = np.linspace(0.0, s[i_te], n)
+            t_b = np.linspace(s[i_te], s[-1], n)
+        out = np.vstack((cs(t_a), cs(t_b)[1:]))
+        out[0], out[n - 1], out[-1] = lp[0], lp[i_te], lp[0]
+        self.dense, self.it = out, n - 1
+        self.s = _loop_arc(out)
+        self.S, self.s_te = float(self.s[-1]), float(self.s[n - 1])
+        self._cs = cs
+        self._t_of = (PchipInterpolator(self.s[:n], t_a), PchipInterpolator(self.s[n - 1:], t_b))
+        self._le, self._te = lp[0].copy(), lp[i_te].copy()
+
+    def _t(self, stations):
+        st = np.mod(np.atleast_1d(np.asarray(stations, dtype=float)), self.S)
+        on_a = st <= self.s_te
+        t = np.empty(len(st))
+        t[on_a], t[~on_a] = self._t_of[0](st[on_a]), self._t_of[1](st[~on_a])
+        return st, t
+
+    def at(self, stations):
+        """Points of the curve at the arcs `stations` (any real: the loop is closed)."""
+        st, t = self._t(stations)
+        out = self._cs(t)
+        out[st <= 1.0e-12 * self.S] = self._le
+        out[np.abs(st - self.s_te) <= 1.0e-12 * self.S] = self._te
+        return out
+
+    def curvature(self, stations):
+        """The curve's curvature (1 / mm) at the arcs `stations`."""
+        _, t = self._t(stations)
+        d1, d2 = self._cs(t, 1), self._cs(t, 2)
+        return np.linalg.norm(np.cross(d1, d2), axis=1) / np.maximum(np.linalg.norm(d1, axis=1), 1e-300) ** 3
 
 
-def _row_arcs(lp, i_te, w_le, w_te, u_strip, u_cen):
-    """One loop split into the four wrap families' sample rows: (le strip,
-    central A, te strip, central B), the strips wrapping their apexes from
-    the A side (indices 0 to i_te) to the B side, the centrals running from
-    the LE split to the TE split of their side; the four split points are
-    shared exactly, the apexes sit exactly at the strips' middle sample.
-    Every row's parameter is linear in the arc along the loop."""
-    lp = np.asarray(lp, dtype=float)
-    if np.linalg.norm(lp[0] - lp[-1]) > 1.0e-9:
-        lp = np.vstack((lp, lp[:1]))
-    s = _loop_arc(lp)
-    S, s_te = s[-1], s[i_te]
+def _edge_rounding(loop, apex, window, n=600):
+    """The arc (mm) an edge's rounding reaches to each side of the edge at arc `apex` of a _SmoothLoop: the
+    farthest point within `window` of the edge where the curvature is still ROUND_DROP of its peak there (a
+    rounded TE: to where the round meets the flank; a blunt base with rounded corners: past the corners).
+    0 for a corner (a sharp TE has no rounding to wrap)."""
+    if loop.corner and abs(apex - loop.s_te) < 1.0e-9 * loop.S:
+        return 0.0
+    d = np.linspace(0.0, float(window), max(int(n), int(np.ceil(float(window) / 0.02)) + 1))
+    kap = np.maximum(loop.curvature(apex + d), loop.curvature(apex - d))
+    drop = ROUND_DROP * kap.max()
+    j = int(np.where(kap >= drop)[0][-1])
+    if j + 1 >= len(d):
+        return float(d[-1])
+    return float(d[j] + (d[j + 1] - d[j]) * (kap[j] - drop) / max(kap[j] - kap[j + 1], 1e-300))   # where it crosses
+
+
+def _row_arcs(loop, w_le, w_te, u_strip, u_cen):
+    """One loop (a _SmoothLoop) split into the four wrap families' sample rows: (le strip, central A, te
+    strip, central B), the strips wrapping their apexes from the A side to the B side, the centrals running
+    from the LE split to the TE split of their side; the four split points are shared exactly, the apexes
+    sit exactly at the strips' middle sample. Every row's parameter is linear in the arc along the loop."""
+    S, s_te = loop.S, loop.s_te
     lim = 0.45 * min(s_te, S - s_te)
     if not (w_le < lim and w_te < lim):
         raise ValueError(f"the strips ({w_le:.6g} and {w_te:.6g} mm about the LE and the TE) overlap on the "
-                         f"section at height {lp[0, 2]:.6g}: its sides are {s_te:.6g} and {S - s_te:.6g} mm "
-                         f"long (lower strip_frac)")
-    dbl = np.vstack((lp[:-1], lp))
-    s2 = np.r_[s[:-1], S + s]
-    p_le_a, p_te_a = _at_arc(lp, s, [w_le])[0], _at_arc(lp, s, [s_te - w_te])[0]
-    p_te_b, p_le_b = _at_arc(lp, s, [s_te + w_te])[0], _at_arc(lp, s, [S - w_le])[0]
-    le = _at_arc(dbl, s2, (S + w_le) - u_strip * (2.0 * w_le))
-    te = _at_arc(lp, s, (s_te - w_te) + u_strip * (2.0 * w_te))
-    cen_a = _at_arc(lp, s, w_le + u_cen * (s_te - w_te - w_le))
-    cen_b = _at_arc(lp, s, (S - w_le) - u_cen * (S - w_le - s_te - w_te))
+                         f"section at height {loop.dense[0, 2]:.6g}: its sides are {s_te:.6g} and "
+                         f"{S - s_te:.6g} mm long (lower strip_frac)")
+    p_le_a, p_te_a, p_te_b, p_le_b = loop.at([w_le, s_te - w_te, s_te + w_te, S - w_le])
+    le = loop.at((S + w_le) - u_strip * (2.0 * w_le))
+    te = loop.at((s_te - w_te) + u_strip * (2.0 * w_te))
+    cen_a = loop.at(w_le + u_cen * (s_te - w_te - w_le))
+    cen_b = loop.at((S - w_le) - u_cen * (S - w_le - s_te - w_te))
     mid = int(np.argmin(np.abs(u_strip - 0.5)))
-    le[mid], te[mid] = lp[0], lp[i_te]                     # the apexes exactly
+    le[mid], te[mid] = loop.dense[0], loop.dense[loop.it]  # the apexes exactly
     le[0], le[-1] = p_le_a, p_le_b
     te[0], te[-1] = p_te_a, p_te_b
     cen_a[0], cen_a[-1] = p_le_a, p_te_a
@@ -965,8 +1026,11 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
                 sharp turn of the planform needs them (_span_fit)
     strip_frac  each strip reaches this fraction of the root chord along the
                 section's arc to both sides of its edge (the blade's
-                constant-width rule); a pair (LE, TE) gives the two strips
-                their own fractions
+                constant-width rule). With one fraction, a TE strip more than
+                twice as wide as the TE's rounding is narrowed to the
+                rounding (ROUND_MARGIN times its arc; the module docstring
+                says why). A pair (LE, TE) gives the two strips their own
+                fractions, used as given
     half        True: the half body on the LE-to-TE side of the plane of
                 symmetry (thickness 0), the loops symmetric within sym_tol (mm)
     ease        which loops give way at a step from one horizontal loop to
@@ -1002,8 +1066,6 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
     if fr.size not in (1, 2) or np.any(fr <= 0.0):
         raise ValueError("strip_frac is one positive fraction, or a pair (LE, TE)")
     w_le, w_te = float(fr[0]) * chord_root, float(fr[-1]) * chord_root
-    widths = (f"the strips {w_le:.6g} mm wide about the LE and the TE" if w_le == w_te else
-              f"the strips {w_le:.6g} mm wide about the LE and {w_te:.6g} mm about the TE")
     notes = []
     span = float(max(lp[:, z_axis].max() for lp in loops) - loops[0][0, z_axis])
 
@@ -1020,6 +1082,18 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
         return list(loops), 0.0
 
     row_loops, band = rows_of(loops)
+    smooth = [_SmoothLoop(lp, i_te) for lp in row_loops]
+
+    # a TE strip much wider than the TE's rounding is narrowed to the rounding (one fraction given): a small
+    # round in the middle of a wide patch is more than a viewer's or a mesher's triangles of the patch resolve
+    te_round = False
+    if fr.size == 1:
+        r_te = max(_edge_rounding(lo, lo.s_te, w_te) for lo in smooth)
+        if 0.0 < ROUND_MARGIN * r_te < ROUND_SMALL * w_te:
+            w_te, te_round = ROUND_MARGIN * r_te, True
+    widths = (f"the strips {w_le:.6g} mm wide about the LE and the TE" if w_le == w_te else
+              f"the strips {w_le:.6g} mm wide about the LE and {w_te:.6g} mm about the TE"
+              + (" (the TE's rounding)" if te_round else ""))
     if k < n:
         notes.append(f"the tip patch covers the cap above loop {k + 1}; {widths}"
                      + (f"; the rows tilt onto the tip's rim over the top {band:.4g} mm" if band else ""))
@@ -1036,13 +1110,12 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
     fams = {"le": [], "cen_a": [], "te": [], "cen_b": []}
     data = {"le": [], "cen_a": [], "te": [], "cen_b": []}
     spacing, sym, err, first_a, last = [], 0.0, 0.0, None, None
-    for lp in row_loops:
-        dense, it = _smooth_loop(lp, i_te)
+    for lo in smooth:
         if half:
-            mirror = dense[it:][::-1].copy()
+            mirror = lo.dense[lo.it:][::-1].copy()
             mirror[:, thick] *= -1.0
-            sym = max(sym, float(np.abs(mirror - dense[:it + 1]).max()))
-        arcs = _row_arcs(dense, it, w_le, w_te, u_strip, u_cen)
+            sym = max(sym, float(np.abs(mirror - lo.dense[:lo.it + 1]).max()))
+        arcs = _row_arcs(lo, w_le, w_te, u_strip, u_cen)
         for name, row, a, key in (("le", arcs[0], a_strip, "strip"), ("cen_a", arcs[1], a_cen, "cen"),
                                   ("te", arcs[2], a_strip, "strip"), ("cen_b", arcs[3], a_cen, "cen")):
             poles = np.empty((a.shape[1], 3))
@@ -1060,7 +1133,7 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
     if steps:                                          # the distances reported are those of the loops as given
         data = {"le": [], "cen_a": [], "te": [], "cen_b": []}
         for lp in rows_of(given)[0]:
-            arcs = _row_arcs(*_smooth_loop(lp, i_te), w_le, w_te, u_strip, u_cen)
+            arcs = _row_arcs(_SmoothLoop(lp, i_te), w_le, w_te, u_strip, u_cen)
             for name, row in zip(("le", "cen_a", "te", "cen_b"), arcs):
                 data[name].append(row)
     if half and sym > sym_tol:
@@ -1115,7 +1188,7 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
     valid = bool(BRepCheck_Analyzer(solid).IsValid())
     vol, area = mass_properties(solid)
     return LoftResult(solid, valid, vol, area, free, err, k, n - k, time.time() - t0, notes,
-                      count_faces(solid), v_err, bool(half), steps)
+                      count_faces(solid), v_err, bool(half), steps, (w_le, w_te), te_round)
 
 
 # --------------------------------------------------------------------------

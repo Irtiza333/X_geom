@@ -86,11 +86,29 @@ def test_loft():
     check("its half body: valid, closed, 6 faces, half the volume",
           [res2h.valid, res2h.free_edges, XL.count_faces(res2h.shape), res2h.volume / res2.volume], [1, 0, 6, 0.5],
           1e-4)
+    r_te = 0.004 * 150.0                                   # the TE's round at the root: radius 0.6 mm
+    arc = r_te * (0.5 * np.pi - np.radians(10.0))          # from the TE to about where it meets the flank
+    check("one fraction: the LE strip 0.07 of the root chord, the TE strip narrowed to the TE's rounding "
+          "(1.5 times the round's arc, mm), the note says so",
+          [res2.strips[0] - 0.07 * 150.0, res2.te_round, 1.2 * arc < res2.strips[1] < 2.2 * arc,
+           "the TE's rounding" in res2.notes[0]], [0, 1, 1, 1], 1e-9)
     wide = XL.loft_loops(loops2, strip_frac=0.12)
-    check("wider strips: still valid, 6 faces", [wide.valid, XL.count_faces(wide.shape)], [1, 6], 0)
+    check("wider strips: still valid, 6 faces; the TE strip stays on the rounding",
+          [wide.valid, XL.count_faces(wide.shape), wide.strips[0] - 0.12 * 150.0, wide.strips[1] - res2.strips[1]],
+          [1, 6, 0, 0], 1e-3)
     pair = XL.loft_loops(loops2, strip_frac=(0.07, 0.03))
-    check("a strip width each for the LE and the TE: valid, 6 faces; no step found in the horizontal loops",
-          [pair.valid, XL.count_faces(pair.shape), len(res.steps)], [1, 6, 0], 0)
+    check("a strip width each for the LE and the TE is used as given: valid, 6 faces; no step found in the "
+          "horizontal loops",
+          [pair.valid, XL.count_faces(pair.shape), len(res.steps), pair.strips[1] - 0.03 * 150.0, pair.te_round],
+          [1, 6, 0, 0, 0], 1e-9)
+    lo = XL._SmoothLoop(loops2[5], 99)
+    st = np.array([0.0, 0.3 * lo.S, lo.s_te, 0.8 * lo.S, lo.S, lo.S + 2.0])
+    poly = np.column_stack([np.interp(np.mod(st, lo.S), lo.s, lo.dense[:, c]) for c in range(3)])
+    kap = lo.curvature([lo.s_te, lo.s_te - 0.3, 0.5 * lo.s_te])
+    check("rows are sampled from the loop's smooth curve: on its dense polyline to its sag, the LE and the TE "
+          "exactly; the TE round's curvature 1 / 0.6 mm, the flank's nearly none",
+          [np.abs(lo.at(st) - poly).max() < 2e-3, np.abs(lo.at([0.0, lo.s_te]) - [loops2[5][0], loops2[5][99]]).max(),
+           abs(kap[0] * 0.6 - 1.0) < 0.25, abs(kap[1] * 0.6 - 1.0) < 0.25, kap[2] < 0.05], [1, 0, 1, 1, 1], 1e-12)
     stepped = [lp.copy() for lp in loops]
     for lp in stepped[:15]:
         lp[:, 1] *= 1.01                                   # the loops below z = 36 a hundredth thicker: a step
@@ -221,9 +239,10 @@ def test_adapter():
                 lr = res["loft"]
                 print(f"       solid: volume {lr.volume:.1f} mm^3, {lr.seconds:.1f} s, {lr.faces} faces")
                 check("XCAD: a valid closed solid and its STEP file; the rudder's 6 patches (the LE and TE "
-                      "strips, the central panels, the tip, the root); no step at H for the loft to ease",
-                      [lr.valid, lr.free_edges, os.path.exists(res["step"]), lr.faces, len(lr.steps)],
-                      [1, 0, 1, 6, 0], 0)
+                      "strips, the central panels, the tip, the root); no step at H for the loft to ease; "
+                      "the TE strip on the 0.75 mm round alone (1.5 to 2 mm to each side)",
+                      [lr.valid, lr.free_edges, os.path.exists(res["step"]), lr.faces, len(lr.steps), lr.te_round,
+                       1.5 < lr.strips[1] < 2.0], [1, 0, 1, 6, 0, 1, 1], 0)
                 hres = ad.build_xcad("th", plot=False, cad=True, half=True)
                 hlr = hres["loft"]
                 check("XCAD half body: valid, 6 faces, half the volume",
@@ -247,6 +266,9 @@ def test_adapter():
         check("every curve stays pinned to the original at H",
               max(abs(ad.design.curve(c)([0.0])[0, 1] - ad.orig.value(c, ad.design.H)[0]) for c in ad.names), 0.0,
               1e-12)
+        check("strip_frac from modify_control: one fraction, or a pair (LE, TE) kept as a pair",
+              [XR._strip_frac(0.07), *XR._strip_frac((0.07, 0.05)), np.ndim(ad.settings["strip_frac"])],
+              [0.07, 0.07, 0.05, 0], 0)
         thin = XR.RudderAdapter()
         thin.set("P1z.v3", 0.002)                            # a nose far thinner than the model's fit is off
         pv = thin.preview(skeleton=True)

@@ -387,6 +387,31 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   refused by name (a problem in the tool). Another TE radius still shows as a change, and steps at H;
   `_ease_flats` stays for stacks that step. Tests: modify 137 (29 new, on a bumped synthetic original the
   model cannot hold), tool 40 with the GUI (21 without OCC), hull 59, wing 51, files 53.
+- TE strip on the TE's rounding (12 Nov 2026; the user's screenshot from the mesher: a row of teeth along
+  the TE from the tip corner down, read as folds; his suggestion: lower-order surfaces). Measured on his
+  STEP, the TE strip is smooth there (along the span within 0.0001 mm of its own trend, its normals within
+  0.06 deg; the sides within 0.005 mm of the original CAD), so the patches' order is not what the picture
+  shows. A viewer or a mesher draws each patch with triangles sized for the patch; the strip was 25 mm wide
+  with the 0.75 mm round (2.1 mm of arc) in its middle, and display triangles a few mm long crossing the
+  round come out as teeth, one per row (the spacing in the screenshot, about 3.7 mm, fits; emulated here
+  with display meshes on the same STEP, where the surface drawn from its own normals is clean). In the
+  original CAD the TE round is a face of its own between straight edges, which draws clean.
+  `xcad_loft.loft_loops`: with one `strip_frac`, a TE strip more than twice as wide as the TE's rounding is
+  narrowed to it (`_edge_rounding`: the arc from the TE to where the curvature has fallen to a quarter of
+  its peak; 1.5 times that to each side: 1.74 mm on this rudder instead of 12.62). A sharp TE keeps the
+  fraction; a pair (LE, TE) is used as given (BB2's stern plane; `ModifySettings.strip_frac` takes a pair
+  too). `LoftResult.strips` and `te_round` record it. Five patches and the root as before, six faces. Rows
+  are now sampled from each loop's smooth curve itself (`_SmoothLoop.at`), not by linear interpolation
+  along its 1501-point polyline, whose corners a strip that narrow would take up: the loops lie within
+  0.00012 mm of the patches (0.0018 before). The wind-tunnel rudder: valid, 583,363.2 mm^3, area
+  73,229.80 mm^2 (the STEP's 73,229.84), the half body half; the STEP's mesh vertices within 0.004 mm of
+  the sides (0.005 before; rms 0.0006), the tip 0.108 as before; the TE strip along the span within
+  0.00003 mm of its trend. `Rudder/outputs/wind_tunnel_rudder_full.igs` and `_half.igs` written again.
+  BB2's stern plane relofted here as a check only (its pair of strips as given): valid, its section cuts
+  within 0.01 to 0.03 mm (0.03 to 0.05 before); the files in `bb2/outputs` are still those of 11 Nov. Left
+  as it is: the tip patch holds its 0.7 mm edge rounding and its end closures inside one patch, which a
+  coarse display may blur; the cure would be a band of their own. Tests: tool 43 with the GUI (22 without
+  OCC), wing 51, hull 59, files 53.
 
 ## Next steps
 
@@ -401,6 +426,7 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
 - Optimisation: sample a saved set-up (`load_component`, `Initial_sampling.py`), screen
   designs with the problem checks, couple to CFD. `Initial_sampling.py` varies pitch and chord only (x_blade_new's
   form); other parameters flagged Y are reported, not sampled.
-- Rudder: the tip tilt and cap parameters into the design space.
+- Rudder: the tip tilt and cap parameters into the design space. If the mesher draws the tip's rounded edge
+  the way it drew the TE: a band of its own for it (as the TE strip now is for the TE's round).
 - Open items: section-fit bounds (X2 on its bound) and an LE-radius constraint; plain-named rudder outputs are
   overwritten by runs at other heights; Fig. 5 of the plan still labels the tip y = 218.07.

@@ -68,6 +68,9 @@ class ModifySettings:
                                    # domain; the sections are symmetric, so either side is the same)
     strip_frac: float = 0.07       # the LE and TE wrap strips reach this fraction of the root chord along the
                                    # arc to both sides of their edge (xcad_loft, the blade's constant width);
+                                   # the TE strip is narrowed to the TE's rounding (the 0.75 mm round: 1.7 mm
+                                   # to each side), so that a viewer or a mesher draws the round clean. A
+                                   # pair (LE, TE), e.g. (0.07, 0.07), is used as given;
                                    # the tip patch covers the tip face alone, from the tip's edge up
     plot: bool = True              # write <case>_check.png
 

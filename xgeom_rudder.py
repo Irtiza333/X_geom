@@ -59,6 +59,12 @@ N_VIEW = 5                       # sections drawn in the Design tab's 3D view, f
 Z_STRETCH = 3.0                  # the 3D view stretches the thickness by this, so the polygons show
 
 
+def _strip_frac(value):
+    """modify_control's strip_frac as xcad_loft takes it: one fraction (the TE strip then narrowed to the TE's
+    rounding) or a pair (LE, TE), used as given."""
+    return [float(v) for v in value] if np.ndim(value) else float(value)
+
+
 class RudderAdapter:
     joins = True                  # curves join the original at H: the tool offers the tangent switch
     build_label = "XCAD"
@@ -77,7 +83,7 @@ class RudderAdapter:
                          "te_radius_mm": float(s.te_radius_mm), "gap_mm": s.gap_mm, "xcad_units": s.xcad_units,
                          "plot": bool(s.plot), "fit_orders": dict(MC.FIT_ORDERS),
                          "fit_free_heights": bool(s.fit_free_heights), "half": bool(getattr(s, "half", False)),
-                         "strip_frac": float(getattr(s, "strip_frac", 0.07))}
+                         "strip_frac": _strip_frac(getattr(s, "strip_frac", 0.07))}
         self.title = "Rudder, modified below H"
         self.stack = self._stack0 = RM.read_stack(MC.STACK)
         self.loops0 = self._loops00 = [RM.xcad_to_working(pts, "m") for _, pts in RM.read_xcad(MC.XCAD_ORIGINAL)]

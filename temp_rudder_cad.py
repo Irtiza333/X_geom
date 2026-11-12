@@ -19,12 +19,14 @@ to outputs/sections_xcad_with_cap_y0_y200_m.dat. Its sections above the top
 modified section are added, everything is lofted into one solid with
 xcad_loft's five patches (user, 11 Nov 2026: the four along the span run up
 to the tip's edge, the tip patch covers the tip face alone): bicubic patches
-fitted by least squares, the LE and TE strips wrapping their edges, the
-central pressure and suction panels, the tip patch over the cap, and the
-flat root; six faces. Where the modified sections meet the original ones in
-a step (their fits against the extracted loops), the loft eases it out of the
-sections below and above it, so the solid crosses it without a ripple; the
-step is printed. The solid is written as <modified file>.step (mm).
+fitted by least squares, the LE and TE strips wrapping their edges (the TE
+strip narrowed to the TE's rounding), the central pressure and suction
+panels, the tip patch over the cap, and the flat root; six faces. Where the
+sections step from one to the next (sections written from the Bezier model
+alone under the extracted ones, as before 12 Nov 2026), the loft eases the
+step out of the sections below and above it, so the solid crosses it without
+a ripple; the step is printed. The solid is written as <modified file>.step
+(mm).
 
 Needs numpy, scipy, pythonocc-core and xcad_loft.py beside it.
 """
