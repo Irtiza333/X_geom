@@ -338,6 +338,11 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   checks both); the file-format spec is in the repo as `claude/xgeom-file-formats.md` (the path
   xgeom_files.py's docstring names), for the web front end building on these files.
 
+- Sample files re-saved (11 Nov 2026): `fin.txt`, `wing.txt` and `suboff_hull.txt` written again through the
+  tool's own save, so they carry the half setting they predated (`# half N`; the hull its settings heading)
+  and a load and re-save gives the same bytes on any machine (`msc_blade.txt` already did); nothing else in
+  them changed. Asked for by the web front end's round-trip test.
+
 ## Next steps
 
 - Wings and fins: the tips (next; user, 8 Oct 2026), then a check on the user's machine of the wing, the fin and

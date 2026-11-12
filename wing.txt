@@ -10,6 +10,7 @@
 # ---- settings
 # sections      41
 # change_points 3
+# half          N
 # ---- curves (table | bezier1 <points> | bezier2) and variables (value, low, high, free Y or held N)
 # var    span                         200               100               300  N
 # curve  pitch         bezier1 4

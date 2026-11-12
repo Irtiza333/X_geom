@@ -8,6 +8,8 @@
 # tail_m        1.0160002
 # cap_m         0.09525
 # axisymmetric  Y
+# ---- settings
+# half          N
 # ---- curves (cst <order>) and variables (value, low, high, free Y or held N)
 # var    nose                1.0159999             0.507             1.524  Y
 # var    middle                2.22885                 0             3.344  Y
