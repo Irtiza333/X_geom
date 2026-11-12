@@ -88,6 +88,7 @@ class RudderAdapter:
         self.stack = self._stack0 = RM.read_stack(MC.STACK)
         self.loops0 = self._loops00 = [RM.xcad_to_working(pts, "m") for _, pts in RM.read_xcad(MC.XCAD_ORIGINAL)]
         self._offsets = None                                  # (orig, loops0, TE radius, Offsets), see offsets()
+        self.setup_file = None                                # the set-up file loaded or saved last (the tool shows it)
         self.span0 = float(max(lp[:, 1].max() for lp in self._loops00))     # the extracted rudder's full height
         H = min(max(float(MC.H), self.settings["h_min"]), self.settings["h_max"])
         self.orders = {c: int(MC.ORDERS.get(c, RM.DEFAULT_ORDER)) for c in self.orig.names}
@@ -396,24 +397,46 @@ class RudderAdapter:
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with open(path, "w") as fh:
             json.dump(self.space_record(), fh, indent=1)
+        self.setup_file = os.path.abspath(path)
         return path
 
     def load_space(self, path):
-        """Start from a saved set-up (<case>_design_space.json)."""
-        with open(path) as fh:
-            rec = json.load(fh)
-        if rec.get("geometry") != "rudder":
-            raise ValueError(f"{path} is not a rudder design space")
-        for k in ("n_sections", "te_radius_mm", "half", "strip_frac"):
-            if k in rec.get("settings", {}):
-                self.settings[k] = rec["settings"][k]
-        self._apply_scale(float(rec.get("settings", {}).get("height_scale") or 1.0))     # its full height
-        space, design = RM.DesignSpace.from_dict(self.orig, rec["space"])
-        self.orig = space.orig
-        self.orders, self.join, self.design = dict(space.orders), dict(space.join), design
-        self.meta = {q["name"]: {"lo": q["lo"], "hi": q["hi"], "free": q["free"]} for q in rec["space"]["slots"]}
-        self.settings["h_min"], self.settings["h_max"] = self.meta["H"]["lo"], self.meta["H"]["hi"]
-        self._rebuild()
+        """Take over a saved set-up (<case>_design_space.json, written by save_space or an XCAD run), whatever
+        the adapter holds now: the section degree, every curve's order and join, every variable's value,
+        bounds and free flag, the H bounds, the full height, and the settings saved with it (the number of
+        sections, the TE radius, the half body, the strips). A file that cannot be taken over raises a
+        ValueError that says why and leaves the adapter as it was."""
+        name = os.path.basename(path)
+        try:
+            with open(path) as fh:
+                rec = json.load(fh)
+        except ValueError as exc:                            # not JSON, or not text at all
+            raise ValueError(f"{name} is not a rudder set-up (not a JSON file: {exc})") from exc
+        if not isinstance(rec, dict) or rec.get("geometry") != "rudder" or "space" not in rec:
+            raise ValueError(f"{name} is not a rudder set-up (a <case>_design_space.json that Save set-up or "
+                             f"XCAD wrote)")
+        keep, settings, meta = dict(self.__dict__), dict(self.settings), copy.deepcopy(self.meta)
+        try:
+            for k in ("n_sections", "te_radius_mm", "half", "strip_frac"):
+                if k in rec.get("settings", {}):
+                    self.settings[k] = rec["settings"][k]
+            self._apply_scale(float(rec.get("settings", {}).get("height_scale") or 1.0))     # its full height
+            space, design = RM.DesignSpace.from_dict(self.orig, rec["space"])
+            self.orig = space.orig
+            self.orders, self.join, self.design = dict(space.orders), dict(space.join), design
+            self.meta = {q["name"]: {"lo": q["lo"], "hi": q["hi"], "free": q["free"]}
+                         for q in rec["space"]["slots"]}
+            self.settings["h_min"], self.settings["h_max"] = self.meta["H"]["lo"], self.meta["H"]["hi"]
+            self._rebuild()
+            self.setup_file = os.path.abspath(path)
+        except Exception as exc:                             # as it was: nothing of the file is kept
+            self.__dict__.clear()
+            self.__dict__.update(keep)
+            self.settings.clear()
+            self.settings.update(settings)
+            self.meta = meta
+            raise ValueError(f"{name} could not be taken as a rudder set-up ({type(exc).__name__}: {exc}); "
+                             f"the design is as it was") from exc
 
     def xcad_task(self, case, plot=None, cad=True, half=None):
         """A function that writes the case as the design is now (rudder_modify.

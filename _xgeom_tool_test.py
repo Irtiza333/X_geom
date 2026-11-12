@@ -13,6 +13,8 @@ without it; the adapter needs the extraction's outputs in outputs/ (the X_geom
 repo) and is skipped without them.
 """
 
+import copy
+import json
 import os
 import sys
 import tempfile
@@ -318,6 +320,51 @@ def test_span():
                   [refused, space.orig.scale, design.H / h0, ad2.span / span0,
                    np.abs(space.to_vector(design) - ad.free_space().to_vector(ad.design)).max(),
                    max(abs(ad2.values[n] - ad.values[n]) for n in ad.values)], [1, 1.5, 1.5, 1.5, 0, 0], 1e-9)
+            ad3 = XR.RudderAdapter()                               # an adapter that has moved on, every way
+            ad3.set_degree(6)
+            ad3.set_span(0.8 * span0)
+            ad3.set_order("LE", 5)
+            ad3.set("H", 0.9 * ad3.get("H"))
+            ad3.set_bounds("LE.dx2", -3.0, 4.0)
+            ad3.set_free("LE.dx3", False)
+            ad3.settings.update(n_sections=7, half=True, te_radius_mm=0.5)
+            ad3.load_space(setup)
+            check("load_space at any time (another degree, height, order, value, bounds, free flag, settings): "
+                  "the adapter as the one that saved the set-up",
+                  [ad3.degree - ad.degree, ad3.span / ad.span, ad3.orders == ad.orders, ad3.join == ad.join,
+                   sorted(ad3.values) == sorted(ad.values), max(abs(ad3.values[n] - ad.values[n]) for n in ad.values),
+                   ad3.meta == ad.meta, all(ad3.settings[k] == ad.settings[k] for k in ad.settings),
+                   ad3.setup_file == os.path.abspath(setup), len(ad3.preview()["problems"])],
+                  [0, 1, 1, 1, 1, 0, 1, 1, 1, 0], 1e-9)
+            ad3.set_degree(5)
+            ad3.set_span(0.9 * span0)
+            ad3.set_bounds("H", 50.0, 120.0)
+            was = (ad3.orig, ad3.design, ad3.space, ad3.stack, ad3.loops0, ad3.settings, ad3.setup_file)
+            vals, meta, sets = dict(ad3.values), copy.deepcopy(ad3.meta), dict(ad3.settings)
+            with open(setup) as fh:
+                rec = json.load(fh)
+            rec["settings"].update(n_sections=99, height_scale=1.2, half=True)
+            del rec["space"]["orders"]                             # read as far as the space, then it fails
+            said = []
+            for name, bad in (("bad_design_space.json", json.dumps(rec)), ("wing.json", '{"geometry": "wing"}'),
+                              ("list.json", "[1, 2]"), ("notes.txt", "H = 60 mm, LE swept back")):
+                with open(os.path.join(tmp, name), "w") as fh:
+                    fh.write(bad)
+                try:
+                    ad3.load_space(os.path.join(tmp, name))
+                    said.append("read")
+                except ValueError as exc:
+                    said.append(str(exc))
+            check("a file that cannot be taken over (a set-up broken part way, another geometry's, no set-up, no "
+                  "JSON) raises a ValueError that names it and says why, and leaves the adapter as it was",
+                  [said[0].startswith("bad_design_space.json could not be taken as a rudder set-up (KeyError"),
+                   said[1].startswith("wing.json is not a rudder set-up"),
+                   said[2].startswith("list.json is not a rudder set-up"),
+                   said[3].startswith("notes.txt is not a rudder set-up (not a JSON file"),
+                   all(a is b for a, b in zip(was, (ad3.orig, ad3.design, ad3.space, ad3.stack, ad3.loops0,
+                                                    ad3.settings, ad3.setup_file))),
+                   ad3.values == vals, ad3.meta == meta, ad3.settings == sets, ad3.span / (0.9 * span0)],
+                  [1, 1, 1, 1, 1, 1, 1, 1, 1], 1e-12)
         ad.set_span(span0)
         check("back to the extracted height: H and the stretch as before", [ad.design.H - h0, ad.orig.scale],
               [0, 1], 1e-9)
@@ -364,6 +411,63 @@ def test_gui():
         check("the full height box: 300 mm stretches the rudder (H 60 -> 60 x 300 / the extracted), 10 refused",
               [app.ad.span, app.ad.get("H") / (60.0 * 300.0 / span0), tops > 290.0, app.span_box.get() == "300.00",
                app.status.cget("background") == XT.STATUS["error"][0]], [300.0, 1, 1, 1, 1], 1e-9)
+        ask_open, out_dir = XT.filedialog.askopenfilename, app.ad.out_dir
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                app.ad.out_dir = tmp
+                none = app.setup_label.cget("text")
+                app.case.delete(0, "end")
+                app.case.insert(0, "kept")
+                app.on_save()
+                root.update()
+                setup = os.path.join(tmp, "kept_design_space.json")
+                named = app.setup_label.cget("text")
+                vals, meta, span = dict(app.ad.values), copy.deepcopy(app.ad.meta), app.ad.span
+                app.npts.set(5)                                    # the design moved on: degree, height, H, half
+                app.on_points()
+                app.span_box.set("250")
+                app.on_span()
+                app.set_value("H", 0.8 * app.ad.get("H"), None)
+                app.vhalf.set(True)
+                app.on_half()
+                app.case.delete(0, "end")
+                app.case.insert(0, "other")
+                moved = [app.ad.degree, app.ad.span, app.ad.settings["half"]]
+                asked = []
+                XT.filedialog.askopenfilename = lambda **kw: asked.append(kw) or setup
+                app.on_load_space()
+                app.update_views()                                 # the update it scheduled, now
+                loaded = app.status.cget("text")
+                root.update()
+                check("Save set-up, a changed design, then Load ... in the Set-up box: the design, the panel and "
+                      "the views as saved (the case name left alone); the dialog opens on the set-up's folder; "
+                      "the status line says what was loaded",
+                      [os.path.exists(setup), none.startswith("no set-up file loaded"),
+                       named.endswith("kept_design_space.json"), moved == [4, 250.0, True], app.ad.degree,
+                       app.ad.span / span,
+                       max(abs(app.ad.values[n] - vals[n]) for n in vals), app.ad.meta == meta,
+                       app.npts.get() == "6", app.span_box.get() == f"{span:.2f}", app.vhalf.get(),
+                       app.case.get() == "other", app.setup_label.cget("text") == named,
+                       asked[0]["initialdir"] == tmp, app.status.cget("background") == XT.STATUS["ok"][0],
+                       loaded == f"set-up loaded: {setup}"],
+                      [1, 1, 1, 1, 5, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1], 1e-9)
+                app.set_value("H", 0.9 * app.ad.get("H"), None)
+                design, bad = app.ad.design, os.path.join(tmp, "other_design.json")
+                with open(bad, "w") as fh:
+                    json.dump({"H": 60.0, "curves": {}}, fh)       # a design JSON, not a set-up
+                XT.filedialog.askopenfilename = lambda **kw: bad
+                app.on_load_space()
+                root.update()
+                text = app.status.cget("text")
+                XT.filedialog.askopenfilename = lambda **kw: ""    # the dialog cancelled
+                app.on_load_space()
+                check("Load ... of a file that is no set-up: said in red, the design as it was; a cancelled dialog "
+                      "changes nothing",
+                      [app.ad.design is design, "is not a rudder set-up" in text,
+                       app.status.cget("background") == XT.STATUS["error"][0],
+                       app.setup_label.cget("text") == named], [1, 1, 1, 1], 0)
+            finally:
+                XT.filedialog.askopenfilename, app.ad.out_dir = ask_open, out_dir
         if not XL.occ_available():
             print("       Save CAD skipped: no pythonocc-core or cadquery-ocp here")
             return

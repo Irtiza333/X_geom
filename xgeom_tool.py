@@ -85,6 +85,16 @@ Vehicle
                             component whose count is 0 is not built. A few minutes (the
                             propeller's CAD takes most); needs pythonocc-core.
 Left panel (rudder)
+    Set-up    the set-up file loaded (or saved with Save set-up) last, and
+              Load ...: a set-up that Save set-up or an XCAD run wrote
+              (<case>_design_space.json) takes the place of the design in the
+              tool (the section degree, every curve's order and join, every
+              variable's value, bounds and free flag, the H bounds, the full
+              height, the number of sections, the TE radius, the half body, the
+              strips). A file that is not a set-up changes nothing. The case
+              name is left as it is, so the next XCAD or Save set-up writes to
+              the case typed there, not over the file loaded (unless that is
+              the case's own).
     H         the height of the modified region, between its low and high
               bounds (h_min, h_max); h_max can go up to the top horizontal section
               of the stack (z_full - d, shown under 'where').
@@ -205,7 +215,8 @@ old .dat gives a .txt beside it). Load ... and --file read it back exactly; the
 optimiser reads it (blade_modify.load_component, wing_modify.load_component,
 hull_modify.load_component, xgeom_files.load). The rudder (modified below H)
 keeps its set-up JSON: Save set-up writes <output folder>/<case>_design_space.json
-(rudder_modify.load_design_space, --space).
+(rudder_modify.load_design_space), and Load ... in its Set-up box, or --space,
+reads one back.
 The build button builds the component of its panel (in the vehicle its text
 names it): XCAD (rudder) writes the case to the output folder (XCAD file, section
 table, design and the same set-up JSON), lofts the XCAD file into a solid and
@@ -1228,11 +1239,13 @@ class App:
 
     def on_save(self):
         """Save set-up: the component as a component file (the dialog opens on the file it came from); the
-        rudder (modified below H) its set-up JSON in the output folder."""
+        rudder (modified below H) its set-up JSON in the output folder (Load ... in its Set-up box reads it
+        back, on_load_space)."""
         if not hasattr(self.ad, "save_file"):
             case = self.case.get().strip() or "gui"
             path = self.guard(lambda: self.ad.save_space(os.path.join(self.ad.out_dir, f"{case}_design_space.json")))
             if path:
+                self.rebuild_panel()                                # the Set-up box names the file
                 self.say(f"set-up saved: {os.path.abspath(path)}")
             return
         folder, name = self.save_target()
@@ -1259,6 +1272,23 @@ class App:
                 self.after_change(structure=True)
                 self.say(f"loaded {path}")
 
+    def on_load_space(self):
+        """The rudder's Load ...: a set-up file that Save set-up or an XCAD run wrote
+        (<case>_design_space.json) takes the place of the design in the tool; the whole panel follows it."""
+        cur = getattr(self.ad, "setup_file", None)
+        folder = os.path.dirname(cur) if cur else os.path.join(HERE, self.ad.out_dir)
+        path = filedialog.askopenfilename(title="Rudder: a set-up file (<case>_design_space.json)",
+                                          initialdir=folder if os.path.isdir(folder) else HERE,
+                                          filetypes=[("set-up files", "*_design_space.json"),
+                                                     ("JSON files", "*.json"), ("all files", "*")])
+        if path:
+            self.say(f"reading {os.path.basename(path)} ...")
+            self.root.update_idletasks()
+            if self.guard(lambda: self.ad.load_space(path) or True):
+                self.after_change(structure=True)
+                self._note = f"set-up loaded: {self.ad.setup_file}"      # stays once the views are drawn
+                self.say(self._note)
+
     def open_occ_viewer(self):
         if not self.step:
             self.say(f"press {self.build_label(self.kind)} first: the viewer shows the CAD it writes", error=True)
@@ -1268,9 +1298,24 @@ class App:
 
 
 def rudder_panel(app):
-    """The rudder's boxes: the region H, the full height and the section control points."""
+    """The rudder's boxes: the set-up file and Load ..., the region H, the full height and the section
+    control points."""
     import xgeom_rudder as XR
     ad = app.ad
+    box = ttk.LabelFrame(app.panel, text="Set-up")
+    box.pack(fill="x", padx=6, pady=4)
+    cur = getattr(ad, "setup_file", None)
+    app.setup_label = ttk.Label(box, text=(os.path.relpath(cur, HERE) if cur.startswith(HERE) else cur) if cur else
+                                "no set-up file loaded: the design started from modify_control.py",
+                                wraplength=560)
+    app.setup_label.pack(anchor="w", padx=4)
+    row = ttk.Frame(box)
+    row.pack(fill="x", pady=3)
+    ttk.Button(row, text="Load ...", command=app.on_load_space).pack(side="left", padx=4)
+    ttk.Label(row, text="a set-up file that Save set-up (below) or XCAD wrote (<case>_design_space.json): every "
+                        "variable's value, bounds and free flag, the curves, the full height and the settings",
+              foreground=INK2, wraplength=470).pack(side="left", padx=6)
+
     box = ttk.LabelFrame(app.panel, text="Region")
     box.pack(fill="x", padx=6, pady=4)
     app._header(box)

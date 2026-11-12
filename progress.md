@@ -168,7 +168,8 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   `hull_modify.py` (planar curves can now be `table` too); old `.dat` files still load
   (`python xgeom_files.py convert old.dat new.txt`); `airfoils.py` reads a coordinate file by its path. The
   tool: the File box's Load ... reads a component file and sets the whole panel, Save set-up ... writes one (the
-  dialog opens on the file it came from), `--file`; the rudder (modified below H) keeps its set-up JSON. Case
+  dialog opens on the file it came from), `--file`; the rudder (modified below H) keeps its set-up JSON (its own
+  Load ... since 12 Nov). Case
   outputs: `<case>.txt` in place of `<case>_params.dat` and `<case>_design_space.json`. Examples, now the
   tool's defaults: `msc_blade.txt`, `wing.txt`, `fin.txt`, `suboff_hull.txt`. The assembly file is read and
   written (`read_assembly`, `write_assembly`); the tool and the pipeline do not use it yet.
@@ -412,6 +413,20 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   as it is: the tip patch holds its 0.7 mm edge rounding and its end closures inside one patch, which a
   coarse display may blur; the cure would be a band of their own. Tests: tool 43 with the GUI (22 without
   OCC), wing 51, hull 59, files 53.
+- Load ... for the rudder's set-up (12 Nov 2026; the user: the rudder's panel showed Save set-up only, no
+  way to read a set-up back in). The first tool had Save / Load design space; both went on 29 Sep at the
+  user's request, Save set-up came back on 1 Oct for the optimiser, and reading one stayed on the command
+  line (`--space`). The Load ... the other components have reads component files, which the rudder modified
+  below H does not have. Now the rudder's panel starts with a Set-up box, as the others start with their
+  File box: the set-up file loaded (or saved with Save set-up) last, and Load ... (`App.on_load_space`),
+  which reads a `<case>_design_space.json` that Save set-up or an XCAD run wrote; the dialog opens on the
+  output folder and lists those files. `RudderAdapter.load_space` takes the set-up over whatever the tool
+  holds by then (another section degree, full height, orders, bounds, free flags, settings; before, it was
+  only called on a fresh adapter) and is all or nothing: a file that is no rudder set-up, or one that fails
+  part way, raises a ValueError that names the file and says why, and the design stays as it was. The case
+  name is left alone, so the next XCAD or Save set-up does not write over the file loaded unless that is
+  the case's own. Save set-up now shows its file in the Set-up box too. Tests: tool 47 with the GUI (24
+  without OCC), wing 51, hull 59, files 53, blade 64.
 
 ## Next steps
 
