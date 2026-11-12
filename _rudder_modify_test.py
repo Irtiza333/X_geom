@@ -9,7 +9,9 @@ rounded_section's num_pts layout, the faster cut_for_radius).
 Most checks run on a synthetic rudder written to a temporary folder: a
 parabolic LE, a straight TE and section parameters that are polynomials in
 the height, built with the same sections, so every fit and every baseline
-must come back exactly. When the extraction's outputs are in outputs/ (the
+must come back exactly. A bumped copy of it, which the model cannot hold,
+checks that the sections are written as the extracted ones plus the design's
+change to the model. When the extraction's outputs are in outputs/ (the
 X_geom repo), the real rudder is checked too.
 
     python _rudder_modify_test.py
@@ -513,6 +515,183 @@ def test_span(p, orig, base, secs):
                                   for j, i in enumerate(kept)), rec["settings"]["height_scale"]], [1, 0, k], 1e-8)
 
 
+def bumped_section(y, num_pts=200):
+    """A synthetic 'extracted' section the model cannot hold: the true one
+    with its LE moved by dle (the TE kept, so its stations stretch with the
+    chord) and a bump dz along each side, both changing up the span. Returns
+    (x_le, selig)."""
+    x_le, chord, _, _, selig = true_section(y, num_pts)
+    dle = 0.01 * np.sin(y / 30.0)
+    nh = (num_pts + 1) // 2
+    b_up, b_lo = np.linspace(np.pi, 0.0, nh), np.linspace(0.0, np.pi, num_pts - nh + 1)[1:]
+    amp = 0.1 * (1.0 + y / 200.0)
+    dz = np.concatenate((amp * np.sin(b_up) * np.sin(2.0 * b_up), -amp * np.sin(b_lo) * np.sin(2.0 * b_lo)))
+    return x_le + dle, selig * [(chord - dle) / chord, 1.0] + np.column_stack((np.zeros(num_pts), dz))
+
+
+def test_offsets(p, orig, base, secs):
+    print("\nwritten sections: the extracted ones plus the design's change to the model (synthetic rudder)")
+    stack = RM.read_stack(p["stack"])
+    from_xcad = RM.stack_of_xcad(p["xcad"])
+    flat = [s for s in stack if s.tilt_deg == 0.0]
+    check("stack_of_xcad: the horizontal loops as stack sections, the stack file's own (8 decimals in m)",
+          [len(from_xcad) - len(flat), max(abs(a.y - b.y) for a, b in zip(from_xcad, flat)),
+           max(abs(a.x_le - b.x_le) + abs(a.chord - b.chord) for a, b in zip(from_xcad, flat)),
+           max(np.abs(a.xy - b.xy).max() for a, b in zip(from_xcad, flat))], 0.0, 2.1e-5)
+    off0 = RM.original_offsets(orig, stack)
+    check("the original's TE radius from the table; the model holds the synthetic rudder: no offsets up to "
+          "z_top (mm)", [orig.te_radius - R_TE, off0.te_radius - R_TE, np.abs(off0.resid[:-1]).max(),
+                         np.abs(off0.dx_le[:-1]).max()], 0.0, 2e-5)
+    check("offsets: at the sections up to z_top and one above it, that one against the fits' tangents (the "
+          "parabolic LE 2e-4 x 2^2 mm off its tangent)",
+          [off0.y[0], off0.y[-1], len(off0.y), off0.dx_le[-1]], [0.0, Z_OPT + 2.0, 42, 8.0e-4], 1e-9)
+    raises("offsets at a height outside their sections raise", lambda: off0.at([Z_OPT + 5.0]))
+
+    y_rows = np.arange(0.0, 151.0, 2.0)
+    bumped = [RM.StackSection(y, 0.0, *(lambda q: (q[0], q[0] + q[1][0, 0], 0.0, q[1]))(bumped_section(y)))
+              for y in y_rows]
+    off = RM.original_offsets(orig, bumped)
+    k40 = int(np.argmin(np.abs(off.y - 40.0)))
+    x_le_b, xy_b = bumped_section(40.0)
+    true40 = true_section(40.0)
+    check("a bumped original: the offsets are what the model leaves out (the bump and the LE shift, mm)",
+          [off.dx_le[k40] - (x_le_b - true40[0]), np.abs(off.resid[k40] - (xy_b - true40[4])).max(),
+           np.abs(off.resid[:, 99, 0]).max()], 0.0, 2e-5)
+
+    on = RM.modified_sections(base, orig, 41, 200, R_TE, off)            # 2 mm apart: on the extracted heights
+    worst = max(max(abs(s.written()[0] - bumped_section(s.y)[0]), np.abs(s.written()[1] - bumped_section(s.y)[1]).max())
+                for s in on)
+    check("baseline on the extracted heights: every section written is the extracted one (mm)", worst, 0.0, 1e-9)
+    check("the model's section is kept beside it (selig, x_le, the control points), the bump away",
+          [np.abs(on[20].selig - true_section(on[20].y)[4]).max() < 2e-5,
+           0.05 < np.abs(on[20].written()[1] - on[20].selig).max() < 0.2, on[20].params() is not None], [1, 1, 1], 0)
+    between = RM.modified_sections(base, orig, 50, 200, R_TE, off)       # heights between the extracted ones
+    worst = max(max(abs(s.written()[0] - bumped_section(s.y)[0]), np.abs(s.written()[1] - bumped_section(s.y)[1]).max())
+                for s in between)
+    check("baseline between them: the extracted rudder there (offsets linear in the height, mm)", worst, 0.0, 5e-5)
+
+    d = base.copy()
+    d.curves["LE"].v[-1] -= 20.0
+    d.curves["P2z"].v[2] += 0.01
+    d.curves["P2x"].join = "G0"
+    d.curves["P2x"].v[1] += 0.02
+    plain, moved = RM.modified_sections(d, orig, 41, 200, R_TE), RM.modified_sections(d, orig, 41, 200, R_TE, off)
+    base_plain = RM.modified_sections(base, orig, 41, 200, R_TE)
+    change = max(max(abs((a.written()[0] - b.written()[0]) - (c.x_le - e.x_le)),
+                     np.abs((a.written()[1] - b.written()[1]) - (c.selig - e.selig)).max())
+                 for a, b, c, e in zip(moved, on, plain, base_plain))
+    check("a changed design: written = extracted + (the model's section - the model's baseline), point by point",
+          change, 0.0, 1e-9)
+    top = moved[-1]
+    check("a changed design meets the extracted section at H: no step (mm); its root 20 mm forward",
+          [top.written()[0] - bumped_section(Z_OPT)[0], np.abs(top.written()[1] - bumped_section(Z_OPT)[1]).max(),
+           moved[0].written()[0] - on[0].written()[0]], [0.0, 0.0, -20.0], 1e-9)
+    lp = top.loop()
+    check("loop(): the written section (LE first and last, the TE at index 99)",
+          [*(lp[0] - lp[-1]), lp[0, 0] - top.written()[0], lp[99, 0] - (top.written()[0] + top.written()[1][0, 0]),
+           np.abs(lp[:100, 2] - top.written()[1][:100][::-1, 1]).max()], 0.0, 1e-12)
+    one = RM.section_at(d, orig, moved[17].y, 200, R_TE, index=18, offsets=off)
+    check("section_at with offsets: the section modified_sections writes there",
+          np.abs(one.written()[1] - moved[17].written()[1]).max() + abs(one.written()[0] - moved[17].written()[0]),
+          0.0, 1e-12)
+    for n in (201, 120):
+        other = RM.modified_sections(base, orig, 41, n, R_TE, off)
+        worst = max(max(abs(s.written()[0] - bumped_section(s.y, n)[0]),
+                        np.abs(s.written()[1] - bumped_section(s.y, n)[1]).max()) for s in other)
+        check(f"{n} points per section from offsets at 200: the extracted rudder at those stations (mm)",
+              worst, 0.0, 5e-5)
+    wide, wide_plain = RM.modified_sections(base, orig, 41, 200, 1.0, off), RM.modified_sections(base, orig, 41, 200, 1.0)
+    gap = wide[20].written()[1] - bumped_section(wide[20].y)[1]
+    check("another TE radius still shows: the baseline with 1.0 mm leaves the extracted section by what the "
+          "radius changes in the model (the offsets are measured at the original's 0.75 mm)",
+          [wide[20].r_mm, np.abs(gap).max() > 0.05, np.abs(gap - (wide_plain[20].selig - base_plain[20].selig)).max()],
+          [1.0, 1, 0], 1e-9)
+    g_with, g_without = (RM.distance_to_original(s, bumped).max() for s in (on[20], base_plain[20]))
+    check("distance_to_original: of the written section, nothing for the baseline; the bump for the model alone",
+          [g_with < 1e-9, 0.05 < g_without < 0.2], [1, 1], 0)
+
+    o77 = RM.fit_original(p["corner"], p["table"], 77.0)                 # z_top between two extracted sections
+    off77 = RM.original_offsets(o77, bumped)
+    s77 = RM.modified_sections(RM.baseline_design(o77, 77.0), o77, 12, 200, R_TE, off77)
+    worst = max(max(abs(s.written()[0] - bumped_section(s.y)[0]), np.abs(s.written()[1] - bumped_section(s.y)[1]).max())
+                for s in s77)
+    check("z_top between two sections: the one above it measured on the fits' tangents, the baseline at "
+          "H = z_top still the extracted rudder (mm)", [off77.y[-1], worst < 5e-4], [78.0, 1], 0)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        xb = os.path.join(tmp, "bumped_m.dat")
+        loops = [RM.xcad_lines(RM.xcad_loop(s.xy, s.x_le, s.y), "m") for s in bumped]
+        cap = RM.xcad_loop(bumped[-1].xy, bumped[-1].x_le, 150.0)
+        cap[:, 1] += 3.0 + 0.01 * (cap[:, 0] - cap[0, 0])
+        RM.write_xcad_lines(xb, loops + [RM.xcad_lines(cap, "m")])
+        res = RM.write_case(tmp, "b", base, orig, xb, 41, 200, R_TE, plot=False)
+        out = RM.read_xcad(res["paths"]["xcad"])
+        check("write_case, baseline: the 41 modified loops are the original file's lines, digit for digit",
+              [out[k][0] == loops[k] for k in range(41)], [1] * 41, 0)
+        import json
+        rec = json.load(open(res["paths"]["json"]))
+        note = [ln for ln in open(res["paths"]["table"]) if ln.startswith("# XCAD loops")]
+        g_max, g_rms = off.gap(Z_OPT)
+        g_all = np.concatenate([RM.distance_to_original(s, bumped) for s in base_plain])
+        check("write_case records it: how far the model alone is off (the bump: the distance of the extracted "
+              "points from the model's outline, mm), the original's TE radius, a note in the sections table",
+              [rec["xcad"]["model_off_max_mm"] - g_max, rec["xcad"]["model_off_rms_mm"] - g_rms,
+               g_max - g_all.max(), g_rms - np.sqrt(np.mean(g_all**2)), 0.05 < g_max < 0.2,
+               rec["xcad"]["te_radius_original_mm"] - R_TE, len(note) - 1], [0, 0, 0, 0, 1, 0, 0], 1e-5)
+        report = "\n".join(RM.case_report(res, orig, bumped))
+        check("case_report: the written sections on the original, the model's own distance named",
+              ["RMS 0.0 um, largest 0.0 um" in report, "the model alone" in report], [1, 1], 0)
+        s2, prm = RF.read_thickness_params(res["paths"]["params"])
+        check("the thickness format still holds the model (7 decimals)",
+              np.abs(prm - np.array([s.params() for s in on])).max(), 0.0, 5.1e-8)
+        res_d = RM.write_case(tmp, "c", d, orig, xb, 41, 200, R_TE, plot=True, stack=bumped)
+        out_d = RM.read_xcad(res_d["paths"]["xcad"])
+        want = [RM.xcad_lines(s.loop(), "m") for s in
+                RM.modified_sections(d, orig, 41, 200, R_TE, RM.original_offsets(orig, RM.stack_of_xcad(xb)))]
+        check("write_case, the changed design: its loops as modified_sections writes them with the file's "
+              "offsets; the loop at H the original's line for line; the check plot written",
+              [all(out_d[k][0] == want[k] for k in range(41)), out_d[40][0] == loops[40],
+               os.path.exists(res_d["paths"]["png"])], [1, 1, 1], 0)
+        k = 1.6
+        o2 = orig.scaled(k)
+        b2 = base.copy()
+        b2.H = k * base.H
+        res_k = RM.write_case(tmp, "k", RM.pin(b2, o2), o2, xb, 41, 200, R_TE, plot=False)
+        out_k = RM.read_xcad(res_k["paths"]["xcad"])
+        orig_loops = RM.read_xcad(xb)
+        check("write_case on the original stretched in height: the modified loops are its loops k times as "
+              "high (m)", max(np.abs(out_k[j][1] - orig_loops[j][1] * [1.0, 1.0, k]).max() for j in range(41)),
+              0.0, 1.01e-8)
+        bare = os.path.join(tmp, "bare_info.dat")
+        with open(p["table"]) as fh, open(bare, "w") as out_fh:           # a table without R_orig_mm
+            for ln in fh:
+                tok = ln.split()
+                cols = RM.SECTION_TABLE_COLUMNS
+                if ln.startswith("# section") and "X1" in tok:
+                    tok = [t for t in tok if t != "R_orig_mm"]
+                elif not ln.startswith("#"):
+                    tok = [t for t, c in zip(tok, cols) if c != "R_orig_mm"]
+                out_fh.write(" ".join(tok) + "\n")
+        ob = RM.fit_original(p["corner"], bare, Z_OPT)
+        raises("a table without R_orig_mm: the original's TE radius unknown, offsets need te_radius_mm",
+               lambda: RM.original_offsets(ob, bumped))
+        check("and take it when given: the same offsets",
+              [ob.te_radius is None, np.abs(RM.original_offsets(ob, bumped, R_TE).resid - off.resid).max()],
+              [1, 0], 1e-12)
+    deep = np.zeros_like(off.resid)                                      # half a millimetre off each side
+    deep[:, 1:99, 1], deep[:, 100:-1, 1] = -0.5, 0.5
+    try:
+        RM.modified_sections(base, orig, 41, 200, R_TE, RM.Offsets(off.y, off.dx_le, deep, R_TE))
+        said = ""
+    except ValueError as exc:
+        said = str(exc)
+    check("offsets a section is too thin to take (its outline through the chord line) are refused, the "
+          "section named", ["section 1 at y = 0.0000 mm" in said, "too thin to write" in said], [1, 1], 0)
+    only_top = [s for s in bumped if s.y > 100.0]
+    raises("extracted sections that do not reach down to the fitted original raise",
+           lambda: RM.original_offsets(orig, only_top))
+
+
 def test_real():
     print("\nthe real rudder (outputs/ of the extraction)")
     paths = {k: os.path.join(HERE, v) for k, v in REAL.items()}
@@ -532,8 +711,16 @@ def test_real():
           max(np.abs(prm[:, k] - table[c]).max() for k, c in enumerate(("X1", "X2", "T1", "T2"))), 0.0, 2e-6)
     stack = RM.read_stack(paths["stack"])
     g = max(RM.distance_to_original(s, stack).max() for s in secs)
-    print(f"       replica error of the baseline: largest distance {g * 1e3:.1f} um")
-    check("baseline: within 0.2 mm of the original sections everywhere", g < 0.2, 1, 0)
+    print(f"       the model's error of the baseline: largest distance {g * 1e3:.1f} um")
+    check("baseline, the model alone: within 0.2 mm of the original sections everywhere", g < 0.2, 1, 0)
+    off = RM.original_offsets(orig, RM.stack_of_xcad(paths["xcad"]))
+    written = RM.modified_sections(base, orig, 50, 200, 0.75, off)
+    gw = max(RM.distance_to_original(s, stack).max() for s in written)
+    lift = max(np.abs(s.written()[1] - s.selig).max() for s in written)
+    print(f"       written with the original's offsets (up to {lift * 1e3:.1f} um): largest distance "
+          f"{gw * 1e3:.3f} um")
+    check("baseline as written (the extracted sections plus the model's change): on the original sections, "
+          "to the files' decimals (mm)", [gw, off.te_radius - 0.75], 0.0, 5e-5)
     d5, o5, _ = RM.change_degree(base, orig, 5)
     s5 = RM.modified_sections(d5, o5, 50, 200, 0.75)
     check("degree 5 (one section control point added): the same sections (mm)",
@@ -558,10 +745,18 @@ def test_real():
         gf = max(RM.distance_to_original(s, stack).max() for s in sf)
         with tempfile.TemporaryDirectory() as tmp:
             xf = RM.write_modified_xcad(os.path.join(tmp, "x.dat"), sf, paths["xcad"], of.z_top)
+            rf = RM.write_case(tmp, "whole", RM.baseline_design(of, of.z_top), of, paths["xcad"], 60, 200, 0.75,
+                               plot=False)
+            wf = RM.read_xcad(rf["paths"]["xcad"])
         print(f"       whole stack: H = z_top = {of.z_top:.4f} mm, largest distance {gf * 1e3:.1f} um")
         n_top = sum(1 for _, pts in loops if np.ptp(pts[:, 2]) > 1e-12)        # the tip section and the cap loops
         check("whole-stack original: z_top the top horizontal section; H = z_top within 0.2 mm; tip and cap kept",
               [of.z_top - top_sec, gf < 0.2, len(xf["kept"]), n_top > 1], [0, 1, n_top, 1], 1e-6)   # 6 decimals
+        gw = max(RM.distance_to_original(s, stack).max() for s in rf["sections"])
+        flat_top = [k for k, (_, pts) in enumerate(loops) if np.ptp(pts[:, 2]) <= 1e-12][-1]
+        check("whole stack written by write_case: the root and the top loops are the extraction's lines, every "
+              "section on the original (mm), the tip and the cap after them",
+              [wf[0][0] == loops[0][0], wf[59][0] == loops[flat_top][0], gw < 5e-5, len(wf) - 60], [1, 1, 1, n_top], 0)
     else:
         print("       (outputs/thickness_params_y0_y200_info.dat not here: whole-stack check skipped)")
     rows = RM.fit_section_table(paths["stack"], 0.5, verbose=False)
@@ -580,6 +775,7 @@ def main():
         orig, base, secs = test_original_and_designs(p)
         test_xcad_and_writers(p, orig, base, secs)
         test_span(p, orig, base, secs)
+        test_offsets(p, orig, base, secs)
     test_real()
     print()
     if _FAILED:

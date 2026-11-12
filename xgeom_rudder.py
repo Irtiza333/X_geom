@@ -12,6 +12,12 @@ value against the height; the section is a Bezier half-section of degree n
 raises n by one and adds that point's two curves. P1x is held at 0 by default
 (its slots unticked), which keeps the LE round.
 
+The sections drawn and written are the extracted ones plus the change the
+design makes to this model (rudder_modify.original_offsets): the model's fit
+of the original lies about 0.1 mm off the extracted sections, so the model
+alone would leave a step at H. The rudder as it starts is the extracted one
+exactly, and the control polygons shown are the model's.
+
 The full height (set_span) is the extracted rudder's to start with: a new one
 stretches the whole rudder in height (the original's fits, its stack and loops,
 H, its bounds and the curves' heights in proportion; x, the chords and the
@@ -75,6 +81,7 @@ class RudderAdapter:
         self.title = "Rudder, modified below H"
         self.stack = self._stack0 = RM.read_stack(MC.STACK)
         self.loops0 = self._loops00 = [RM.xcad_to_working(pts, "m") for _, pts in RM.read_xcad(MC.XCAD_ORIGINAL)]
+        self._offsets = None                                  # (orig, loops0, TE radius, Offsets), see offsets()
         self.span0 = float(max(lp[:, 1].max() for lp in self._loops00))     # the extracted rudder's full height
         H = min(max(float(MC.H), self.settings["h_min"]), self.settings["h_max"])
         self.orders = {c: int(MC.ORDERS.get(c, RM.DEFAULT_ORDER)) for c in self.orig.names}
@@ -218,6 +225,20 @@ class RudderAdapter:
         self._rebuild()
         return r
 
+    def offsets(self):
+        """What the extracted sections (the horizontal loops of the original
+        XCAD file, at the present full height) have that the model of the
+        original leaves out (rudder_modify.original_offsets). The sections
+        drawn and written carry them, so they are the extracted sections plus
+        the design's change to the model. Kept until the original, its height
+        or the TE radius changes."""
+        r = self.settings["te_radius_mm"]
+        c = self._offsets
+        if c is None or c[0] is not self.orig or c[1] is not self.loops0 or c[2] != r:
+            c = self._offsets = (self.orig, self.loops0, r,
+                                 RM.original_offsets(self.orig, RM.stack_of_loops(self.loops0), r))
+        return c[3]
+
     def _drop_meta(self, curve):
         for name in [n for n in self.meta if n.startswith(curve + ".")]:
             del self.meta[name]
@@ -281,9 +302,11 @@ class RudderAdapter:
         curves = {c: d.curve(c).at(yy)[:, 1] for c in self.names}
         try:
             sections = RM.build_sections(d, self.orig, np.linspace(0.0, d.H, N_VIEW), s["num_pts"],
-                                         s["te_radius_mm"])
+                                         s["te_radius_mm"], offsets=self.offsets())
         except ValueError as exc:
             sections = str(exc)
+            if not problems:                  # the model builds, the sections as written do not (too thin)
+                problems = [sections]
         out = {"design": d, "problems": problems, "yy": yy, "curves": curves, "sections": sections,
                "tracks": self.tracks(d)}
         if skeleton:
@@ -311,14 +334,19 @@ class RudderAdapter:
         n_sections sections from the root to H, as XCAD gets them; none while
         the design has problems), 'cut' (the section at H) and 'unchanged'
         (the original loops kept above H: every few horizontal ones, the tip
-        section and the cap)."""
+        section and the cap). A section that cannot be written is added to
+        problems."""
         d, s = self.design, self.settings
         if problems is None:
             problems = RM.design_problems(d, self.orig, s["n_sections"], s["te_radius_mm"])
         mod = []
         if not problems:
-            secs = RM.modified_sections(d, self.orig, s["n_sections"], s["num_pts"], s["te_radius_mm"])
-            mod = [sec.loop() for sec in secs]
+            try:
+                secs = RM.modified_sections(d, self.orig, s["n_sections"], s["num_pts"], s["te_radius_mm"],
+                                            self.offsets())
+                mod = [sec.loop() for sec in secs]
+            except ValueError as exc:         # a section too thin to write: a problem like the others
+                problems.append(str(exc))
         gap = d.H / (s["n_sections"] - 1) if s["gap_mm"] is None else float(s["gap_mm"])
         flat = [lp for lp in self.loops0 if np.ptp(lp[:, 1]) < 1e-9 and lp[0, 1] >= d.H + gap - 1e-9]
         tip = [lp for lp in self.loops0 if np.ptp(lp[:, 1]) >= 1e-9 and lp[:, 1].min() >= d.H - 1e-9]
@@ -326,7 +354,8 @@ class RudderAdapter:
         flat = flat[::step] + ([flat[-1]] if flat and (len(flat) - 1) % step else [])
         if not mod:
             try:
-                cut = [RM.section_at(d, self.orig, d.H, s["num_pts"], s["te_radius_mm"]).loop()]
+                cut = [RM.section_at(d, self.orig, d.H, s["num_pts"], s["te_radius_mm"],
+                                     offsets=self.offsets()).loop()]
             except ValueError:
                 cut = []
             return {"modified": [], "cut": cut, "unchanged": flat + tip}
@@ -382,8 +411,10 @@ class RudderAdapter:
 
     def xcad_task(self, case, plot=None, cad=True, half=None):
         """A function that writes the case as the design is now (rudder_modify.
-        write_case: the XCAD file, the section table, the thickness format when
-        it applies, the design JSON, plus <case>_design_space.json), then lofts
+        write_case: the XCAD file, its modified sections the extracted ones
+        plus the design's change to the model; the section table, the thickness
+        format when it applies, the design JSON, plus
+        <case>_design_space.json), then lofts
         the XCAD file into a solid (xcad_loft) and writes it as STEP next to
         it. The state is copied here, so the function can run off the GUI
         thread while the sliders move on. It returns a dict: the case, its
@@ -437,7 +468,7 @@ class RudderAdapter:
                 lr = out["loft"]
                 msg += (f", {os.path.basename(out['step'])} ({'half body, ' if lr.half else ''}solid "
                         f"{'valid' if lr.valid else 'NOT valid'}, {lr.volume / 1e3:.2f} cm^3); OCC viewer shows it")
-                for _, jump, lo, hi, _, _ in lr.steps:     # the modified sections meet the original ones in a step
+                for _, jump, lo, hi, _, _ in lr.steps:     # a step left in the loops (another TE radius, say)
                     msg += (f"; the {jump:.2f} mm step between the modified and the original sections eased out "
                             f"over {lo:.0f} mm below it" + (f" and {hi:.0f} mm above" if hi else ""))
             if out["cad_error"]:

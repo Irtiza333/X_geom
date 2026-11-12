@@ -159,6 +159,18 @@ def test_adapter():
         ad = XR.RudderAdapter()
         check("starts from the original below H (no problems), P1x held",
               [len(ad.preview()["problems"]), ad.n_free("P1x")[0], ad.n_free("P2x")[0]], [0, 0, 4], 0)
+
+        def off_original(lp):                                # a loop of the 3D view against the original there
+            x_le, xy = RM.original_section_at(ad.stack, lp[0, 1])
+            return np.abs(lp - RM.xcad_loop(xy, x_le, lp[0, 1])).max()
+
+        sk0 = ad.skeleton()
+        model = RM.modified_sections(ad.design, ad.orig, 50)
+        check("as it starts the sections drawn (and written) are the extracted ones, not the model's fit of "
+              "them, 0.1 to 0.2 mm away (mm)",
+              [max(off_original(lp) for lp in sk0["modified"] + sk0["cut"]) < 1e-4,
+               0.1 < max(off_original(sec.loop()) for sec in model) < 0.2,
+               max(off_original(sec.loop()) for sec in ad.preview()["sections"]) < 1e-4], [1, 1, 1], 0)
         v = ad.set("LE.dx3", -500.0)
         check("a value is clamped into its bounds", v, ad.bounds("LE.dx3")[0], 0.0)
         ad.set("LE.dx3", -20.0)
@@ -178,6 +190,9 @@ def test_adapter():
         n_top = sum(1 for lp in ad.loops0 if np.ptp(lp[:, 1]) > 1e-9)
         check("H bounds 40 .. 150: H = 150 builds; the 3D view keeps the tip section and every cap loop",
               [len(ad.preview()["problems"]), ad.get("H"), len(tip), n_top > 1], [0, 150.0, n_top, 1], 1e-9)
+        check("the changed design still meets the extracted section at H (no step), its root 20 mm forward (mm)",
+              [off_original(sk["cut"][0]) < 1e-4, sk["modified"][0][0, 0] - sk0["modified"][0][0, 0]], [1, -20.0],
+              1e-9)
         try:
             ad.set_bounds("H", 40.0, 250.0)
             refused = False
@@ -206,8 +221,9 @@ def test_adapter():
                 lr = res["loft"]
                 print(f"       solid: volume {lr.volume:.1f} mm^3, {lr.seconds:.1f} s, {lr.faces} faces")
                 check("XCAD: a valid closed solid and its STEP file; the rudder's 6 patches (the LE and TE "
-                      "strips, the central panels, the tip, the root)",
-                      [lr.valid, lr.free_edges, os.path.exists(res["step"]), lr.faces], [1, 0, 1, 6], 0)
+                      "strips, the central panels, the tip, the root); no step at H for the loft to ease",
+                      [lr.valid, lr.free_edges, os.path.exists(res["step"]), lr.faces, len(lr.steps)],
+                      [1, 0, 1, 6, 0], 0)
                 hres = ad.build_xcad("th", plot=False, cad=True, half=True)
                 hlr = hres["loft"]
                 check("XCAD half body: valid, 6 faces, half the volume",
@@ -231,6 +247,12 @@ def test_adapter():
         check("every curve stays pinned to the original at H",
               max(abs(ad.design.curve(c)([0.0])[0, 1] - ad.orig.value(c, ad.design.H)[0]) for c in ad.names), 0.0,
               1e-12)
+        thin = XR.RudderAdapter()
+        thin.set("P1z.v3", 0.002)                            # a nose far thinner than the model's fit is off
+        pv = thin.preview(skeleton=True)
+        check("a section too thin to write as extracted + change is a problem (named), not a broken loop",
+              [len(pv["problems"]), "too thin to write" in pv["problems"][0], len(pv["skeleton"]["modified"])],
+              [1, 1, 0], 0)
     finally:
         os.chdir(cwd)
 

@@ -43,6 +43,19 @@ modified sections' control points as a table (and in the thickness format when
 the design is still a quartic with P1x = 0 and P1z = P2z), the design as JSON
 and a check plot.
 
+Written   The Bezier sections and their spanwise curves are a model of the
+          rudder: their fit of the original lies a little off the extracted
+          sections (the section fits' error, about 0.1 mm for the wind tunnel
+          rudder). So each modified section is written to XCAD as the
+          extracted section at its height plus the change the design makes to
+          the model, point by point:
+              written = model(design) + (extracted - model(original's fit))
+          (original_offsets, ModSection.written). The baseline design then
+          writes the extracted rudder itself, every design meets the extracted
+          sections at H without a step, and what a design changes is exactly
+          what the model changes. The control-point table, the thickness
+          format and the design JSON hold the model.
+
 Every spanwise Bezier is stored top first, control point 0 at H and the last at
 the root, with its heights in order (never rising towards the root), so each
 height has exactly one point on the curve. Heights are kept as fractions
@@ -373,6 +386,7 @@ class OriginalShape:
     sources: dict = field(default_factory=dict)
     base: dict = field(default_factory=dict, repr=False)      # the quartic rows and fit options (at_degree)
     scale: float = 1.0           # heights stretched by this from the extracted rudder (scaled)
+    te_radius: float = None      # TE radius of the original sections, mm (the table's R_orig_mm), when known
 
     @property
     def names(self):
@@ -401,7 +415,7 @@ class OriginalShape:
         return OriginalShape(self.z_top * k, self.degree, curves,
                              {c: (np.asarray(y, dtype=float) * k, v) for c, (y, v) in self.data.items()},
                              dict(self.residuals), np.asarray(self.y_rows, dtype=float) * k, self.x_te_rows,
-                             self.x_le_rows, dict(self.sources), base, self.scale * k)
+                             self.x_le_rows, dict(self.sources), base, self.scale * k, self.te_radius)
 
     def _heights(self, y):
         y = np.atleast_1d(np.asarray(y, dtype=float))
@@ -432,11 +446,12 @@ class OriginalShape:
             return self
         b = self.base
         return _original(self.z_top, degree, b["le"], b["y_tab"], b["ctrl4"], self.y_rows, self.x_te_rows,
-                         self.x_le_rows, b["orders"], b["weights"], b["free_heights"], self.sources, self.scale)
+                         self.x_le_rows, b["orders"], b["weights"], b["free_heights"], self.sources, self.scale,
+                         self.te_radius)
 
 
 def _original(z_top, degree, le, y_tab, ctrl4, y_rows, x_te_rows, x_le_rows, orders, weights, free_heights,
-              sources, scale=1.0):
+              sources, scale=1.0, te_radius=None):
     degree = int(degree)
     if degree < BASE_DEGREE:
         raise ValueError(f"the sections need degree {BASE_DEGREE} or more (the section fits are quartics)")
@@ -449,7 +464,7 @@ def _original(z_top, degree, le, y_tab, ctrl4, y_rows, x_te_rows, x_le_rows, ord
     base = {"le": le, "y_tab": y_tab, "ctrl4": ctrl4, "orders": orders, "weights": weights,
             "free_heights": free_heights}
     return OriginalShape(z_top, degree, curves, data, residuals, y_rows, x_te_rows, x_le_rows, sources, base,
-                         float(scale))
+                         float(scale), te_radius)
 
 
 def fit_original(corner_points, section_table, z_top=None, orders=None, weights=None, free_heights=False,
@@ -490,9 +505,12 @@ def fit_original(corner_points, section_table, z_top=None, orders=None, weights=
         print(f"  warning: the section table covers y = {y_tab.min():g} .. {y_tab.max():g} mm, "
               f"not 0 .. {z_top:g}; its laws are extrapolated there")
     ctrl4 = quartic_polygons(table["X1"][keep], table["X2"][keep], table["T1"][keep], table["T2"][keep])
+    r_te = table["R_orig_mm"][keep] if "R_orig_mm" in table else np.empty(0)       # the original sections' TE radius
+    r_te = r_te[np.isfinite(r_te) & (r_te > 0.0)]
     return _original(z_top, degree, le, y_tab, ctrl4, y_rows, rows[:, 3], rows[:, 0], dict(orders or {}),
                      dict(weights or {}), free_heights,
-                     {"corner_points": corner_points, "section_table": section_table})
+                     {"corner_points": corner_points, "section_table": section_table},
+                     te_radius=float(np.median(r_te)) if len(r_te) else None)
 
 
 # --------------------------------------------------------------------------
@@ -864,7 +882,9 @@ class ModSection:
     cs: float                    # sharp chord: ctrl and r are fractions of it
     r: float                     # TE radius / cs
     ctrl: np.ndarray             # (n + 1, 2) control points P0 .. Pn, fractions of cs
-    selig: np.ndarray            # (num_pts, 2) airfoil frame, mm, Selig order
+    selig: np.ndarray            # (num_pts, 2) the model's section: airfoil frame, mm, Selig order
+    dx_le: float = 0.0           # with resid, what the extracted original has at this height that its model
+    resid: np.ndarray = None     # leaves out: x of the LE (mm) and (num_pts, 2) point by point (Offsets.at)
 
     @property
     def degree(self):
@@ -886,9 +906,21 @@ class ModSection:
             return None
         return float(c[2, 0]), float(c[3, 0]), float(c[1, 1]), float(c[3, 1]), float(self.r)
 
+    def written(self):
+        """(x of the LE, the Selig points) of the section as it is written: the
+        model's (x_le, selig), plus, when the section carries them, the
+        offsets of the extracted original from its own model at this height
+        (dx_le, resid). The baseline design then gives the extracted section
+        itself and any other design that section plus the change the design
+        makes to the model."""
+        if self.resid is None:
+            return self.x_le, self.selig
+        return self.x_le + self.dx_le, self.selig + self.resid
+
     def loop(self):
-        """The section as an XCAD loop, working frame, mm."""
-        return xcad_loop(self.selig, self.x_le, self.y)
+        """The section as an XCAD loop, working frame, mm (as written())."""
+        x_le, xy = self.written()
+        return xcad_loop(xy, x_le, self.y)
 
 
 def curve_values(design, ys):
@@ -914,10 +946,14 @@ _PROBLEM_TEXT = ("the LE is at or behind the TE",
                  "the TE radius does not fit under the half-thickness")
 
 
-def build_sections(design, orig, ys, num_pts=200, te_radius_mm=0.75, first_index=1):
+def build_sections(design, orig, ys, num_pts=200, te_radius_mm=0.75, first_index=1, offsets=None):
     """The sections of a pinned design at the heights ys (all at once, see
     modified_sections). Raises ValueError naming the first section that
-    cannot be built and why."""
+    cannot be built and why. With offsets (original_offsets) each section
+    also carries what the extracted original has at its height that the model
+    leaves out, and is written with it (ModSection.written); a section too
+    thin to take them (its outline would pass through the chord line) cannot
+    be built either."""
     d = pin(design, orig)
     ys = np.atleast_1d(np.asarray(ys, dtype=float))
     val = curve_values(d, ys)
@@ -931,26 +967,37 @@ def build_sections(design, orig, ys, num_pts=200, te_radius_mm=0.75, first_index
                              f"({', '.join(f'{n} {v[k]:.5f}' for n, v in val.items() if n != 'LE')}, "
                              f"LE x {x_le[k]:.4f}, TE x {x_te[k]:.4f})")
     selig, cs, r = BS.sections(ctrl, chord, te_radius_mm, num_pts)
+    dx, res = (np.zeros(len(ys)), [None] * len(ys)) if offsets is None else offsets.at(ys, num_pts)
+    if offsets is not None:                   # the written outline must stay clear of the chord line, as the model's
+        z = selig[:, :, 1] + res[:, :, 1]
+        i_le = (selig.shape[1] + 1) // 2 - 1
+        thin = (z[:, 1:i_le].min(axis=1) <= 0.0) | (z[:, i_le + 1:-1].max(axis=1) >= 0.0)
+        if np.any(thin):
+            k = int(np.argmax(thin))
+            raise ValueError(f"section {first_index + k} at y = {ys[k]:.4f} mm: the section is too thin to "
+                             f"write. What the extracted original has that the model leaves out (up to "
+                             f"{np.abs(res[k, :, 1]).max():.3f} mm here) takes its outline through the chord "
+                             f"line")
     return [ModSection(first_index + k, float(ys[k]), float(x_le[k]), float(x_te[k]), float(chord[k]),
-                       float(cs[k]), float(r[k]), ctrl[k], selig[k]) for k in range(len(ys))]
+                       float(cs[k]), float(r[k]), ctrl[k], selig[k], float(dx[k]), res[k]) for k in range(len(ys))]
 
 
-def modified_sections(design, orig, n_sec=50, num_pts=200, te_radius_mm=0.75):
+def modified_sections(design, orig, n_sec=50, num_pts=200, te_radius_mm=0.75, offsets=None):
     """The n_sec horizontal sections from the root to H (root first).
 
     At each height: the LE from the design's LE curve, the TE from the TE
     line, the section control points from their curves, and the sharp chord
     that puts the TE, rounded with te_radius_mm, on the TE line
     (bezier_section.sharp_chord). num_pts points per section in the
-    extraction's layout."""
+    extraction's layout. offsets: see build_sections."""
     d = pin(design, orig)
-    return build_sections(d, orig, np.linspace(0.0, d.H, int(n_sec)), num_pts, te_radius_mm)
+    return build_sections(d, orig, np.linspace(0.0, d.H, int(n_sec)), num_pts, te_radius_mm, offsets=offsets)
 
 
-def section_at(design, orig, y, num_pts=200, te_radius_mm=0.75, index=0):
+def section_at(design, orig, y, num_pts=200, te_radius_mm=0.75, index=0, offsets=None):
     """The section of a design at any height y in [0, H], built as
     modified_sections builds its own (for previews)."""
-    return build_sections(design, orig, [float(y)], num_pts, te_radius_mm, index)[0]
+    return build_sections(design, orig, [float(y)], num_pts, te_radius_mm, index, offsets)[0]
 
 
 def design_problems(design, orig, n_sec=50, te_radius_mm=0.75):
@@ -959,7 +1006,8 @@ def design_problems(design, orig, n_sec=50, te_radius_mm=0.75):
     section control points folding the half-section back, a thickness that is
     not positive, a TE radius that does not fit under the half-thickness. A
     list of messages, empty when the design builds; for an interactive tool
-    and as a feasibility test for an optimiser."""
+    and as a feasibility test for an optimiser. (A section too thin to take
+    the original's offsets is found only by building it, build_sections.)"""
     try:
         d = pin(design, orig)
     except ValueError as exc:
@@ -1034,10 +1082,127 @@ def original_section_at(stack, y):
     return (1.0 - f) * a.x_le + f * b.x_le, (1.0 - f) * a.xy + f * b.xy
 
 
+def _to_polyline(q, line):
+    """Distance of each point of q (m, 2) to the polyline `line` (k, 2)."""
+    a, ab = line[:-1], np.diff(line, axis=0)
+    l2 = (ab**2).sum(axis=1)
+    a, ab, l2 = a[l2 > 0], ab[l2 > 0], l2[l2 > 0]
+    t = np.clip(np.einsum("mkd,kd->mk", q[:, None, :] - a[None], ab) / l2, 0.0, 1.0)
+    return np.sqrt((((a[None] + t[..., None] * ab[None]) - q[:, None, :])**2).sum(axis=2)).min(axis=1)
+
+
 def scaled_stack(stack, k):
     """The stack (read_stack) stretched in height by k (each section's height times k; its points, in the
     airfoil frame, kept), as OriginalShape.scaled stretches the original."""
     return [StackSection(s.y * float(k), s.chord, s.x_le, s.x_te, s.tilt_deg, s.xy) for s in stack]
+
+
+# --------------------------------------------------------------------------
+# What the model leaves out: the extracted sections against their fit
+# --------------------------------------------------------------------------
+
+_TOL_STACK = 1.0e-4              # mm, slack on the heights of extracted sections (their files print 5, 6 decimals)
+
+
+def _relayout(a, num_pts):
+    """Values at the points of sections in the extraction's layout, (m, n, k),
+    carried to num_pts points per section: each side keeps its cosine
+    stations, so a value goes over along its side's station angle (a cubic
+    spline through the stations it is given at)."""
+    n = a.shape[1]
+    num_pts = n if num_pts is None else int(num_pts)
+    if num_pts == n:
+        return a
+    from scipy.interpolate import CubicSpline
+
+    def side(v, p):                                          # v (m, q, k), from the LE to the TE
+        q = v.shape[1]
+        return CubicSpline(np.arange(q), v, axis=1)(np.linspace(0.0, q - 1.0, p))
+
+    iu, ju = (n + 1) // 2, (num_pts + 1) // 2
+    up = side(a[:, :iu][:, ::-1], ju)[:, ::-1]
+    lo = side(a[:, iu - 1:], num_pts - ju + 1)[:, 1:]
+    return np.concatenate((up, lo), axis=1)
+
+
+@dataclass
+class Offsets:
+    """What the extracted original has that its model leaves out
+    (original_offsets), at the heights of its horizontal sections, root
+    first."""
+    y: np.ndarray                # (m,) heights, mm
+    dx_le: np.ndarray            # (m,) x of the extracted LE minus the fitted LE, mm
+    resid: np.ndarray            # (m, n, 2) the extracted points minus the model's: airfoil frame, mm, Selig order
+    te_radius: float             # TE radius of the model sections they were measured from, mm
+    gap_max: np.ndarray = None   # (m,) largest and RMS distance of the extracted section's upper-surface points
+    gap_rms: np.ndarray = None   # from the model's outline, mm (the section table's gap_max_um, gap_rms_um)
+
+    def gap(self, y_max=None):
+        """(largest, RMS) distance (mm) of the extracted sections from the
+        model's, over the sections up to y_max (all of them by default)."""
+        m = np.ones(len(self.y), dtype=bool) if y_max is None else self.y <= y_max + _TOL_STACK
+        return float(self.gap_max[m].max()), float(np.sqrt(np.mean(self.gap_rms[m]**2)))
+
+    def at(self, ys, num_pts=None):
+        """(dx_le (k,), resid (k, num_pts, 2)) at the heights ys: linear in the
+        height between the sections either side (the offsets are small and
+        change slowly up the span, so this is far closer than interpolating
+        the sections themselves), then carried to num_pts points per section
+        when the extracted sections have another count (_relayout)."""
+        ys = np.atleast_1d(np.asarray(ys, dtype=float))
+        if ys.min() < self.y[0] - _TOL_STACK or ys.max() > self.y[-1] + _TOL_STACK:
+            raise ValueError(f"heights {ys.min():g} .. {ys.max():g} mm lie outside the extracted sections "
+                             f"the offsets come from, {self.y[0]:g} .. {self.y[-1]:g} mm")
+        j = np.clip(np.searchsorted(self.y, ys), 1, len(self.y) - 1)
+        f = np.clip((ys - self.y[j - 1]) / (self.y[j] - self.y[j - 1]), 0.0, 1.0)
+        dx = (1.0 - f) * self.dx_le[j - 1] + f * self.dx_le[j]
+        res = (1.0 - f)[:, None, None] * self.resid[j - 1] + f[:, None, None] * self.resid[j]
+        return dx, _relayout(res, num_pts)
+
+
+def original_offsets(orig, stack, te_radius_mm=None):
+    """The offsets of the extracted original from its model (Offsets): at the
+    height of each horizontal section of `stack` (read_stack, stack_of_loops;
+    at the original's height scale) up to z_top, the extracted section minus
+    the section the model builds there from the original's fits, point by
+    point (both lay their points on the same cosine stations of each side),
+    and the same for x of the LE.
+
+    The model sections take the original's TE radius (orig.te_radius, the
+    section table's R_orig_mm; te_radius_mm when the table does not give it),
+    so a design with another TE radius still shows that change. A section
+    just above z_top is measured against the fits carried on along their
+    tangents, so every height up to z_top lies between two sections.
+
+    Offsets.at(y) added to the model's section of a design at y
+    (build_sections, ModSection.written) is the extracted section there plus
+    the change the design makes to the model."""
+    r = orig.te_radius if orig.te_radius is not None else te_radius_mm
+    if r is None:
+        raise ValueError("the original's TE radius is not known (no R_orig_mm in the section table): "
+                         "give te_radius_mm")
+    flat = sorted((s for s in stack if s.tilt_deg == 0.0), key=lambda s: s.y)
+    flat = [s for k, s in enumerate(flat) if k == 0 or s.y > flat[k - 1].y + _TOL_Y]      # one per height
+    n_in = sum(1 for s in flat if s.y <= orig.z_top + _TOL_STACK)
+    flat = flat[:n_in + 1]                                  # and one above z_top, when there is one
+    if n_in < 1 or len(flat) < 2:
+        raise ValueError(f"the extracted sections do not cover the fitted original, 0 .. {orig.z_top:g} mm: "
+                         f"{len(flat)} horizontal section(s) there")
+    if len({len(s.xy) for s in flat}) != 1:
+        raise ValueError("the extracted sections do not all have the same number of points")
+    ys = np.array([s.y for s in flat])
+    yc = np.clip(ys, 0.0, orig.z_top)                       # the fits end at z_top: on along their tangents
+    val = {c: orig.value(c, yc) + orig.slope(c, orig.z_top)[0] * (ys - yc) for c in orig.names}
+    n = len(flat[0].xy)
+    selig = BS.sections(BS.polygon_from_values(val, orig.degree), orig.x_te(ys) - val["LE"], r, n)[0]
+    res = np.array([s.xy for s in flat]) - selig
+    n_up = (n + 1) // 2
+    x0 = res[:, n_up - 1, 0].copy()                         # the LE point's own x goes with the LE
+    res[:, :, 0] -= x0[:, None]
+    dx = np.array([s.x_le for s in flat]) - val["LE"] + x0
+    gap = [_to_polyline(s.xy[:n_up] + [dx[k], 0.0], selig[k, :n_up]) for k, s in enumerate(flat)]
+    return Offsets(ys, dx, res, float(r), np.array([g.max() for g in gap]),
+                   np.array([np.sqrt(np.mean(g**2)) for g in gap]))
 
 
 # --------------------------------------------------------------------------
@@ -1072,6 +1237,31 @@ def xcad_loop(selig, x_le, y):
     pts[:, 1] = y
     pts[:, 2] = loop2[:, 1]
     return pts
+
+
+def stack_of_loops(loops):
+    """The horizontal loops of an XCAD file (working frame, mm, as
+    xcad_to_working gives them) as stack sections, root first: what read_stack
+    gives for the extraction's stack file, from the loops themselves
+    (xcad_loop undone)."""
+    out = []
+    for lp in loops:
+        lp = np.asarray(lp, dtype=float)
+        if np.ptp(lp[:, 1]) > 1e-6 * max(1.0, np.abs(lp[:, 1]).max()):
+            continue
+        i_le = (len(lp) + 1) // 2 - 1                       # the TE: the loop runs LE, +z side, TE, -z side, LE
+        q = np.column_stack((lp[:, 0] - lp[0, 0], lp[:, 2]))
+        xy = np.vstack([q[:i_le + 1][::-1], q[i_le + 1:][::-1][1:], q[i_le:i_le + 1]])
+        out.append(StackSection(float(lp[0, 1]), float(xy[0, 0]), float(lp[0, 0]), float(lp[0, 0] + xy[0, 0]),
+                                0.0, xy))
+    return sorted(out, key=lambda s: s.y)
+
+
+def stack_of_xcad(path, units="m", height_scale=1.0):
+    """stack_of_loops of an XCAD point file, its heights stretched by
+    height_scale."""
+    k = np.array([1.0, float(height_scale), 1.0])
+    return stack_of_loops([xcad_to_working(pts, units) * k for _, pts in read_xcad(path)])
 
 
 def xcad_lines(loop, units="m"):
@@ -1128,13 +1318,14 @@ def kept_loops(loops, H, gap, units="m"):
 def write_modified_xcad(path, sections, original_xcad, H, gap_mm=None, units="m",
                         original_units="m", height_scale=1.0):
     """The modified rudder as one XCAD file: the modified sections from the
-    root to H, then the loops of the original file above them (kept_loops:
-    the extracted sections from H + gap up, the tilted tip section and the
-    cap), copied line for line when the units match. The gap (default one
-    modified step, H / (n_sec - 1)) leaves out the extracted sections just
-    above H, which would sit a fraction of a millimetre from the replica at H
-    and differ from it by the fit error; the tip section and the cap stay
-    whatever H is. height_scale (the original's scale) stretches the
+    root to H (as written, ModSection.loop), then the loops of the original
+    file above them (kept_loops: the extracted sections from H + gap up, the
+    tilted tip section and the cap), copied line for line when the units
+    match. The gap (default one modified step, H / (n_sec - 1)) leaves out
+    the extracted sections just above H, which would sit a fraction of a
+    millimetre from the section at H (and, for sections given without their
+    offsets, differ from it by the fit error); the tip section and the cap
+    stay whatever H is. height_scale (the original's scale) stretches the
     original's loops in height first. Returns what was written."""
     gap = H / (len(sections) - 1) if gap_mm is None else float(gap_mm)
     loops = read_xcad(original_xcad)
@@ -1421,9 +1612,15 @@ def write_case(out_dir, case, design, orig, original_xcad, n_sec=50, num_pts=200
 
     <case>_sections_xcad_<units>.dat  the whole rudder for XCAD: the modified
                                       sections, then the original loops from
-                                      H + gap up (write_modified_xcad)
+                                      H + gap up (write_modified_xcad). Each
+                                      modified section is the extracted one at
+                                      its height (from the horizontal loops of
+                                      original_xcad) plus the change the design
+                                      makes to the model (original_offsets), so
+                                      the baseline writes the original itself
     <case>_sections.dat               the modified sections: heights, LE/TE,
                                       chords, t/c, LE radius and control points
+                                      (the model)
     <case>_thickness_params.txt       the same in the thickness format
                                       (Section # | X1 | X2 | T1 | T2 | r), only
                                       when every section is a quartic with
@@ -1444,11 +1641,15 @@ def write_case(out_dir, case, design, orig, original_xcad, n_sec=50, num_pts=200
         raise ValueError(f"{case}: H = {design.H:g} mm is above h_max = {float(h_max):g} mm")
     os.makedirs(out_dir, exist_ok=True)
     d = pin(design, orig)
-    secs = modified_sections(d, orig, n_sec, num_pts, te_radius_mm)
+    off = original_offsets(orig, stack_of_xcad(original_xcad, original_units, orig.scale), te_radius_mm)
+    secs = modified_sections(d, orig, n_sec, num_pts, te_radius_mm, off)
+    gap_max, gap_rms = off.gap(d.H)                         # how far the model alone is from the extracted sections
     p = {k: os.path.join(out_dir, f"{case}_{name}") for k, name in
          (("xcad", f"sections_xcad_{units}.dat"), ("table", "sections.dat"), ("params", "thickness_params.txt"),
           ("json", "design.json"), ("png", "check.png"))}
     xinfo = write_modified_xcad(p["xcad"], secs, original_xcad, d.H, gap_mm, units, original_units, orig.scale)
+    xinfo.update(sections="the extracted section at each height plus the change the design makes to the model",
+                 model_off_max_mm=gap_max, model_off_rms_mm=gap_rms, te_radius_original_mm=off.te_radius)
     quartic = all(s.params() is not None for s in secs)
     if quartic:
         write_params_txt(p["params"], secs)
@@ -1460,7 +1661,11 @@ def write_case(out_dir, case, design, orig, original_xcad, n_sec=50, num_pts=200
              f"XCAD file    : {os.path.basename(p['xcad'])}, these sections then the original loops "
              f"{xinfo['kept'][0] if xinfo['kept'] else '-'} .. {xinfo['kept'][-1] if xinfo['kept'] else '-'}"
              f" of {os.path.basename(original_xcad)}"
-             + (f" (from y = {xinfo['first_kept_y']:.4f} mm)" if xinfo["kept"] else "")]
+             + (f" (from y = {xinfo['first_kept_y']:.4f} mm)" if xinfo["kept"] else ""),
+             "XCAD loops   : each section as extracted from the original at its height, plus the change the "
+             "design makes to the model;",
+             f"               the model alone (the rows below) lies up to {gap_max:.3f} mm, RMS {gap_rms:.3f}, "
+             f"off the extracted sections below H"]
     write_sections_dat(p["table"], secs, notes)
     rec = {"case": case, "written": f"{datetime.date.today():%d %b %Y}",
            "settings": {"z_top_mm": orig.z_top, "height_scale": orig.scale,
@@ -1490,18 +1695,16 @@ def write_case(out_dir, case, design, orig, original_xcad, n_sec=50, num_pts=200
 
 def distance_to_original(sec, stack):
     """Distance (mm) of each upper-surface point of the original section at
-    the height of `sec` (original_section_at) to the upper surface of `sec`,
-    both where they sit in x (each from its own LE). For the baseline design
-    this is the error of the replica; for a changed design, the change."""
+    the height of `sec` (original_section_at) to the upper surface of `sec`
+    as written (ModSection.written), both where they sit in x (each from its
+    own LE). For a changed design this is the change. For the baseline it is
+    nothing when the section carries the original's offsets, and the error of
+    the model when it does not."""
     x_le_o, xy_o = original_section_at(stack, sec.y)
     n_up = (len(xy_o) + 1) // 2
     q = xy_o[:n_up] + [x_le_o, 0.0]
-    up = sec.selig[:(len(sec.selig) + 1) // 2] + [sec.x_le, 0.0]
-    a, ab = up[:-1], np.diff(up, axis=0)
-    l2 = (ab**2).sum(axis=1)
-    a, ab, l2 = a[l2 > 0], ab[l2 > 0], l2[l2 > 0]
-    t = np.clip(np.einsum("mkd,kd->mk", q[:, None, :] - a[None], ab) / l2, 0.0, 1.0)
-    return np.sqrt((((a[None] + t[..., None] * ab[None]) - q[:, None, :])**2).sum(axis=2)).min(axis=1)
+    x_le, xy = sec.written()
+    return _to_polyline(q, xy[:(len(xy) + 1) // 2] + [x_le, 0.0])
 
 
 def case_report(res, orig, stack=None):
@@ -1522,6 +1725,9 @@ def case_report(res, orig, stack=None):
              f"{len(x['kept'])} original (loops {x['kept'][0]} .. {x['kept'][-1]} of {x['n_original']}, "
              f"from y = {x['first_kept_y']:.4f} mm; gap {x['gap_mm']:.4f} mm)" if x["kept"] else
              f"  XCAD {os.path.basename(x['path'])}: {x['n_loops']} loops, no original loop kept"]
+    if "model_off_max_mm" in x:
+        lines.append(f"  XCAD sections: the extracted ones plus the design's change to the model (the model alone "
+                     f"lies up to {x['model_off_max_mm']:.3f} mm, RMS {x['model_off_rms_mm']:.3f}, off them)")
     if "params" not in res["paths"]:
         lines.append("  thickness format not written: the sections are not quartics with P1x = 0 and P1z = P2z")
     if stack is not None:
@@ -1599,7 +1805,8 @@ def plot_case(path, case, design, orig, sections, stack=None, every=7):
     ax = axs[len(coords) + 1]
     pick = [sections[0], sections[len(sections) // 2], sections[-1]]
     for s, col in zip(pick, ("tab:blue", "tab:orange", "tab:green")):
-        ax.plot(s.x_le + s.selig[:, 0], s.selig[:, 1], color=col, lw=1.3, label=f"new, y = {s.y:.2f} mm")
+        x_le_w, xy_w = s.written()
+        ax.plot(x_le_w + xy_w[:, 0], xy_w[:, 1], color=col, lw=1.3, label=f"new, y = {s.y:.2f} mm")
         ax.plot(s.x_le + s.ctrl[:, 0] * s.cs, s.ctrl[:, 1] * s.cs, "o:", color=col, ms=3, lw=0.7)
         if stack is not None:
             x_le_o, xy_o = original_section_at(stack, s.y)

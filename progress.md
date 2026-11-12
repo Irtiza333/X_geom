@@ -11,8 +11,11 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   rounded TE, PSO plus a least-squares polish; every horizontal section in `thickness_params_y0_y200.txt`.
 - **Rudder modification below H** (`rudder_modify.py`, `modify_control.py`, `bezier_section.py`): the original
   stays above H; below H the LE and the x and z of every section control point follow spanwise Bezier curves
-  pinned to the original at H. Output: the whole rudder as an XCAD file, section tables, the design as JSON and a
-  flat design vector for the optimiser. The full height (root to the top of the cap) is a setting: a new one
+  pinned to the original at H. Each modified section is written as the extracted section at its height plus
+  the change the design makes to this Bezier model (`original_offsets`, `ModSection.written`), so the baseline
+  is the extracted rudder itself and no design steps at H; the tables and the JSON hold the model. Output: the
+  whole rudder as an XCAD file, section tables, the design as JSON and a flat design vector for the
+  optimiser. The full height (root to the top of the cap) is a setting: a new one
   stretches the whole rudder in height (`OriginalShape.scaled`, `scaled_stack`; H, its bounds and the curves'
   heights in proportion, x, chords and section shapes kept), saved with the set-up as `height_scale`.
 - **Propeller blade** (`blade_modify.py`, `blade_control.py`, `msc_blade_params.dat`): a blade always starts from
@@ -363,6 +366,27 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   profiles, strips 0.07 and 0.01 of the root chord): within 0.10 mm of the original outside the synthetic
   root (4.4 mm at the tip's corners with the 6 Nov file), the set-up files in `bb2/outputs` written again.
   Tests: tool (a stepped stack and a strip pair added), hull, wing, files, modify.
+- Modified sections written as the extracted ones plus the model's change (12 Nov 2026, the user's word): the
+  Bezier model's fit of the original lies up to 0.135 mm (RMS 0.07) off the extracted sections, so sections
+  written from the model alone met the original ones at H in a 0.17 mm step that the loft had to ease, and
+  the baseline was a replica of the rudder. Now `written = model(design) + (extracted - model(the original's
+  fit))`, point by point (both lay their points on the same cosine stations) and for x of the LE.
+  `rudder_modify.original_offsets` measures the offsets at the horizontal loops of the original XCAD file
+  (`stack_of_xcad`), against the model at the original's TE radius (`OriginalShape.te_radius`, the section
+  table's `R_orig_mm`); `Offsets.at` gives them at any height (linear between the loops either side);
+  `build_sections`, `modified_sections` and `section_at` take them (`offsets=`), `ModSection.written()` and
+  `loop()` add them, `selig` stays the model. `write_case` always writes this form, and the tool draws and
+  writes the same sections (`RudderAdapter.offsets`). The baseline writes the extracted rudder itself (a loop
+  at an extracted height is the original file's line, digit for digit); the user's set-up of 6 Nov
+  (baseline, H = 80) lofts to the original's solid: no step found (0.00003 mm in the loops against 0.168),
+  583,361.87 mm^3 against 583,361.9, the STEP's mesh vertices within 0.008 mm (RMS 0.0014) as with the
+  original's own loft, the half body half the volume; no step at any H from 20 mm to the top section, nor
+  for a changed design, which meets the extracted section at H exactly. The section table, the thickness
+  format and the design JSON hold the model (the XCAD loops differ from them by the offsets; the JSON's
+  `xcad` entry and the table's notes give the model's distance). A section too thin to take the offsets is
+  refused by name (a problem in the tool). Another TE radius still shows as a change, and steps at H;
+  `_ease_flats` stays for stacks that step. Tests: modify 137 (29 new, on a bumped synthetic original the
+  model cannot hold), tool 40 with the GUI (21 without OCC), hull 59, wing 51, files 53.
 
 ## Next steps
 
@@ -377,8 +401,6 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
 - Optimisation: sample a saved set-up (`load_component`, `Initial_sampling.py`), screen
   designs with the problem checks, couple to CFD. `Initial_sampling.py` varies pitch and chord only (x_blade_new's
   form); other parameters flagged Y are reported, not sampled.
-- Rudder: the tip tilt and cap parameters into the design space. Open: writing the modified sections as
-  the extracted section plus the model's change, so that the baseline is the original exactly and no
-  step is left at H for the loft to ease.
+- Rudder: the tip tilt and cap parameters into the design space.
 - Open items: section-fit bounds (X2 on its bound) and an LE-radius constraint; plain-named rudder outputs are
   overwritten by runs at other heights; Fig. 5 of the plan still labels the tip y = 218.07.

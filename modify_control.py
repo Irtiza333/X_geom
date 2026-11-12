@@ -20,9 +20,14 @@ Set the files, the settings and the design below, then run
      <case>_sections_xcad_m.dat     the whole rudder for XCAD: the modified
                                     sections from the root to H, then the
                                     extracted loops from H + gap up (tip
-                                    section and cap included)
+                                    section and cap included). Each modified
+                                    section is the extracted one at its height
+                                    plus the change the design makes to the
+                                    Bezier model, so the baseline case is the
+                                    extracted rudder itself and no case steps
+                                    at H
      <case>_sections.dat            the modified sections: heights, LE, TE,
-                                    chords and control points
+                                    chords and control points (the model)
      <case>_thickness_params.txt    the same as Section # | X1 | X2 | T1 | T2
                                     | r, when the design is still a quartic
                                     with P1x = 0 and P1z = P2z
@@ -52,7 +57,8 @@ class ModifySettings:
     n_sections: int = 50           # modified sections from the root to H, both included
     num_pts: int = 200             # points per section, laid out as the extraction lays them out
     te_radius_mm: float = 0.75     # TE radius of every modified section, mm (the original sections' radius;
-                                   # the circle meets each fitted section tangentially, checked 29 Sep 2026)
+                                   # the circle meets each fitted section tangentially, checked 29 Sep 2026).
+                                   # Another radius is a change like any other: it shows, and steps at H
     gap_mm: float = None           # original loops kept from H + gap up; None: one modified step, H / (n_sections - 1)
     xcad_units: str = "m"          # units of the XCAD file written ("m" like the extraction's, or "mm")
     fit_free_heights: bool = False # fits to the original shape: False for evenly spaced control heights (least
