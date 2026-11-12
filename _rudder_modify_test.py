@@ -559,8 +559,9 @@ def test_real():
         with tempfile.TemporaryDirectory() as tmp:
             xf = RM.write_modified_xcad(os.path.join(tmp, "x.dat"), sf, paths["xcad"], of.z_top)
         print(f"       whole stack: H = z_top = {of.z_top:.4f} mm, largest distance {gf * 1e3:.1f} um")
+        n_top = sum(1 for _, pts in loops if np.ptp(pts[:, 2]) > 1e-12)        # the tip section and the cap loops
         check("whole-stack original: z_top the top horizontal section; H = z_top within 0.2 mm; tip and cap kept",
-              [of.z_top - top_sec, gf < 0.2, len(xf["kept"])], [0, 1, 11], 1e-6)   # the stack header has 6 decimals
+              [of.z_top - top_sec, gf < 0.2, len(xf["kept"]), n_top > 1], [0, 1, n_top, 1], 1e-6)   # 6 decimals
     else:
         print("       (outputs/thickness_params_y0_y200_info.dat not here: whole-stack check skipped)")
     rows = RM.fit_section_table(paths["stack"], 0.5, verbose=False)

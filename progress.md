@@ -342,6 +342,27 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   tool's own save, so they carry the half setting they predated (`# half N`; the hull its settings heading)
   and a load and re-save gives the same bytes on any machine (`msc_blade.txt` already did); nothing else in
   them changed. Asked for by the web front end's round-trip test.
+- Tip patch at the tip's edge (11 Nov 2026): the five-patch CAD of 6 Nov rippled in three places: the top
+  15 % of both sides and the cap (the tip patch could not follow wall, edge radius and crown through one wrap
+  parametrization: -0.82 to +0.37 mm against the STEP), and a band round H in modified designs.
+  `xcad_loft.loft_loops` rebuilt: the LE strip, the TE strip and the two central panels run from the root to
+  the tip's rim (the first loop that is not horizontal: the tilted tip section, a cap's first ring), their
+  rows tilting onto it over a band under it; the tip patch covers only the cap above the rim, fitted to a
+  mesh of the cap through a mean value map (no interim solid: the loft takes 2.5 s instead of a minute);
+  rows are sampled from the smooth curve through each loop, the knots crowd towards the patches' edges.
+  `tip_frac` is gone (set-ups that carry it still load); `strip_frac` takes a pair (LE, TE). A step between
+  horizontal loops is eased out of them before the fit (`_ease_flats`, argument `ease`): modified sections
+  meet the original ones in one, the model's sections lying 0.13 mm off the extracted loops; it is spread
+  over bands below and above that tilt the surface by 0.1 deg at most, and named in the tool's status line.
+  `Rudder_geom_extraction.py` writes 40 cap loops (`DEFAULT_CAP_LOOPS`; 10 left the tip's 0.7 mm edge radius
+  scalloped by 0.1 mm); `outputs/sections_xcad_with_cap_y0_y200_m.dat` and `parameters.json` are the 40-loop
+  ones, the 201 sections unchanged. The wind-tunnel rudder: six faces, valid, the sides within 0.005 mm of
+  the STEP, the tip within 0.108 (the cap model's own distance), reflection lines straight; checked with
+  maps of every face and with the STEP's mesh vertices against the loft. BB2's stern plane relofted
+  (`bb2/bb2_sternplane_loft.py`: sections of 801 points, 1 mm apart under the cap's foot, 30 rings on exact
+  profiles, strips 0.07 and 0.01 of the root chord): within 0.10 mm of the original outside the synthetic
+  root (4.4 mm at the tip's corners with the 6 Nov file), the set-up files in `bb2/outputs` written again.
+  Tests: tool (a stepped stack and a strip pair added), hull, wing, files, modify.
 
 ## Next steps
 
@@ -356,6 +377,8 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
 - Optimisation: sample a saved set-up (`load_component`, `Initial_sampling.py`), screen
   designs with the problem checks, couple to CFD. `Initial_sampling.py` varies pitch and chord only (x_blade_new's
   form); other parameters flagged Y are reported, not sampled.
-- Rudder: the tip tilt and cap parameters into the design space; more cap loops if the cap ripples matter.
+- Rudder: the tip tilt and cap parameters into the design space. Open: writing the modified sections as
+  the extracted section plus the model's change, so that the baseline is the original exactly and no
+  step is left at H for the loft to ease.
 - Open items: section-fit bounds (X2 on its bound) and an LE-radius constraint; plain-named rudder outputs are
   overwritten by runs at other heights; Fig. 5 of the plan still labels the tip y = 218.07.

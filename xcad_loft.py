@@ -8,51 +8,65 @@ of Rudder_geom_extraction.write_xcad and rudder_modify.write_modified_xcad).
 
 How the solid is built
 ----------------------
-The patch layout is the propeller blade's five-surface decomposition (DRDC
-TM 2013-178, tip_surfaces_new.py / X_CAD_new.py; user, 6 Nov 2026): a
-leading-edge strip and a trailing-edge strip wrapping their edges, the
-central pressure and suction panels between them, and one tip patch over
-the top. With the flat root face every solid has six faces, the half body
-too.
+Five patches and the flat root, six faces (the half body too): a
+leading-edge strip and a trailing-edge strip wrapping their edges, the two
+central panels between them, and the tip patch. The four patches along the
+span run from the root to the edge of the tip; the tip patch covers only the
+tip face above that edge (user, 11 Nov 2026: the layout before gave the tip
+patch the top 15 % of the span, as the blade's decomposition does, and its
+fit rippled there).
 
-- First the old smooth loft is built internally as the geometry source (the
-  interim): each side of each loop a cubic least-squares B-spline on common
-  knots (end points held; the LE and TE snapped onto the plane of symmetry),
-  the side surface, and the cap resampled into rim and crown rows. Fewer
-  rows of poles than loops (v_poles) smooth the measurement noise of
-  extracted sections out, which keeps the surfaces free of the ripples that
-  interpolation puts near the rudder's tip.
-- The five patches then resample that geometry. The strips are strip_frac of
-  the root chord wide, measured along each section's arc on both sides of
-  the LE and the TE (the blade's constant-width rule); the strips and the
-  central panels run from the root up to one height, top minus tip_frac of
-  the span (clamped under the highest horizontal section), where the tip
-  patch begins, like the blade's eta_top. Below that height every section
-  loop splits into the four arcs at exact shared arc stations, each arc is
-  fitted with held ends (so neighbouring patches share their seam poles row
-  by row), and each family is fitted along the span on the common height
-  parameters: identical boundary data, parameters and knots make the shared
-  boundary curves identical, so the faces sew watertight.
-- The tip patch is a single grid over everything above that height: its
-  u = 0 and u = 1 edges are the strips' top rows, its v = 0 and v = 1 edges
-  the central panels' top rows (the pole rows are shared verbatim), and its
-  inside comes from wrap curves cut from the interim solid by planes through
-  a point of each central top row and the point of the outline (the LE seam,
-  the ridge, the TE seam of the interim) steering the family from chordwise
-  cuts over the crest to near-horizontal cuts around the LE and the TE, as
-  the blade's tip cuts rotate. Each wrap curve is resampled in two halves
-  that meet exactly on the plane of symmetry, fitted with held ends, and the
-  interior pole tracks are fitted along the chord with the strips' top poles
-  held at the ends.
-- half=True builds the half body on the LE-to-TE side of the plane of
-  symmetry: the half strips (apex to split), the central panel of that side,
-  the half tip (boundary row to the outline), the half root closed by the
-  chord line, and one planar face on the plane of symmetry (root chord, the
-  LE apex column, the tip outline row, the TE apex column). The loops must
-  be symmetric about the plane within sym_tol.
+- The rows. Every horizontal loop is a row of the four patches; under a cap
+  the last row is the rim, the first loop that is not horizontal (a tilted
+  tip section, the first ring of a cap). Because the rim's points sit at
+  different heights, the horizontal loops in a band under it are re-cut to
+  tilt onto it smoothly, each point moving along its own track through the
+  loops (_fan_rows), so the rows turn without a jump while the surface stays
+  the one the loops describe.
+- Each row is sampled from the smooth closed curve through its points (a
+  cubic spline, not their polygon) and split into four arcs at shared arc
+  stations: the strips reach strip_frac of the root chord to both sides of
+  the LE and of the TE (the blade's constant-width rule; a pair gives the LE
+  strip and the TE strip their own), the centrals lie between them. Each arc
+  is fitted with held ends, so neighbouring patches
+  share their seam poles row by row, and each family is fitted along the
+  span on common parameters and knots: identical boundary data, parameters
+  and knots make the shared boundary curves identical, so the faces sew
+  watertight.
+- The tip patch is one grid over the cap: its u = 0 and u = 1 edges are the
+  strips' top rows, its v = 0 and v = 1 edges the central panels' top rows
+  (the pole rows are shared verbatim). The cap is meshed from the rim, the
+  loops above it and the ridge (one smooth curve per chord station), the
+  mesh is mapped onto the patch's unit square with the rim's four arcs on
+  the square's sides (mean value coordinates: smooth and one to one), and
+  the grid is the least-squares tensor fit to the map's inverse. The knots
+  are denser towards the patch's edges, where the tip's wall and edge
+  rounding sit.
+- A step from one horizontal loop to the next (modified sections under
+  the original ones: the sections' fits differ from the extracted loops by
+  a tenth of a mm where the two meet) cannot be followed without a ripple
+  round the body. It is found where loops miss a fit of their points along
+  the span, and taken out of the loops over a band below it and one above,
+  tall enough for the surface to tilt by 0.1 deg at most (_ease_flats;
+  ease names the side that gives way, both by default), so the patches
+  cross it smoothly. The step and the bands are reported in the notes and
+  in the result's steps; the distances reported are those of the loops as
+  given. A step right under a tilted tip section (modified sections up to
+  the top one) has no loops above it to ease into and stays a blend.
+- half=True cuts the sewn full body on the plane of symmetry and keeps the
+  LE-to-TE side: the same surfaces, trimmed, closed by one planar face. The
+  loops must be symmetric about the plane within sym_tol.
 - A wing or fin whose loops are all horizontal gets no tip patch: the four
   wrap patches run the whole span and the flat top is closed by a planar
   face, six faces again.
+- The cap is only as fine as its loops: a rounded tip edge needs loops close
+  together across it (Rudder_geom_extraction writes 40 cap loops for that).
+- A strip's top row runs round its edge on the rim. Where that row doubles
+  back on itself over a cap of some height (a wide strip round a thick blunt
+  TE), the tip patch's grid is squeezed inside the turn and cannot follow
+  the cap there; the reported distance of the tip patch from the cap shows
+  it. Give that strip a smaller fraction (BB2's stern plane: 0.01 at its
+  30 mm thick TE, 0.07 at the LE).
 
 Coordinates: the XCAD frame (x chordwise, y thickness, z the height) in mm;
 point files in metres are scaled by 1000, as X_CAD.py does.
@@ -244,14 +258,18 @@ class LoftResult:
     volume: float                  # mm^3
     area: float                    # mm^2
     free_edges: int                # edges the sewing left open (0 for a closed solid)
-    fit_error: float               # largest distance of the loops' points from the section curves, mm
+    fit_error: float               # largest distance of the rows' points from their four arcs' curves, mm
     n_smooth: int                  # leading loops at one height each (the horizontal sections)
     n_ruled: int                   # loops after them (the tilted tip section and the cap loops)
     seconds: float
     notes: list = field(default_factory=list)
     faces: int = 0                 # faces of the solid
-    v_error: float = 0.0           # largest distance of the pole rows from the fitted patches, mm
+    v_error: float = 0.0           # largest distance of the loops from the four patches along the span and
+                                   # of the cap from the tip patch, mm (along the patches' normals)
     half: bool = False             # the half body on the LE-to-TE side
+    steps: list = field(default_factory=list)      # steps between horizontal loops eased out of them: (the
+                                   # loop under the step counted from 1, the step mm, how far it is eased
+                                   # below and above mm, the shares of it taken below and above)
 
 
 def _thru(wires, solid, ruled, max_degree=None):
@@ -333,108 +351,158 @@ def _int_array(vals):
     return a
 
 
-def _cap_rows(rows, z_axis, crown, n_rim=5, n_crown=4, angle_deg=20.0):
-    """The cap's pole rows resampled along each column's cross polyline (the
-    tip section's row, the cap loops' rows, the ridge row last): (rim rows,
-    crown rows). The split sits where the polyline's slope along the height
-    axis flattens below angle_deg (the edge rounding meeting the deck), at
-    the fraction crown of the arc when it never does; both patches share the
-    split row. Resampling along the arc also evens the cap loops' own uneven
-    spacing out."""
-    rows = np.asarray(rows, dtype=float)
-    m, n_poles = rows.shape[0], rows.shape[1]
-    tan_a = np.tan(np.radians(angle_deg))
-    rim = np.zeros((n_rim, n_poles, 3))
-    crw = np.zeros((n_crown, n_poles, 3))
-    arcs, splits = [], []
-    for j in range(n_poles):
-        q = rows[:, j]
-        seg = np.linalg.norm(np.diff(q, axis=0), axis=1)
-        s = np.r_[0.0, np.cumsum(seg)]
-        arcs.append(s)
-        if s[-1] <= 1.0e-9:                        # pinched to a corner
-            splits.append(np.nan)
-            continue
-        dz = np.abs(np.diff(q[:, z_axis]))
-        steep = dz > tan_a * np.maximum(seg, 1e-12)
-        last = np.where(steep)[0]
-        s_split = min(s[last[-1] + 1], 0.9 * s[-1]) if len(last) else float(crown) * s[-1]
-        splits.append(max(s_split, 0.1 * s[-1]) / s[-1])
-    f = np.array(splits)
-    good = ~np.isnan(f)
-    if good.any():                                 # the split line smoothed along the chord
-        idx = np.arange(n_poles)
-        f[~good] = np.interp(idx[~good], idx[good], f[good])
-        pad = np.r_[f[8:0:-1], f, f[-2:-10:-1]]
-        f = np.convolve(pad, np.ones(9) / 9.0, mode="same")[8:8 + n_poles]
-    for j in range(n_poles):
-        q, s = rows[:, j], arcs[j]
-        if s[-1] <= 1.0e-9:
-            rim[:, j] = q[0]
-            crw[:, j] = q[0]
-            continue
-        s_split = f[j] * s[-1]
-        for out, stations in ((rim, np.linspace(0.0, s_split, n_rim)),
-                              (crw, np.linspace(s_split, s[-1], n_crown))):
-            for c in range(3):
-                out[:, j, c] = np.interp(stations, s, q[:, c])
-        rim[0, j], crw[-1, j] = q[0], q[-1]        # the tip section's row and the ridge exactly
-    crw[0] = rim[-1]                               # one shared split row
-    return rim, crw
+EASE_DEG = 0.1                             # a step between loops is eased out until it tilts the surface by
+                                           # no more than this, deg (reflection lines stay straight)
 
 
-def _v_params(rows):
-    """Parameters 0 .. 1 for pole rows along the span: the mean distance from
-    row to row, accumulated."""
-    rows = np.asarray(rows, dtype=float)
-    d = np.linalg.norm(np.diff(rows, axis=0), axis=2).mean(axis=1)
-    d = np.maximum(d, 1e-9 * max(d.max(), 1e-12))
-    t = np.r_[0.0, np.cumsum(d)]
-    return t / t[-1]
+def _span_solve(fams, params, n_v, deg, tol, passes=4):
+    """The least-squares fit of the families' rows along the span on common knots, the end rows held:
+    (grids, knots, each row's largest distance from its grid). It starts with n_v rows of poles; where a row
+    lies further than tol from its grid, the knot spans about it are halved and the fit repeated (a span
+    only while both halves keep two rows); where rows still miss after the passes by more than 0.3 of their
+    first miss, the knots added about them are taken out again."""
+    m = len(params)
+    _, base = _basis_at(params, n_v, deg, spaced=True)
+
+    def fit(knots):
+        a = _design(params, knots, deg)
+        grids, res = {}, np.zeros(m)
+        for name, rows in fams.items():
+            flat = rows.reshape(m, -1)
+            g = _fit_poles(flat, a)
+            grids[name] = g.reshape(a.shape[1], rows.shape[1], 3)
+            res = np.maximum(res, np.abs(a @ g - flat).max(axis=1))
+        return grids, res
+
+    knots = base
+    grids, res = fit(knots)
+    res0 = res
+    if deg == 3:
+        for _ in range(passes):
+            bad = np.where(res > tol)[0]
+            if not len(bad):
+                break
+            uk = np.unique(knots)
+            new = []
+            for j in np.unique(np.clip(np.searchsorted(uk, params[bad], "right") - 1, 0, len(uk) - 2)):
+                mid = 0.5 * (uk[j] + uk[j + 1])
+                if (np.count_nonzero((params > uk[j]) & (params < mid)) >= 2
+                        and np.count_nonzero((params > mid) & (params < uk[j + 1])) >= 2):
+                    new.append(mid)
+            if not new:
+                break
+            knots = np.sort(np.r_[knots, new])
+            grids, res = fit(knots)
+        bad = np.where(res > tol)[0]
+        if len(bad) and len(knots) > len(base):            # steps the knots cannot follow: back to the blend
+            ub = np.unique(base)
+            reach = 1.5 * np.diff(ub)[np.clip(np.searchsorted(ub, params[bad], "right") - 1, 0, len(ub) - 2)]
+            added = np.setdiff1d(knots, base)
+            near = np.zeros(len(added), dtype=bool)
+            for pj, rj in zip(params[bad], reach):
+                about = np.abs(params - pj) <= rj
+                if res[about].max() > 0.3 * res0[about].max():         # the knots there did not pay
+                    near |= np.abs(added - pj) <= rj
+            if near.any():
+                knots = np.sort(np.r_[base, added[~near]])
+                grids, res = fit(knots)
+    return grids, knots, res
 
 
-def _densify(rows, factor=2.0):
-    """Pole rows with linear midpoints inserted into gaps wider than factor
-    times the median row-to-row distance (the step from the last horizontal
-    section onto the tip section has no data of its own: without a midpoint a
-    cubic fit is free to wiggle across it)."""
-    rows = [np.asarray(r, dtype=float) for r in rows]
-    if len(rows) < 3:
-        return np.asarray(rows)
-    d = [float(np.linalg.norm(b - a, axis=1).mean()) for a, b in zip(rows[:-1], rows[1:])]
-    med = float(np.median(d))
-    out = []
-    for i, r in enumerate(rows[:-1]):
-        out.append(r)
-        if med > 0 and d[i] > factor * med:
-            k = int(np.ceil(d[i] / med)) - 1
-            for t in np.linspace(0.0, 1.0, k + 2)[1:-1]:
-                out.append((1.0 - t) * r + t * rows[i + 1])
-    out.append(rows[-1])
-    return np.asarray(out)
-
-
-def _fit_grid(rows, v_poles, degree=3, params=None):
-    """A pole grid fitted through pole rows along the span by least squares,
-    the end rows held exactly: (grid (n_v, n_poles, 3), v knots, v degree,
-    largest distance of the rows from the grid, mm). params: the rows'
-    parameters (families that must share their boundary curves pass the same
-    ones, so their boundary pole tracks solve the same problem)."""
-    rows = np.asarray(rows, dtype=float)
-    m = len(rows)
+def _span_fit(fams, v_poles, params, tol, degree=3, passes=4):
+    """The pole grids of several families of pole rows fitted along the span by least squares on one set of
+    parameters and knots (so curves the families share come out identical), the end rows held exactly:
+    ({name: grid (n_v, n_poles, 3)}, v knots, v degree, the largest distance of a row from its grid, mm).
+    The fit starts with v_poles rows of poles, which smooths the scatter of extracted sections out, and adds
+    knots where a sharp turn of the planform needs them (_span_solve). A step from one loop to the next
+    cannot be followed that way (more knots only tighten the ripple about it): loft_loops takes it out of
+    the loops beforehand (_ease_flats)."""
+    fams = {name: np.asarray(rows, dtype=float) for name, rows in fams.items()}
+    params = np.asarray(params, dtype=float)
+    m = len(params)
     n_v = int(min(max(v_poles, 2), m))
-    deg = int(min(degree, n_v - 1))
-    if params is None:
-        params = _v_params(rows)
     if n_v == 2:
-        grid = rows[[0, -1]]
         knots = np.array([0.0, 0.0, 1.0, 1.0])
-        pred = np.array([grid[0] + t * (grid[1] - grid[0]) for t in params])
-        return grid, knots, 1, float(np.abs(pred - rows).max())
-    a, knots = _basis_at(params, n_v, deg, spaced=True)
-    flat = rows.reshape(m, -1)
-    grid = _fit_poles(flat, a).reshape(n_v, rows.shape[1], 3)
-    return grid, knots, deg, float(np.abs(a @ grid.reshape(n_v, -1) - flat).max())
+        grids, err = {}, 0.0
+        for name, rows in fams.items():
+            grids[name] = rows[[0, -1]]
+            pred = rows[0][None] + params[:, None, None] * (rows[-1] - rows[0])[None]
+            err = max(err, float(np.abs(pred - rows).max()))
+        return grids, knots, 1, err
+    deg = int(min(degree, n_v - 1))
+    grids, knots, res = _span_solve(fams, params, n_v, deg, tol, passes)
+    return grids, knots, deg, float(res.max())
+
+
+def _ease_flats(flats, z_axis, v_poles, tol, side="both", ease_deg=EASE_DEG):
+    """The horizontal loops with the steps between them eased out: (loops, [(the loop under the step counted
+    from 1, the step mm, how far it is eased below and above mm, the shares of it taken below and above)]).
+
+    A step from one loop to the next (modified sections under the original ones: the sections' fits differ
+    from the extracted loops by a tenth of a mm where the two meet) cannot be followed by a smooth surface;
+    fitted as it is, it leaves a ripple round the body. The loops' points are fitted along the span as the
+    patches' rows will be; where loops still miss that fit by more than tol, the pair of neighbouring loops
+    with the largest jump (what the loops' own trend on both sides does not explain) marks a step. The jump
+    is then taken out of the loops, fading out smoothly over a band below the step and one above, tall
+    enough for the surface to tilt by ease_deg at most (each at most half the span, and never as far as the
+    end loops). side "both" shares the jump so that both bands tilt alike, "below" takes all of it out of
+    the loops under the step (those above stay as they are), "above" out of those over it. The loops stay
+    horizontal: a jump has no part along the height."""
+    flats = [np.asarray(lp, dtype=float) for lp in flats]
+    m = len(flats)
+    steps = []
+    if m < 8:
+        return flats, steps
+    rows = np.array(flats)
+    z = rows[:, 0, z_axis]
+    length = float(z[-1] - z[0])
+    if length <= 0.0 or np.any(np.diff(z) <= 0.0):
+        return flats, steps
+    params = (z - z[0]) / length
+    n_v = int(min(max(v_poles, 4), m))
+    _, _, res = _span_solve({"loops": rows}, params, n_v, 3, tol)
+    bad = np.where(res > tol)[0]
+    if not len(bad):
+        return flats, steps
+    out = rows.copy()
+    for group in np.split(bad, np.where(np.diff(bad) > 2)[0] + 1):
+        best, at, jump = 0.0, None, None
+        for j in range(max(int(group[0]) - 2, 1), min(int(group[-1]) + 2, m - 2) + 1):
+            dp, gap = params[j + 1] - params[j], rows[j + 1] - rows[j]
+            # the jump: what the loops' trend does not explain, by the trend under the pair and by the one
+            # over it (the last loop has none over it). A pair next to a step shows a jump by one of the
+            # two only, the step itself by both: the smaller one counts
+            ds = [gap - (rows[j] - rows[j - 1]) / (params[j] - params[j - 1]) * dp]
+            if j + 2 < m:
+                ds.append(gap - (rows[j + 2] - rows[j + 1]) / (params[j + 2] - params[j + 1]) * dp)
+            sizes = [float(np.linalg.norm(d, axis=1).max()) for d in ds]
+            if min(sizes) > best:
+                best, at, jump = min(sizes), j, sum(ds) / len(ds)
+        if at is None or best <= 2.0 * tol:
+            continue
+        mid = 0.5 * (params[at] + params[at + 1])
+        reach = 1.875 * best / np.tan(np.radians(ease_deg)) / length       # the two bands together
+        lo_max = max(min(0.5, mid - params[1]), 0.0)
+        hi_max = max(min(0.5, params[-2] - mid), 0.0)      # nothing over a step under the last loop
+        if side == "below" or (side == "both" and hi_max == 0.0):
+            lo, hi, share = min(reach, lo_max), 0.0, 1.0
+        elif side == "above" or lo_max == 0.0:
+            lo, hi, share = 0.0, min(reach, hi_max), 0.0
+        else:                                              # both bands with the same tilt
+            scale = min(1.0, reach / (lo_max + hi_max))
+            lo, hi = scale * lo_max, scale * hi_max
+            share = lo / (lo + hi)
+        if lo + hi <= 0.0:
+            continue
+        below = params <= params[at]
+        tau = np.where(below, (params - (mid - lo)) / max(lo, 1e-300), ((mid + hi) - params) / max(hi, 1e-300))
+        tau = np.clip(tau, 0.0, 1.0)
+        w = tau ** 3 * (10.0 - 15.0 * tau + 6.0 * tau ** 2) * np.where(below, share, share - 1.0)
+        w[0] = w[-1] = 0.0
+        out += w[:, None, None] * jump[None]
+        steps.append((int(at) + 1, float(best), float(lo * length), float(hi * length), float(share),
+                      float(1.0 - share)))
+    return [lp for lp in out], steps
 
 
 def _surface_face(grid, uknots, vknots, udeg=3, vdeg=3):
@@ -478,77 +546,60 @@ def _wire_face(edges):
     return fix.Face()
 
 
-class _Patch:
-    """One patch of the loft: the pole grids of its two sides (up: LE to TE,
-    lo: TE to LE) fitted through its loops' pole rows. A patch pinched to the
-    tip section's corners (the rim, the crown) is built through ThruSections
-    on its fitted rows instead of one raw B-spline face: OCC's booleans choke
-    on a raw face whose boundary collapses to a point."""
-
-    def __init__(self, name, up_rows, lo_rows, v_poles, fitter, pinched=False, thick=1):
-        self.name, self.fitter, self.pinched, self.thick = name, fitter, pinched, thick
-        self.up, self.vk_up, self.vdeg_up, e1 = _fit_grid(up_rows, v_poles)
-        self.lo, self.vk_lo, self.vdeg_lo, e2 = _fit_grid(lo_rows, v_poles)
-        self.rows_up, self.rows_lo = np.asarray(up_rows, dtype=float), np.asarray(lo_rows, dtype=float)
-        self.error = max(e1, e2)
-
-    def _closed_wires(self):
-        """One closed wire per data row (its two sides on the common knots), so
-        neighbouring patches share their boundary curves exactly."""
-        BRepBuilderAPI_MakeWire = _occ("BRepBuilderAPI", "BRepBuilderAPI_MakeWire")
-        out = []
-        for r_up, r_lo in zip(self.rows_up, self.rows_lo):
-            w = BRepBuilderAPI_MakeWire()
-            w.Add(_bspline_edge(r_up, self.fitter.k_up, self.fitter.degree))
-            w.Add(_bspline_edge(r_lo, self.fitter.k_lo, self.fitter.degree))
-            out.append(w.Wire())
-        return out
-
-    def faces(self, half):
-        out = [_surface_face(self.up, self.fitter.k_up, self.vk_up, self.fitter.degree, self.vdeg_up)]
-        if not half:
-            out.append(_surface_face(self.lo, self.fitter.k_lo, self.vk_lo, self.fitter.degree, self.vdeg_lo))
-        return out
-
-    def up_column(self, col):
-        """The edge along the span at one pole column of the up side (None
-        when it is pinched to a point there)."""
-        poles = self.up[:, col]
-        if np.ptp(poles, axis=0).max() <= 1.0e-9:
-            return None
-        return _bspline_edge(poles, self.vk_up, self.vdeg_up)
-
-    def up_row(self, row):
-        """The edge along the section at one pole row of the up side."""
-        return _bspline_edge(self.up[row], self.fitter.k_up, self.fitter.degree)
 
 
 # --------------------------------------------------------------------------
-# The five patches (the blade's decomposition)
+# The patches: four along the span, the tip patch over the cap
 # --------------------------------------------------------------------------
 
-N_CEN = 97                                 # samples along a central panel's arc
-N_STRIP = 161                              # samples along a strip's wrap (odd: the apex at the middle)
-N_VHALF = 61                               # samples per half of a tip wrap curve (odd total, 2 * N_VHALF - 1)
-N_CUT = 61                                 # tip wrap stations (cosine; the two ends are the strips' top rows)
+N_DENSE = 1501                             # points per side of a row's smooth polyline
+CAP_STATIONS = 401                         # stations along the chord of the cap's mesh
+CAP_ACROSS = 81                            # points from the rim to the ridge on each wrap of the cap's mesh
+SPAN_TOL = 3.0e-5                          # the span fit adds knots where a pole row misses its grid by this
+                                           # fraction of the span (_span_fit)
 
 
-def _mixed(n):
-    """n stations 0 to 1: mostly even, mildly clustered at both ends (the tip
-    wraps need the cap's rounding resolved mid-arc too)."""
-    t = np.linspace(0.0, 1.0, n)
-    return 0.65 * t + 0.35 * 0.5 * (1.0 - np.cos(np.pi * t))
+def _design(u, knots, degree=3, deriv=0):
+    """The B-spline basis functions on knots at the parameters u (len(u), poles), or their derivative."""
+    from scipy.interpolate import BSpline
+    u = np.asarray(u, dtype=float)
+    n = len(knots) - degree - 1
+    if deriv:
+        return BSpline(knots, np.eye(n), degree).derivative(deriv)(u)
+    try:
+        return BSpline.design_matrix(u, knots, degree).toarray()
+    except AttributeError:                                         # scipy < 1.8
+        return np.column_stack([BSpline(knots, np.eye(n)[j], degree)(u) for j in range(n)])
 
 
-def _cosine(n):
-    """n stations 0 to 1, clustered at both ends."""
-    return 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, n)))
+def _refined_knots(n_poles, kind, degree=3):
+    """Clamped knots on 0 .. 1 for the wrap patches: n_poles - degree even spans, with more knots where the
+    tip patch needs them. kind 'central' (along a section between the strips; the tip patch's chordwise
+    direction): the first and the last span cut into 12, halved further towards the end, the next span
+    halved (the rounding of the cap's two ends hugs those edges). kind 'strip' (around the LE or the TE; the
+    tip patch's direction across): the first and last six spans halved (the wall and the edge rounding along
+    the sides), the two spans to each side of the middle cut into 4 (a small TE radius)."""
+    base = np.linspace(0.0, 1.0, max(int(n_poles), degree + 1) - degree + 1)
+    d = base[1]
+    if kind == "central":
+        extra = [d * j / 12.0 for j in range(1, 12)] + [d / 16.0, d / 32.0, 1.5 * d]
+        inner = np.r_[base[1:-1], extra, 1.0 - np.array(extra)]
+    else:
+        extra = [d * (i + 0.5) for i in range(6)]
+        j = np.where((base[:-1] < 0.5 + 2 * d - 1e-12) & (base[1:] > 0.5 - 2 * d + 1e-12))[0]
+        mid = (base[j][:, None] + np.array([0.25, 0.5, 0.75])[None, :] * d).ravel()
+        inner = np.r_[base[1:-1], extra, 1.0 - np.array(extra), mid]
+    inner = np.unique(np.round(inner[(inner > 1e-9) & (inner < 1.0 - 1e-9)], 13))
+    return np.r_[[0.0] * (degree + 1), inner, [1.0] * (degree + 1)]
 
 
-def _clustered(n, c=0.6):
-    """n stations 0 to 1, denser around the middle (the strips' apexes)."""
-    t = np.linspace(0.0, 1.0, n)
-    return t + c * np.sin(2.0 * np.pi * t) / (2.0 * np.pi)
+def _knot_stations(knots, per=4):
+    """Fit stations for a knot vector: per stations in every span (every pole keeps data in its support), the
+    two ends and the middle."""
+    uk = np.unique(knots)
+    t = (np.arange(per) + 0.5) / per
+    s = (uk[:-1, None] + t[None, :] * np.diff(uk)[:, None]).ravel()
+    return np.unique(np.r_[0.0, s, 0.5, 1.0])
 
 
 def _loop_arc(p):
@@ -563,12 +614,45 @@ def _at_arc(p, s, stations):
     return out
 
 
+def _smooth_loop(lp, i_te, n=N_DENSE):
+    """A loop as a dense smooth polyline in the loops' layout (LE first, the TE at index n - 1, closing on
+    the LE): the cubic spline through its points over their chord length, periodic unless the TE is a corner
+    (a closed sharp TE: one open curve from the TE round the LE back to the TE). Sampling the rows from it
+    rather than from the points' polygon keeps the polygon's corners out of the patches."""
+    from scipy.interpolate import CubicSpline
+    lp = np.asarray(lp, dtype=float)
+    if np.linalg.norm(lp[0] - lp[-1]) > 1.0e-9:
+        lp = np.vstack((lp, lp[:1]))
+    m = len(lp)
+    a, b = lp[i_te] - lp[i_te - 1], lp[i_te + 1] - lp[i_te]
+    cosang = float(a @ b) / max(float(np.linalg.norm(a) * np.linalg.norm(b)), 1e-300)
+    seg = np.maximum(np.linalg.norm(np.diff(lp, axis=0), axis=1), 1e-12)
+    if np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0))) > 100.0:
+        q = np.vstack((lp[i_te:], lp[1:i_te + 1]))                 # TE -> B side -> LE -> A side -> TE
+        s = np.r_[0.0, np.cumsum(np.r_[seg[i_te:], seg[:i_te]])]
+        cs = CubicSpline(s, q, axis=0)
+        s_le = s[m - 1 - i_te]
+        side_b = cs(np.linspace(0.0, s_le, n))                     # TE -> LE
+        side_a = cs(np.linspace(s_le, s[-1], n))                   # LE -> TE
+    else:
+        s = np.r_[0.0, np.cumsum(seg)]
+        q = lp.copy()
+        q[-1] = q[0]
+        cs = CubicSpline(s, q, axis=0, bc_type="periodic")
+        side_a = cs(np.linspace(0.0, s[i_te], n))
+        side_b = cs(np.linspace(s[i_te], s[-1], n))
+    out = np.vstack((side_a, side_b[1:]))
+    out[0], out[n - 1], out[-1] = lp[0], lp[i_te], lp[0]
+    return out, n - 1
+
+
 def _row_arcs(lp, i_te, w_le, w_te, u_strip, u_cen):
     """One loop split into the four wrap families' sample rows: (le strip,
     central A, te strip, central B), the strips wrapping their apexes from
     the A side (indices 0 to i_te) to the B side, the centrals running from
     the LE split to the TE split of their side; the four split points are
-    shared exactly, the apexes sit exactly at the strips' middle sample."""
+    shared exactly, the apexes sit exactly at the strips' middle sample.
+    Every row's parameter is linear in the arc along the loop."""
     lp = np.asarray(lp, dtype=float)
     if np.linalg.norm(lp[0] - lp[-1]) > 1.0e-9:
         lp = np.vstack((lp, lp[:1]))
@@ -583,11 +667,11 @@ def _row_arcs(lp, i_te, w_le, w_te, u_strip, u_cen):
     s2 = np.r_[s[:-1], S + s]
     p_le_a, p_te_a = _at_arc(lp, s, [w_le])[0], _at_arc(lp, s, [s_te - w_te])[0]
     p_te_b, p_le_b = _at_arc(lp, s, [s_te + w_te])[0], _at_arc(lp, s, [S - w_le])[0]
-    le = _at_arc(dbl, s2, (S - w_le) + u_strip * (2.0 * w_le))[::-1]
+    le = _at_arc(dbl, s2, (S + w_le) - u_strip * (2.0 * w_le))
     te = _at_arc(lp, s, (s_te - w_te) + u_strip * (2.0 * w_te))
     cen_a = _at_arc(lp, s, w_le + u_cen * (s_te - w_te - w_le))
-    cen_b = _at_arc(lp, s, (s_te + w_te) + u_cen * (S - w_le - s_te - w_te))[::-1]
-    mid = (len(u_strip) - 1) // 2
+    cen_b = _at_arc(lp, s, (S - w_le) - u_cen * (S - w_le - s_te - w_te))
+    mid = int(np.argmin(np.abs(u_strip - 0.5)))
     le[mid], te[mid] = lp[0], lp[i_te]                     # the apexes exactly
     le[0], le[-1] = p_le_a, p_le_b
     te[0], te[-1] = p_te_a, p_te_b
@@ -596,117 +680,226 @@ def _row_arcs(lp, i_te, w_le, w_te, u_strip, u_cen):
     return le, cen_a, te, cen_b
 
 
-def _edge_polyline(edge, n=400):
-    BRepAdaptor_Curve = _occ("BRepAdaptor", "BRepAdaptor_Curve")
-    c = BRepAdaptor_Curve(edge)
-    u0, u1 = c.FirstParameter(), c.LastParameter()
-    out = np.empty((n, 3))
-    for i, u in enumerate(np.linspace(u0, u1, n)):
-        p = c.Value(float(u))
-        out[i] = (p.X(), p.Y(), p.Z())
+def _fan_rows(flats, rim, z_axis, factor=4.0):
+    """The loops the side patches run through: the horizontal loops, then the rim (the first loop that is
+    not horizontal: a tilted tip section, the cap's first ring). The rim's points sit at different heights,
+    so the horizontal loops under it are re-cut to tilt onto it smoothly: over a band factor times as tall
+    as the rim's spread in height, each point of a loop moves up its own track through the loops (a cubic
+    through that point of every loop and of the rim) by a share of the rim's height there that grows from 0
+    at the band's foot to all of it at the rim, with no jump in speed at either end. The points stay on the
+    surface the loops describe; only the patches' rows turn. Returns (rows, the band's height)."""
+    from scipy.interpolate import CubicSpline
+    flats = [np.asarray(lp, dtype=float) for lp in flats]
+    rim = np.asarray(rim, dtype=float)
+    zf = np.array([lp[0, z_axis] for lp in flats])
+    zr = rim[:, z_axis]
+    z_ref = float(zr.min())
+    shear = zr - z_ref
+    spread = float(shear.max())
+    if len(flats) < 6 or spread <= 1.0e-9 or np.any(zr <= zf[-1]) or np.any(np.diff(zf) <= 0.0):
+        return flats + [rim], 0.0
+    band = min(factor * spread, 0.5 * (z_ref - zf[0]))
+    z_b = z_ref - band
+    j0 = int(np.searchsorted(zf, z_b + 1.0e-9))             # the band's first loop
+    if j0 >= len(flats):
+        return flats + [rim], 0.0
+    levels = zf[j0:]
+    tau = (levels - z_b) / band
+    g = tau ** 3 * (10.0 - 15.0 * tau + 6.0 * tau ** 2)
+    js = max(j0 - 4, 0)
+    stack = np.array(flats[js:])
+    new = np.empty((len(levels), rim.shape[0], 3))
+    for i in range(rim.shape[0]):
+        track = CubicSpline(np.r_[zf[js:], zr[i]], np.vstack((stack[:, i], rim[i][None])), axis=0)
+        new[:, i] = track(levels + g * shear[i])
+    new[:, -1] = new[:, 0]
+    return flats[:j0] + list(new) + [rim], float(band)
+
+
+def _cap_mesh(top, i_te, n_xi=CAP_STATIONS, m=CAP_ACROSS):
+    """The cap as a triangle mesh: top[0] the rim, the loops above it nested and pinched to its LE and TE
+    points, the ridge the mid-line of the last. Per chord station (the loops' own index fraction) one C2
+    spline runs from the rim on the A side through the loops and the ridge to the rim on the B side, sampled
+    more finely near the rim. Returns (vertices, triangles, the vertices' index grid (stations, across), the
+    LE corner's index, the TE corner's)."""
+    from scipy.interpolate import CubicSpline
+    top = [np.asarray(lp, dtype=float) for lp in top]
+    xi = np.linspace(0.0, 1.0, n_xi)[1:-1]
+    t = np.linspace(0.0, 1.0, m)
+    frac = t * (0.35 + 0.65 * t)
+    side_a, side_b = [], []
+    for lp in top:
+        a, b = lp[:i_te + 1], lp[i_te:][::-1]
+        side_a.append(CubicSpline(np.linspace(0.0, 1.0, len(a)), a, axis=0)(xi))
+        side_b.append(CubicSpline(np.linspace(0.0, 1.0, len(b)), b, axis=0)(xi))
+    side_a, side_b = np.array(side_a), np.array(side_b)
+    ridge = 0.5 * (side_a[-1] + side_b[-1])
+    size = max(float(np.ptp(top[0], axis=0).max()), 1.0e-12)
+    wraps = []
+    for i in range(len(xi)):
+        q = np.vstack((side_a[:, i], ridge[i][None], side_b[::-1, i]))
+        seg = np.linalg.norm(np.diff(q, axis=0), axis=1)
+        keep = np.r_[True, seg > 1.0e-9 * size]
+        i_r = int(np.count_nonzero(keep[:len(top) + 1])) - 1         # the ridge among the points kept
+        q = q[keep]
+        s = _loop_arc(q)
+        if s[-1] <= 1.0e-7 * size or i_r <= 0 or i_r >= len(q) - 1:
+            wraps.append(None)                                      # pinched to a corner
+            continue
+        st = np.r_[frac * s[i_r], s[i_r] + (1.0 - frac[::-1][1:]) * (s[-1] - s[i_r])]
+        if len(q) >= 4:
+            wraps.append(CubicSpline(s, q, axis=0, bc_type="natural")(st))
+        else:
+            wraps.append(_at_arc(q, s, st))
+    good = [i for i, wr in enumerate(wraps) if wr is not None]
+    if len(good) < 8:
+        raise ValueError("the loops above the rim do not describe a cap")
+    g = np.array([wraps[i] for i in good])
+    n_st, n_ac = g.shape[:2]
+    verts = np.vstack((g.reshape(-1, 3), top[0][0][None], top[0][i_te][None]))
+    c_le, c_te = n_st * n_ac, n_st * n_ac + 1
+    idx = np.arange(n_st * n_ac).reshape(n_st, n_ac)
+    a, b, c, d = idx[:-1, :-1], idx[1:, :-1], idx[1:, 1:], idx[:-1, 1:]
+    tris = np.vstack((np.column_stack((a.ravel(), b.ravel(), c.ravel())),
+                      np.column_stack((a.ravel(), c.ravel(), d.ravel())),
+                      np.column_stack((np.full(n_ac - 1, c_le), idx[0, :-1], idx[0, 1:])),
+                      np.column_stack((np.full(n_ac - 1, c_te), idx[-1, 1:], idx[-1, :-1]))))
+    return verts, tris, idx, c_le, c_te
+
+
+def _rim_params(verts, idx, c_le, c_te, w_le, w_te):
+    """The cap mesh's boundary vertices and their place on the unit square of the tip patch: the rim's arcs
+    of length w_le to both sides of the LE and w_te of the TE lie on u = 0 and u = 1 (the strips' top rows:
+    v from 0 at the A side's split through 0.5 at the apex to 1 at the B side's), the rest of the A side on
+    v = 0 and of the B side on v = 1 (the central panels' top rows: u from 0 to 1 between the splits), every
+    parameter linear in the arc as the rows' own are."""
+    out_i, out_uv = [c_le, c_te], [(0.0, 0.5), (1.0, 0.5)]
+    for col, side in ((0, 0.0), (-1, 1.0)):
+        rim = idx[:, col]
+        s = _loop_arc(np.vstack((verts[c_le][None], verts[rim], verts[c_te][None])))
+        total = s[-1]
+        if not max(w_le, w_te) < 0.45 * total:
+            raise ValueError("the strips overlap on the tip's rim (lower strip_frac)")
+        sign = 2.0 * side - 1.0
+        for j, vi in enumerate(rim):
+            sj = s[j + 1]
+            if sj <= w_le:
+                uv = (0.0, 0.5 + sign * 0.5 * sj / w_le)
+            elif sj >= total - w_te:
+                uv = (1.0, 0.5 + sign * 0.5 * (total - sj) / w_te)
+            else:
+                uv = ((sj - w_le) / (total - w_le - w_te), side)
+            out_i.append(vi)
+            out_uv.append(uv)
+    return np.array(out_i), np.array(out_uv)
+
+
+def _mean_value_map(verts, tris, bnd_idx, bnd_uv):
+    """Parameters (n, 2) of a mesh's vertices with the boundary's held: every inner vertex is the mean value
+    (Floater's coordinates, which follow the surface's angles and lengths) of its neighbours, so the map is
+    smooth, one to one onto the square, and turns the rim's four smooth corners the way a tensor patch can
+    follow."""
+    import scipy.sparse as sp
+    from scipy.sparse.linalg import splu
+    n = len(verts)
+    p = verts[tris]
+    rows, cols, vals = [], [], []
+    for a in range(3):
+        b, c = (a + 1) % 3, (a + 2) % 3
+        e1, e2 = p[:, b] - p[:, a], p[:, c] - p[:, a]
+        l1 = np.maximum(np.linalg.norm(e1, axis=1), 1e-300)
+        l2 = np.maximum(np.linalg.norm(e2, axis=1), 1e-300)
+        half = 0.5 * np.arccos(np.clip(np.einsum("ij,ij->i", e1, e2) / (l1 * l2), -1.0, 1.0))
+        th = np.tan(np.clip(half, 1e-9, 0.5 * np.pi - 1e-9))
+        for other, ln in ((b, l1), (c, l2)):
+            rows.append(tris[:, a])
+            cols.append(tris[:, other])
+            vals.append(th / ln)
+    wgt = sp.coo_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))), shape=(n, n)).tocsr()
+    lap = (sp.diags(np.asarray(wgt.sum(axis=1)).ravel()) - wgt).tocsr()
+    inner = np.ones(n, dtype=bool)
+    inner[bnd_idx] = False
+    ii = np.where(inner)[0]
+    uv = np.zeros((n, 2))
+    uv[bnd_idx] = bnd_uv
+    rhs = -(lap[ii][:, bnd_idx] @ bnd_uv)
+    lu = splu(lap[ii][:, ii].tocsc())
+    uv[ii] = np.column_stack((lu.solve(np.ascontiguousarray(rhs[:, 0])), lu.solve(np.ascontiguousarray(rhs[:, 1]))))
+    return uv
+
+
+def _locate(uv, tris, verts, un, vn):
+    """The mesh's points at the parameter nodes un x vn, (len(vn), len(un), 3): each node in the triangle of
+    the map that holds it (a node missed by rounding takes the nearest vertex)."""
+    q = uv[tris]
+    lo, hi = q.min(axis=1), q.max(axis=1)
+    i0, i1 = np.searchsorted(un, lo[:, 0], "left"), np.searchsorted(un, hi[:, 0], "right")
+    j0, j1 = np.searchsorted(vn, lo[:, 1], "left"), np.searchsorted(vn, hi[:, 1], "right")
+    det = ((q[:, 1, 0] - q[:, 0, 0]) * (q[:, 2, 1] - q[:, 0, 1])
+           - (q[:, 2, 0] - q[:, 0, 0]) * (q[:, 1, 1] - q[:, 0, 1]))
+    ni, nj = i1 - i0, j1 - j0
+    cnt = np.where(np.abs(det) > 1e-300, ni * nj, 0)
+    sel = np.where(cnt > 0)[0]
+    t = np.repeat(sel, cnt[sel])
+    off = np.arange(len(t)) - np.repeat(np.cumsum(cnt[sel]) - cnt[sel], cnt[sel])
+    ii, jj = i0[t] + off // nj[t], j0[t] + off % nj[t]
+    px, py = un[ii] - q[t, 0, 0], vn[jj] - q[t, 0, 1]
+    l1 = (px * (q[t, 2, 1] - q[t, 0, 1]) - (q[t, 2, 0] - q[t, 0, 0]) * py) / det[t]
+    l2 = ((q[t, 1, 0] - q[t, 0, 0]) * py - px * (q[t, 1, 1] - q[t, 0, 1])) / det[t]
+    l0 = 1.0 - l1 - l2
+    score = np.minimum(np.minimum(l0, l1), l2)
+    ok = np.where(score > -1.0e-9)[0]
+    ok = ok[np.argsort(score[ok])]                             # the best fit last: it is the one kept
+    out = np.full((len(vn), len(un), 3), np.nan)
+    tk = t[ok]
+    out[jj[ok], ii[ok]] = (l0[ok, None] * verts[tris[tk, 0]] + l1[ok, None] * verts[tris[tk, 1]]
+                           + l2[ok, None] * verts[tris[tk, 2]])
+    bad = np.isnan(out).any(axis=2)
+    if bad.any():
+        from scipy.spatial import cKDTree
+        uu, vv = np.meshgrid(un, vn)
+        out[bad] = verts[cKDTree(uv).query(np.column_stack((uu[bad], vv[bad])))[1]]
     return out
 
 
-def _section_pieces(shape, origin, normal, n=400):
-    """The cut of a shape by a plane: one polyline per section edge."""
-    gp_Pln, gp_Pnt, gp_Dir = _occ("gp", "gp_Pln", "gp_Pnt", "gp_Dir")
-    Section = _occ("BRepAlgoAPI", "BRepAlgoAPI_Section")
-    TopExp_Explorer = _occ("TopExp", "TopExp_Explorer")
-    TopAbs_EDGE = _occ("TopAbs", "TopAbs_EDGE")
-    as_edge = _topods("Edge")
-    algo = Section(shape, gp_Pln(gp_Pnt(*[float(v) for v in origin]), gp_Dir(*[float(v) for v in normal])))
-    algo.Build()
-    out, ex = [], TopExp_Explorer(algo.Shape(), TopAbs_EDGE)
-    while ex.More():
-        out.append(_edge_polyline(as_edge(ex.Current()), n))
-        ex.Next()
-    return out
+def _greville(knots, degree=3):
+    n = len(knots) - degree - 1
+    return np.array([knots[j + 1:j + degree + 1].mean() for j in range(n)])
 
 
-def _chain_pieces(pieces, tol=1.0e-2):
-    """Section polylines chained into continuous curves by their end points."""
-    pieces = [np.asarray(p) for p in pieces if len(p) > 1]
-    chains = []
-    while pieces:
-        chain = pieces.pop(0)
-        grown = True
-        while grown:
-            grown = False
-            for i, q in enumerate(pieces):
-                if np.linalg.norm(chain[-1] - q[0]) < tol:
-                    chain = np.vstack((chain, q[1:]))
-                elif np.linalg.norm(chain[-1] - q[-1]) < tol:
-                    chain = np.vstack((chain, q[::-1][1:]))
-                elif np.linalg.norm(chain[0] - q[-1]) < tol:
-                    chain = np.vstack((q, chain[1:]))
-                elif np.linalg.norm(chain[0] - q[0]) < tol:
-                    chain = np.vstack((q[::-1], chain[1:]))
-                else:
-                    continue
-                pieces.pop(i)
-                grown = True
-                break
-        chains.append(chain)
-    return chains
+def _tensor(a_v, grid, a_u):
+    """a_v @ grid @ a_u.T for each coordinate: the surface of a pole grid at the bases' stations, or the
+    least-squares poles when the two matrices are pseudo-inverses."""
+    return np.stack([a_v @ grid[:, :, c] @ a_u.T for c in range(grid.shape[2])], axis=2)
 
 
-def _wrap_arc(interim, pa, pb, o, thick):
-    """The wrap curve of the tip patch at one chord station: the interim solid
-    cut by the plane through pa (on the pressure boundary), pb (suction) and o
-    (the outline), the arc from pa over o to pb; returns the arc's two halves
-    resampled (each _cosine(N_VHALF)), meeting exactly on the plane of
-    symmetry (the crossing nearest o, or the point nearest o)."""
-    pa, pb, o = (np.asarray(v, dtype=float) for v in (pa, pb, o))
-    nrm = np.cross(pb - pa, o - pa)
-    ln = np.linalg.norm(nrm)
-    if ln < 1.0e-12:
-        raise RuntimeError("a degenerate tip cut plane")
-    pieces = _section_pieces(interim, pa, nrm / ln)
-    chains = _chain_pieces(pieces)
-    if not chains:
-        raise RuntimeError("a tip cut met nothing")
-    chain = min(chains, key=lambda c: np.linalg.norm(c - o, axis=1).min())
-    closed = np.linalg.norm(chain[0] - chain[-1]) < 1.0e-2
-    pts = chain[:-1] if closed else chain
-    ia = int(np.argmin(np.linalg.norm(pts - pa, axis=1)))
-    ib = int(np.argmin(np.linalg.norm(pts - pb, axis=1)))
-    m = len(pts)
-    if closed:
-        fwd = np.arange(ia, ia + (ib - ia) % m + 1) % m
-        bwd = np.arange(ia, ia - (ia - ib) % m - 1, -1) % m
-        arcs = [pts[fwd], pts[bwd]]
-        arc = min(arcs, key=lambda c: np.linalg.norm(c - o, axis=1).min())
-    else:
-        lo, hi = min(ia, ib), max(ia, ib)
-        arc = pts[lo:hi + 1] if ia <= ib else pts[hi:lo - 1 if lo else None:-1]
-    arc = np.vstack(([pa], arc[1:-1], [pb]))
-    s = _loop_arc(arc)
-    io = int(np.argmin(np.linalg.norm(arc - o, axis=1)))
-    y = arc[:, thick]
-    cross = [j for j in range(len(arc) - 1) if y[j] * y[j + 1] <= 0.0 and max(abs(y[j]), abs(y[j + 1])) > 0.0]
-    if cross:
-        j = min(cross, key=lambda jj: abs(jj - io))
-        t = y[j] / (y[j] - y[j + 1]) if y[j] != y[j + 1] else 0.0
-        split = arc[j] + t * (arc[j + 1] - arc[j])
-        s_split = s[j] + t * (s[j + 1] - s[j])
-    else:
-        split, s_split = arc[io].copy(), s[io]
-    if cross:
-        split[thick] = 0.0
-    h1 = _at_arc(arc, s, s_split * _mixed(N_VHALF))
-    h2 = _at_arc(arc, s, s_split + (s[-1] - s_split) * _mixed(N_VHALF))
-    h1[0], h1[-1] = pa, split
-    h2[0], h2[-1] = split, pb
-    return h1, h2
+def _normal_gap(data, grid, a_v, a_u, d_v, d_u):
+    """The largest distance of data (len(v), len(u), 3) from the patch of a pole grid, measured at the data's
+    own parameters along the patch's normal there (a point that only slides along the patch does not count):
+    a_v, a_u the bases at the parameters, d_v, d_u their derivatives."""
+    res = data - _tensor(a_v, grid, a_u)
+    nrm = np.cross(_tensor(a_v, grid, d_u), _tensor(d_v, grid, a_u))
+    ln = np.linalg.norm(nrm, axis=2)
+    okay = ln > 1.0e-9 * max(float(ln.max()), 1e-300)
+    if not okay.any():
+        return 0.0
+    return float(np.abs(np.einsum("ijc,ijc->ij", res, nrm)[okay] / ln[okay]).max())
 
 
-def _held_track_fit(data, a, p0, p1):
-    """Poles through data at the basis a, the end poles held at p0 and p1."""
-    poles = np.empty((a.shape[1], data.shape[1]))
-    poles[0], poles[-1] = p0, p1
-    rhs = data - np.outer(a[:, 0], poles[0]) - np.outer(a[:, -1], poles[-1])
-    poles[1:-1] = np.linalg.lstsq(a[:, 1:-1], rhs, rcond=None)[0]
-    return poles
+def _tensor_fit(data, un, vn, k_u, k_v, row0, row1, col0, col1):
+    """The pole grid (v poles, u poles, 3) of the tensor B-spline fitted to data (len(vn), len(un), 3) by least
+    squares with its four boundary pole rows held: row0 at v = 0, row1 at v = 1, col0 at u = 0, col1 at
+    u = 1. The inner poles start from the boundary's blend, so a pole the data leaves free stays in place.
+    Returns (poles, the largest distance of the data from the fitted patch along its normal, mm)."""
+    a_u, a_v = _design(un, k_u), _design(vn, k_v)
+    gu, gv = _greville(k_u)[None, :, None], _greville(k_v)[:, None, None]
+    c00, c10, c01, c11 = row0[0], row0[-1], row1[0], row1[-1]
+    poles = ((1.0 - gv) * row0[None] + gv * row1[None] + (1.0 - gu) * col0[:, None] + gu * col1[:, None]
+             - ((1.0 - gu) * (1.0 - gv) * c00 + gu * (1.0 - gv) * c10 + (1.0 - gu) * gv * c01 + gu * gv * c11))
+    poles[0], poles[-1], poles[:, 0], poles[:, -1] = row0, row1, col0, col1
+    res = data - _tensor(a_v, poles, a_u)
+    poles[1:-1, 1:-1] += _tensor(np.linalg.pinv(a_v[:, 1:-1]), res, np.linalg.pinv(a_u[:, 1:-1]))
+    return poles, _normal_gap(data, poles, a_v, a_u, _design(vn, k_v, deriv=1), _design(un, k_u, deriv=1))
 
 
 def _half_cut(solid, loops, thick, cen_a_row):
@@ -758,67 +951,32 @@ def _sew_solid(parts, sew_tol):
     return fx.Solid(), free
 
 
-def _interim_solid(loops, fitter, up_rows, lo_rows, flat, k, v_poles, sew_tol, thick, z_axis):
-    """The old smooth loft (the side split at a collar under the cap, the
-    cap's rim and crown), sewn as one full solid: the geometry source the tip
-    patch's wrap cuts resample. Returns (solid, ridge poles)."""
-    n = len(loops)
-    patches = []
-    end = k if k == n else k + 1
-    c_i = 0
-    if k >= 2:
-        if k < n:                                      # a collar 4 % of the span under the highest section,
-            heights = np.array([lp[0, z_axis] for lp in loops[:k]])        # so the band at the cap keeps its
-            span = float(max(lp[:, z_axis].max() for lp in loops)) - heights[0]    # own spanwise resolution
-            c_i = int(np.argmin(np.abs(heights - (heights[k - 1] - 0.04 * span))))
-            c_i = c_i if 1 <= c_i <= k - 2 else 0
-        if c_i:
-            patches.append(_Patch("side", up_rows[:c_i + 1], lo_rows[:c_i + 1], v_poles, fitter))
-        b_up, b_lo = _densify(up_rows[c_i:end]), _densify(lo_rows[c_i:end])
-        patches.append(_Patch("tip band" if c_i else "side", b_up, b_lo,
-                              v_poles if not c_i and k == n else max(6, min(v_poles, len(b_up))), fitter))
-    elif k == 1 and k < n:
-        patches.append(_Patch("side", up_rows[:2], lo_rows[:2], 2, fitter))
-    ridge = None
-    if k < n:
-        ridge = 0.5 * (up_rows[n - 1] + lo_rows[n - 1][::-1])
-        ridge[:, thick] = 0.0
-        if n - k >= 3:
-            rim_up, crown_up = _cap_rows(np.concatenate([up_rows[k:], ridge[None]]), z_axis, 0.5)
-            rim_lo, crown_lo = _cap_rows(np.concatenate([lo_rows[k:], ridge[::-1][None]]), z_axis, 0.5)
-            patches.append(_Patch("rim", rim_up, rim_lo, len(rim_up), fitter, pinched=True, thick=thick))
-            patches.append(_Patch("crown", crown_up, crown_lo, len(crown_up), fitter, pinched=True, thick=thick))
-        else:
-            crown_up = np.concatenate([up_rows[k:], ridge[None]])
-            crown_lo = np.concatenate([lo_rows[k:], ridge[::-1][None]])
-            patches.append(_Patch("crown", crown_up, crown_lo, len(crown_up), fitter, pinched=True, thick=thick))
-    parts = []
-    for q in patches:
-        parts += q.faces(False)
-    parts.append(_planar_face(fitter.wire(loops[0])[0]) if flat[0] else fitter.closing_face(loops[0]))
-    if k == n:
-        parts.append(_planar_face(fitter.wire(loops[-1])[0]) if flat[-1] else fitter.closing_face(loops[-1]))
-    solid, _ = _sew_solid(parts, sew_tol)
-    return solid, ridge
-
-
 def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3, v_poles=30,
-               strip_frac=0.07, tip_frac=0.15, half=False, sym_tol=0.2):
+               strip_frac=0.07, half=False, sym_tol=0.2, ease="both"):
     """The solid through closed loops (each (n, 3), mm, the same point count,
-    LE first), bottom to top, with the blade's five-patch topology; see the
+    LE first), bottom to top, in five patches and the flat root; see the
     module docstring for how it is built.
 
-    v_poles     rows of poles along the span, and across the wrap of the
-                strips and of the tip patch; fewer rows than loops smooth
-                extraction noise out, degree 3 either way
+    n_poles     B-spline poles along a section between the strips, before the
+                knots added towards the strips (30 more); the strips take
+                min(n_poles, 60) and 27 more
+    v_poles     rows of poles along the span to start with; fewer rows than
+                loops smooth extraction noise out, and rows are added where a
+                sharp turn of the planform needs them (_span_fit)
     strip_frac  each strip reaches this fraction of the root chord along the
                 section's arc to both sides of its edge (the blade's
-                constant-width rule)
-    tip_frac    the tip patch owns this fraction of the span, measured down
-                from the top (clamped under the highest horizontal section)
+                constant-width rule); a pair (LE, TE) gives the two strips
+                their own fractions
     half        True: the half body on the LE-to-TE side of the plane of
                 symmetry (thickness 0), the loops symmetric within sym_tol (mm)
+    ease        which loops give way at a step from one horizontal loop to
+                the next (the one where modified sections meet the original
+                ones; _ease_flats): "both" (the loops under it and over it,
+                so that the surface tilts alike on both sides), "below" (the
+                loops under it; those above are kept as they are) or "above"
     """
+    if ease not in ("both", "below", "above"):
+        raise ValueError('ease is "both", "below" or "above"')
     t0 = time.time()
     loops = [np.asarray(lp, dtype=float).copy() for lp in loops]
     if len(loops) < 2:
@@ -837,156 +995,127 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
                 lp[i, thick] = 0.0
     flat = [np.ptp(lp[:, z_axis]) <= flat_tol * max(1.0, size) for lp in loops]
     if not flat[0]:
-        raise ValueError("the root loop must be horizontal (the five-patch layout closes it with a plane)")
+        raise ValueError("the root loop must be horizontal (the root is closed with a plane)")
     k = next((i for i, f in enumerate(flat) if not f), n)          # leading loops at one height each
-    fitter = _SectionFitter(n_pts, n_poles)
-    up_rows, lo_rows = [], []
-    for lp in loops:
-        p_up, p_lo, _ = fitter.sides(lp)
-        up_rows.append(p_up)
-        lo_rows.append(p_lo)
-    up_rows, lo_rows = np.array(up_rows), np.array(lo_rows)
-    if half:
-        mirror = up_rows.copy()
-        mirror[:, :, thick] *= -1.0
-        sym = float(np.abs(mirror - lo_rows[:, ::-1]).max())
-        if sym > sym_tol:
-            raise ValueError(f"no half body: the loops are not symmetric about the plane of symmetry "
-                             f"(they differ by {sym:.3g} mm, the allowance is {sym_tol:g} mm)")
-    notes = []
-
-    # the strips' width and the tip patch's boundary
     chord_root = float(np.linalg.norm(loops[0][0] - loops[0][i_te]))
-    h_flats = np.array([loops[i][0, z_axis] for i in range(k)])
-    z0 = float(h_flats[0])
-    z_top = float(max(lp[:, z_axis].max() for lp in loops))
-    span = z_top - z0
-    w_strip = float(strip_frac) * chord_root
-    if k < n:
-        h_tip = min(z_top - float(tip_frac) * span, float(h_flats[-1]) - 0.02 * span)
-        below = [i for i in range(k) if h_flats[i] < h_tip - 1.0e-9]
-        if len(below) < 2:
-            raise ValueError("tip_frac leaves fewer than two horizontal sections under the tip patch")
-        j = below[-1]
-        t = (h_tip - h_flats[j]) / (h_flats[j + 1] - h_flats[j])
-        brow = (1.0 - t) * loops[j] + t * loops[j + 1]
-        brow[:, z_axis] = h_tip
-        row_loops = [loops[i] for i in below] + [brow]
-        row_h = np.r_[h_flats[below], h_tip]
-        notes.append(f"the tip patch above {h_tip:.6g} mm; the strips {w_strip:.6g} mm wide about the LE "
-                     f"and the TE")
-    else:
-        row_loops = list(loops)
-        row_h = h_flats
-        h_tip = float(h_flats[-1])
-        notes.append(f"all sections horizontal: the flat top closed by a plane; the strips {w_strip:.6g} mm "
-                     f"wide about the LE and the TE")
+    fr = np.atleast_1d(np.asarray(strip_frac, dtype=float))
+    if fr.size not in (1, 2) or np.any(fr <= 0.0):
+        raise ValueError("strip_frac is one positive fraction, or a pair (LE, TE)")
+    w_le, w_te = float(fr[0]) * chord_root, float(fr[-1]) * chord_root
+    widths = (f"the strips {w_le:.6g} mm wide about the LE and the TE" if w_le == w_te else
+              f"the strips {w_le:.6g} mm wide about the LE and {w_te:.6g} mm about the TE")
+    notes = []
+    span = float(max(lp[:, z_axis].max() for lp in loops) - loops[0][0, z_axis])
 
-    # the four wrap families: per-row arc fits (shared split poles), then the span fits (shared parameters)
-    u_strip = _clustered(N_STRIP, 0.35)
-    u_cen = _cosine(N_CEN)
-    p_wrap = max(12, min(int(n_poles), 60))        # the strips' and the tip wrap's poles: a section budget
-    a_strip, k_strip = _basis_at(u_strip, p_wrap)
-    a_cen, k_cen = _basis_at(u_cen, n_poles)
-    raw = [_row_arcs(lp, i_te, w_strip, w_strip, u_strip, u_cen) for lp in row_loops]
-    err = 0.0
+    # a step between horizontal loops is taken out of them first: no smooth surface follows one
+    given = loops
+    eased, steps = _ease_flats(loops[:k], z_axis, v_poles, SPAN_TOL * span, ease)
+    if steps:
+        loops = eased + loops[k:]
+
+    # the rows of the four patches along the span: every horizontal loop and, under a cap, its rim
+    def rows_of(loops):
+        if k < n:
+            return _fan_rows(loops[:k], loops[k], z_axis)
+        return list(loops), 0.0
+
+    row_loops, band = rows_of(loops)
+    if k < n:
+        notes.append(f"the tip patch covers the cap above loop {k + 1}; {widths}"
+                     + (f"; the rows tilt onto the tip's rim over the top {band:.4g} mm" if band else ""))
+    else:
+        notes.append(f"all sections horizontal: the flat top closed by a plane; {widths}")
+
+    # per row: the smooth loop, its four arcs at shared split points, the arcs' poles (shared seam poles)
+    k_cen = _refined_knots(n_poles, "central")
+    k_strip = _refined_knots(max(12, min(int(n_poles), 60)), "strip")
+    u_cen, u_strip = _knot_stations(k_cen), _knot_stations(k_strip)
+    a_cen, a_strip = _design(u_cen, k_cen), _design(u_strip, k_strip)
+    d_cen, d_strip = _design(u_cen, k_cen, deriv=1), _design(u_strip, k_strip, deriv=1)
+    pinv = {"cen": np.linalg.pinv(a_cen[:, 1:-1]), "strip": np.linalg.pinv(a_strip[:, 1:-1])}
     fams = {"le": [], "cen_a": [], "te": [], "cen_b": []}
-    for le, ca, te, cb in raw:
-        for name, row, a in (("le", le, a_strip), ("cen_a", ca, a_cen), ("te", te, a_strip),
-                             ("cen_b", cb, a_cen)):
-            poles = _fit_poles(row, a)
+    data = {"le": [], "cen_a": [], "te": [], "cen_b": []}
+    spacing, sym, err, first_a, last = [], 0.0, 0.0, None, None
+    for lp in row_loops:
+        dense, it = _smooth_loop(lp, i_te)
+        if half:
+            mirror = dense[it:][::-1].copy()
+            mirror[:, thick] *= -1.0
+            sym = max(sym, float(np.abs(mirror - dense[:it + 1]).max()))
+        arcs = _row_arcs(dense, it, w_le, w_te, u_strip, u_cen)
+        for name, row, a, key in (("le", arcs[0], a_strip, "strip"), ("cen_a", arcs[1], a_cen, "cen"),
+                                  ("te", arcs[2], a_strip, "strip"), ("cen_b", arcs[3], a_cen, "cen")):
+            poles = np.empty((a.shape[1], 3))
+            poles[0], poles[-1] = row[0], row[-1]
+            poles[1:-1] = pinv[key] @ (row - np.outer(a[:, 0], row[0]) - np.outer(a[:, -1], row[-1]))
             err = max(err, float(np.abs(a @ poles - row).max()))
             fams[name].append(poles)
-    vpar = (row_h - row_h[0]) / (row_h[-1] - row_h[0])
-    grids, v_err, vk, vd = {}, 0.0, None, 3
-    for name, rows in fams.items():
-        g, vk, vd, e = _fit_grid(np.array(rows), v_poles, params=vpar)
-        grids[name] = g
+            data[name].append(row)
+        stacked = np.vstack(arcs)
+        if last is not None:
+            spacing.append(float(np.linalg.norm(stacked - last, axis=1).mean()))
+        last = stacked
+        if first_a is None:
+            first_a = arcs[1]
+    if steps:                                          # the distances reported are those of the loops as given
+        data = {"le": [], "cen_a": [], "te": [], "cen_b": []}
+        for lp in rows_of(given)[0]:
+            arcs = _row_arcs(*_smooth_loop(lp, i_te), w_le, w_te, u_strip, u_cen)
+            for name, row in zip(("le", "cen_a", "te", "cen_b"), arcs):
+                data[name].append(row)
+    if half and sym > sym_tol:
+        raise ValueError(f"no half body: the loops are not symmetric about the plane of symmetry "
+                         f"(they differ by {sym:.3g} mm, the allowance is {sym_tol:g} mm)")
+
+    # along the span: every family on the same parameters and knots, so the shared seams are the same curves
+    vpar = np.r_[0.0, np.cumsum(np.maximum(spacing, 1e-9 * max(max(spacing), 1e-12)))]
+    vpar /= vpar[-1]
+    grids, vk, vd, _ = _span_fit(fams, v_poles, vpar, SPAN_TOL * span)
+    b_v, d_v = _design(vpar, vk, vd), _design(vpar, vk, vd, deriv=1)
+    v_err = 0.0
+    for name, a, d in (("le", a_strip, d_strip), ("cen_a", a_cen, d_cen), ("te", a_strip, d_strip),
+                       ("cen_b", a_cen, d_cen)):
+        v_err = max(v_err, _normal_gap(np.array(data[name]), grids[name], b_v, a, d_v, d))
+    notes.append(f"along the span {len(vk) - vd - 1} rows of poles through {len(row_loops)} loops; the loops "
+                 f"within {v_err:.3g} mm of the patches")
+    for at, jump, lo, hi, s_lo, s_hi in steps:
+        notes.append(f"a step of {jump:.3g} mm between loops {at} and {at + 1}, eased out of the loops "
+                     + (f"over {lo:.3g} mm below it (the loops above kept)" if s_hi == 0.0 else
+                        f"over {hi:.3g} mm above it (the loops below kept)" if s_lo == 0.0 else
+                        f"over {lo:.3g} mm below it ({100 * s_lo:.0f} % of it) and {hi:.3g} mm above "
+                        f"({100 * s_hi:.0f} %)")
+                     + ": the patches cross it smoothly")
+
+    # the tip patch: the cap above the rim, fitted through its map onto the patch's square
+    tip = None
+    if k < n:
+        verts, tris, idx, c_le, c_te = _cap_mesh(loops[k:], i_te)
+        b_idx, b_uv = _rim_params(verts, idx, c_le, c_te, w_le, w_te)
+        uv = _mean_value_map(verts, tris, b_idx, b_uv)
+        un, vn = u_cen[1:-1], u_strip[1:-1]
+        tip, e = _tensor_fit(_locate(uv, tris, verts, un, vn), un, vn, k_cen, k_strip,
+                             grids["cen_a"][-1], grids["cen_b"][-1], grids["le"][-1], grids["te"][-1])
+        notes.append(f"the tip patch within {e:.3g} mm of the cap")
         v_err = max(v_err, e)
 
-    # the tip patch: wrap curves cut from the interim solid (cropped to its top for speed)
-    tip = k_wrap = None
-    if k < n:
-        interim, ridge = _interim_solid(loops, fitter, up_rows, lo_rows, flat, k, v_poles, sew_tol,
-                                        thick, z_axis)
-        try:
-            BRepPrimAPI_MakeBox = _occ("BRepPrimAPI", "BRepPrimAPI_MakeBox")
-            gp_Pnt = _occ("gp", "gp_Pnt")
-            Common = _occ("BRepAlgoAPI", "BRepAlgoAPI_Common")
-            pts_all = np.vstack(loops)
-            blo = pts_all.min(axis=0) - (0.05 * np.ptp(pts_all, axis=0) + 10.0)
-            bhi = pts_all.max(axis=0) + (0.05 * np.ptp(pts_all, axis=0) + 10.0)
-            blo[z_axis] = h_tip - 0.03 * span
-            algo = Common(interim, BRepPrimAPI_MakeBox(gp_Pnt(*[float(v) for v in blo]),
-                                                       gp_Pnt(*[float(v) for v in bhi])).Shape())
-            algo.Build()
-            if algo.IsDone() and count_faces(algo.Shape()):
-                interim = algo.Shape()
-        except Exception:
-            pass
-        a_r, _ = _basis(401, n_poles)
-        ridge_pts = a_r @ ridge                        # the crest line, LE to TE
-        above = [i for i in range(k) if h_flats[i] > h_tip + 1.0e-9]
-        head = [brow[0]] + [loops[i][0] for i in above] + [loops[k][0]]
-        tail = [loops[k][i_te]] + [loops[i][i_te] for i in reversed(above)] + [brow[i_te]]
-        outline = np.vstack(head + [ridge_pts] + tail)
-        s_out = _loop_arc(outline)
-        r_s = s_out[len(head):len(head) + len(ridge_pts)]
-        c_ax = 3 - z_axis - thick
-        n_cut = max(N_CUT, int(1.6 * n_poles) + 1)     # comfortably more stations than chordwise poles
-        u_cut = _cosine(n_cut)[1:-1]
-        a_cut, _ = _basis_at(u_cut, n_poles)
-        pas, pbs = a_cut @ grids["cen_a"][-1], a_cut @ grids["cen_b"][-1]
-        xr = ridge_pts[:, c_ax]
-        order = np.argsort(xr)
-        xm = np.clip(0.5 * (pas[:, c_ax] + pbs[:, c_ax]), xr.min(), xr.max())
-        arc_match = np.interp(xm, xr[order], r_s[order])
-        t_bl = np.clip(np.minimum(u_cut, 1.0 - u_cut) / 0.3, 0.0, 1.0)
-        wgt = t_bl * t_bl * (3.0 - 2.0 * t_bl)
-        arc_o = np.maximum.accumulate((1.0 - wgt) * (u_cut * s_out[-1]) + wgt * arc_match)
-        os_ = _at_arc(outline, s_out, arc_o)
-        # o sits over the chord station of pa and pb through the middle, which keeps the cut planes parallel
-        # (steered by the outline's arc alone they tilt against one another and the fitted surface folds at
-        # the cap's rounding); near the ends o blends onto the outline and down its legs, turning the family
-        # around the corners as the blade's tip cuts do
-        vfrac = np.r_[0.5 * _mixed(N_VHALF), 0.5 + 0.5 * _mixed(N_VHALF)[1:]]
-        a_wrap, k_wrap = _basis_at(vfrac, p_wrap)
-        rows_w = []
-        for pa, pb, o in zip(pas, pbs, os_):
-            h1, h2 = _wrap_arc(interim, pa, pb, o, thick)
-            w = np.vstack((h1, h2[1:]))
-            poles = _held_track_fit(w, a_wrap, pa, pb)
-            v_err = max(v_err, float(np.abs(a_wrap @ poles - w).max()))
-            rows_w.append(poles)
-        rows_w = np.array(rows_w)
-        le_top, te_top = grids["le"][-1], grids["te"][-1]
-        tip = np.empty((p_wrap, n_poles, 3))
-        tip[0], tip[-1] = grids["cen_a"][-1], grids["cen_b"][-1]
-        for m in range(1, p_wrap - 1):
-            tip[m] = _held_track_fit(rows_w[:, m], a_cut, le_top[m], te_top[m])
-            v_err = max(v_err, float(np.abs(a_cut @ tip[m] - rows_w[:, m]).max()))
-
     # the faces
-    parts = []
-    for name, uk in (("le", k_strip), ("cen_a", k_cen), ("te", k_strip), ("cen_b", k_cen)):
-        parts.append(_surface_face(grids[name], uk, vk, 3, vd))
+    edges = (("le", k_strip), ("cen_a", k_cen), ("te", k_strip), ("cen_b", k_cen))
+    parts = [_surface_face(grids[name], uk, vk, 3, vd) for name, uk in edges]
     if k < n:
-        parts.append(_surface_face(tip, k_cen, k_wrap, 3, 3))
+        parts.append(_surface_face(tip, k_cen, k_strip, 3, 3))
     else:
-        parts.append(_wire_face([_bspline_edge(grids[nm][-1], uk, 3) for nm, uk in
-                                 (("le", k_strip), ("cen_a", k_cen), ("te", k_strip), ("cen_b", k_cen))]))
-    parts.append(_wire_face([_bspline_edge(grids[nm][0], uk, 3) for nm, uk in
-                             (("le", k_strip), ("cen_a", k_cen), ("te", k_strip), ("cen_b", k_cen))]))
+        parts.append(_wire_face([_bspline_edge(grids[nm][-1], uk, 3) for nm, uk in edges]))
+    parts.append(_wire_face([_bspline_edge(grids[nm][0], uk, 3) for nm, uk in edges]))
 
     solid, free = _sew_solid(parts, sew_tol)
     if half:                                           # cut on the plane of symmetry: the surfaces stay the
-        solid = _half_cut(solid, loops, thick, raw[0][1])            # full body's, the volume exactly half
+        solid = _half_cut(solid, loops, thick, first_a)              # full body's, the volume exactly half
         notes.append("half body: the LE-to-TE side, cut on the plane of symmetry")
     BRepCheck_Analyzer = _occ("BRepCheck", "BRepCheck_Analyzer")
     valid = bool(BRepCheck_Analyzer(solid).IsValid())
     vol, area = mass_properties(solid)
     return LoftResult(solid, valid, vol, area, free, err, k, n - k, time.time() - t0, notes,
-                      count_faces(solid), v_err, bool(half))
+                      count_faces(solid), v_err, bool(half), steps)
 
 
 # --------------------------------------------------------------------------
@@ -1105,6 +1234,9 @@ def main():
     ap.add_argument("--step", default=None, help="STEP file to write (default: next to the point file)")
     ap.add_argument("--poles", type=int, default=40, help="B-spline poles per side of a section (default 40)")
     ap.add_argument("--half", action="store_true", help="the half body, cut at the plane of symmetry")
+    ap.add_argument("--ease", choices=("both", "below", "above"), default="both",
+                    help="the loops that give way at a step between horizontal loops, such as modified "
+                         "sections meeting the original ones (default both: under it and over it)")
     ap.add_argument("--view", action="store_true", help="show the solid in the pythonocc viewer")
     ap.add_argument("--view-step", default=None, help="only show this STEP file")
     args = ap.parse_args()
@@ -1113,14 +1245,16 @@ def main():
         return
     if not args.xcad:
         ap.error("give an XCAD point file or --view-step")
-    res = loft_loops(read_loops(args.xcad, args.units), args.poles, half=args.half)
+    res = loft_loops(read_loops(args.xcad, args.units), args.poles, half=args.half, ease=args.ease)
     step = args.step or os.path.splitext(args.xcad)[0] + ".step"
     write_step(res.shape, step)
     print(f"{args.xcad}: {res.n_smooth} horizontal + {res.n_ruled} tip loops, {res.faces} faces"
           f"{' (half body)' if res.half else ''}, valid {res.valid}, volume {res.volume:.1f} mm^3, "
-          f"area {res.area:.1f} mm^2, open edges {res.free_edges}, section fit within "
-          f"{res.fit_error * 1e3:.1f} um, the patches within {res.v_error * 1e3:.1f} um, {res.seconds:.1f} s "
-          f"-> {step}")
+          f"area {res.area:.1f} mm^2, open edges {res.free_edges}, the rows' curves within "
+          f"{res.fit_error * 1e3:.1f} um, the loops and the cap within {res.v_error * 1e3:.1f} um of the patches, "
+          f"{res.seconds:.1f} s -> {step}")
+    for note in res.notes:
+        print(f"  {note}")
     if args.view:
         view(res.shape, os.path.basename(step))
 

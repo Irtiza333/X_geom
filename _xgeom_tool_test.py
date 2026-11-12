@@ -86,8 +86,26 @@ def test_loft():
     check("its half body: valid, closed, 6 faces, half the volume",
           [res2h.valid, res2h.free_edges, XL.count_faces(res2h.shape), res2h.volume / res2.volume], [1, 0, 6, 0.5],
           1e-4)
-    wide = XL.loft_loops(loops2, strip_frac=0.12, tip_frac=0.3)
-    check("wider strips and tip patch: still valid, 6 faces", [wide.valid, XL.count_faces(wide.shape)], [1, 6], 0)
+    wide = XL.loft_loops(loops2, strip_frac=0.12)
+    check("wider strips: still valid, 6 faces", [wide.valid, XL.count_faces(wide.shape)], [1, 6], 0)
+    pair = XL.loft_loops(loops2, strip_frac=(0.07, 0.03))
+    check("a strip width each for the LE and the TE: valid, 6 faces; no step found in the horizontal loops",
+          [pair.valid, XL.count_faces(pair.shape), len(res.steps)], [1, 6, 0], 0)
+    stepped = [lp.copy() for lp in loops]
+    for lp in stepped[:15]:
+        lp[:, 1] *= 1.01                                   # the loops below z = 36 a hundredth thicker: a step
+    jump = 0.01 * float(np.abs(loops[14][:, 1]).max())
+    low = XL.loft_loops(stepped, ease="below")
+    both = XL.loft_loops(stepped)
+    print(f"       a step of {jump:.3f} mm in the loops: found {low.steps[0][1]:.3f} mm above loop {low.steps[0][0]}, "
+          f"eased over {low.steps[0][2]:.1f} mm below; from both sides over {both.steps[0][2]:.1f} and "
+          f"{both.steps[0][3]:.1f} mm")
+    check("a step between loops is found and eased out of the loops below it; the solid valid, 6 faces",
+          [low.valid, XL.count_faces(low.shape), len(low.steps), low.steps[0][0], low.steps[0][2] > 5.0,
+           low.steps[0][3], abs(low.steps[0][1] / jump - 1.0) < 0.5], [1, 6, 1, 15, 1, 0, 1], 0)
+    check("eased from both sides by default: a band below and one above, the loops within the step of the patches",
+          [both.valid, len(both.steps), both.steps[0][2] > 5.0, both.steps[0][3] > 5.0, both.v_error < jump],
+          [1, 1, 1, 1, 1], 0)
     try:
         XL.loft_loops(loops2, strip_frac=0.5)
         overlapped = 0
@@ -157,8 +175,9 @@ def test_adapter():
         ad.set("H", 150.0)
         sk = ad.skeleton()
         tip = [lp for lp in sk["unchanged"] if np.ptp(lp[:, 1]) > 1e-9]
-        check("H bounds 40 .. 150: H = 150 builds; the 3D view keeps the tip section and the 10 cap loops",
-              [len(ad.preview()["problems"]), ad.get("H"), len(tip)], [0, 150.0, 11], 1e-9)
+        n_top = sum(1 for lp in ad.loops0 if np.ptp(lp[:, 1]) > 1e-9)
+        check("H bounds 40 .. 150: H = 150 builds; the 3D view keeps the tip section and every cap loop",
+              [len(ad.preview()["problems"]), ad.get("H"), len(tip), n_top > 1], [0, 150.0, n_top, 1], 1e-9)
         try:
             ad.set_bounds("H", 40.0, 250.0)
             refused = False

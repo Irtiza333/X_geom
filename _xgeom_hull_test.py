@@ -418,7 +418,8 @@ def test_parts(hull):
     outside = lambda p: np.hypot(p[1], p[2]) > d.radius("r", np.array([p[0]]))[0]
     g = gaps_along(whole, u, outside, reach=(whole @ u) / (u @ u))                  # down to the axis
     inner = segs["roots"][0]
-    loops_te = np.array([[float(q[:, 1].mean()), float(q[:, 0].max())] for q in rp["loops"][:-3]])
+    loops_te = np.array([[float(q[:, 1].mean()), float(q[:, 0].max())] for q in rp["loops"]
+                         if np.ptp(q[:, 1]) < 1e-9])                # the horizontal loops (not the tip, the cap)
     check("the wind-tunnel rudder with its TE line square to the axis (rake 0) at the same x: its TE line's dx/dy "
           "from the TE rows (the loops' TEs within 0.1 mm of that line); the root chord at atan of it; the TE "
           "radial through the hull at x; resting on SUBOFF; extruded along the TE, inside",

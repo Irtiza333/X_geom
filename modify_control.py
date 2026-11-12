@@ -61,9 +61,8 @@ class ModifySettings:
     half: bool = False             # the CAD as the half body, cut at the plane of symmetry (CFD on half the
                                    # domain; the sections are symmetric, so either side is the same)
     strip_frac: float = 0.07       # the LE and TE wrap strips reach this fraction of the root chord along the
-                                   # arc to both sides of their edge (xcad_loft, the blade's constant width)
-    tip_frac: float = 0.15         # the tip patch owns this fraction of the span, down from the top
-                                   # (xcad_loft; clamped under the highest horizontal section)
+                                   # arc to both sides of their edge (xcad_loft, the blade's constant width);
+                                   # the tip patch covers the tip face alone, from the tip's edge up
     plot: bool = True              # write <case>_check.png
 
 settings = ModifySettings( # SET PARAMETERS HERE

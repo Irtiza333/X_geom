@@ -1768,7 +1768,9 @@ def write_tip_section(out_dir: str, sec: Section, source: str) -> dict:
 # Step 7 - the tip cap
 # --------------------------------------------------------------------------- #
 DEFAULT_CAP_STATIONS = 48     # cross-sections cut through the cap for the fit
-DEFAULT_CAP_LOOPS = 10        # loops over the cap in the XCAD file
+DEFAULT_CAP_LOOPS = 40        # loops over the cap in the XCAD file: close enough together across the
+                              # edge radius for a section-based rebuild to follow it (10 left the tip's
+                              # edge scalloped, about 0.1 mm)
 DEFAULT_CAP_TOP = 0.995       # height fraction of the last loop (1 = the crest line)
 
 

@@ -16,12 +16,15 @@ differs from the original file's is resampled by cosine arc into its layout
 (the first point, the LE, kept first; the point farthest from it, the TE, at
 the middle index; the loop closed back on the LE). The original file defaults
 to outputs/sections_xcad_with_cap_y0_y200_m.dat. Its sections above the top
-modified section are added, everything is lofted into one solid with the
-blade's five-patch topology of xcad_loft (user, 6 Nov 2026): bicubic patches
+modified section are added, everything is lofted into one solid with
+xcad_loft's five patches (user, 11 Nov 2026: the four along the span run up
+to the tip's edge, the tip patch covers the tip face alone): bicubic patches
 fitted by least squares, the LE and TE strips wrapping their edges, the
-central pressure and suction panels, one tip patch over the top of the span,
-and the flat root; six faces. The solid is written as <modified file>.step
-(mm).
+central pressure and suction panels, the tip patch over the cap, and the
+flat root; six faces. Where the modified sections meet the original ones in
+a step (their fits against the extracted loops), the loft eases it out of the
+sections below and above it, so the solid crosses it without a ripple; the
+step is printed. The solid is written as <modified file>.step (mm).
 
 Needs numpy, scipy, pythonocc-core and xcad_loft.py beside it.
 """
@@ -100,6 +103,8 @@ def main():
           f"{res.faces} faces, solid {'valid' if res.valid else 'NOT valid'}"
           f"{f' ({res.free_edges} free edges)' if res.free_edges else ''}, volume {res.volume:.0f} mm^3, "
           f"fit {res.fit_error:.3f} mm")
+    for note in res.notes:
+        print(f"  {note}")
     out = os.path.splitext(sys.argv[1])[0] + ".step"
     XL.write_step(res.shape, out)
     print(f"written {out}")

@@ -71,8 +71,7 @@ class RudderAdapter:
                          "te_radius_mm": float(s.te_radius_mm), "gap_mm": s.gap_mm, "xcad_units": s.xcad_units,
                          "plot": bool(s.plot), "fit_orders": dict(MC.FIT_ORDERS),
                          "fit_free_heights": bool(s.fit_free_heights), "half": bool(getattr(s, "half", False)),
-                         "strip_frac": float(getattr(s, "strip_frac", 0.07)),
-                         "tip_frac": float(getattr(s, "tip_frac", 0.15))}
+                         "strip_frac": float(getattr(s, "strip_frac", 0.07))}
         self.title = "Rudder, modified below H"
         self.stack = self._stack0 = RM.read_stack(MC.STACK)
         self.loops0 = self._loops00 = [RM.xcad_to_working(pts, "m") for _, pts in RM.read_xcad(MC.XCAD_ORIGINAL)]
@@ -370,7 +369,7 @@ class RudderAdapter:
             rec = json.load(fh)
         if rec.get("geometry") != "rudder":
             raise ValueError(f"{path} is not a rudder design space")
-        for k in ("n_sections", "te_radius_mm", "half", "strip_frac", "tip_frac"):
+        for k in ("n_sections", "te_radius_mm", "half", "strip_frac"):
             if k in rec.get("settings", {}):
                 self.settings[k] = rec["settings"][k]
         self._apply_scale(float(rec.get("settings", {}).get("height_scale") or 1.0))     # its full height
@@ -413,8 +412,7 @@ class RudderAdapter:
                 out["cad_error"] = "no OCCT binding (pythonocc-core or cadquery-ocp): no solid"
                 return out
             loft = XL.loft_loops(XL.read_loops(res["paths"]["xcad"], s["xcad_units"]),
-                                 strip_frac=s.get("strip_frac", 0.07), tip_frac=s.get("tip_frac", 0.15),
-                                 half=half)
+                                 strip_frac=s.get("strip_frac", 0.07), half=half)
             step = os.path.splitext(res["paths"]["xcad"])[0] + ".step"
             XL.write_step(loft.shape, step)
             out.update(loft=loft, step=step)
@@ -439,6 +437,9 @@ class RudderAdapter:
                 lr = out["loft"]
                 msg += (f", {os.path.basename(out['step'])} ({'half body, ' if lr.half else ''}solid "
                         f"{'valid' if lr.valid else 'NOT valid'}, {lr.volume / 1e3:.2f} cm^3); OCC viewer shows it")
+                for _, jump, lo, hi, _, _ in lr.steps:     # the modified sections meet the original ones in a step
+                    msg += (f"; the {jump:.2f} mm step between the modified and the original sections eased out "
+                            f"over {lo:.0f} mm below it" + (f" and {hi:.0f} mm above" if hi else ""))
             if out["cad_error"]:
                 msg += "; " + out["cad_error"]
             out.update(message=msg, error=bool(out["cad_error"]), view=out["step"])
