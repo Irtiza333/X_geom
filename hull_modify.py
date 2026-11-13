@@ -13,6 +13,8 @@ The body along x (m, from the nose), in four parts:
     cap      .. + Lc          an ellipsoidal cap closing the end (SUBOFF's); Lc = 0: the end is flat (re > 0)
                               or on the axis (re = 0)
 Each section is an ellipse, r' along y (the XY view) and r along z (the XZ view); a circle where they are equal.
+Ln = 0 is a body without a nose (an aft half, 13 Nov 2026): it starts at x = 0 with the middle body's section,
+closed by a flat face (the cut at mid-length), and has tail curves only; its nose length is no variable.
 
 Curves (CST: a class function times a Bernstein polynomial, Kulfan 2008), one per part and view:
     nose  r = r* psi^N1 sum_{i=0..n} b_i B_i,n(psi),                       psi = x / Ln
@@ -78,6 +80,11 @@ LENGTHS = ("nose", "middle", "tail", "cap")
 SECTION_POINTS = 64                       # points per section in the section file
 FIT_POINTS = 600                          # points per part in a fit, evenly spaced along the curve
 SUBOFF_PARAMS = "suboff_hull_params.dat"
+
+
+def part_kinds(nose):
+    """The parts with curves: the nose and the tail, or the tail alone for a body without a nose (Ln = 0)."""
+    return KINDS if nose > 0 else ("tail",)
 
 
 # --------------------------------------------------------------------------
@@ -200,7 +207,7 @@ def fit_cst(kind, psi, y, order=DEFAULT_ORDER, exponent=None):
     """The CST curve of an order through normalized data (psi, y): the coefficients by least squares, the
     exponent by a bounded search on the residual unless it is given. Returns (curve, rms residual)."""
     from scipy.optimize import minimize_scalar
-    psi, y = np.asarray(psi, dtype=float), np.asarray(y, dtype=float)
+    psi, y = np.clip(np.asarray(psi, dtype=float), 0.0, 1.0), np.asarray(y, dtype=float)   # round-off past an end
     if exponent is None:
         lo, hi = EXP_BOUNDS[kind]
         res = minimize_scalar(lambda e: _lsq(kind, psi, y, order, e)[1], bounds=(lo, hi), method="bounded",
@@ -228,7 +235,7 @@ class HullDesign:
 
     @property
     def axisymmetric(self):
-        return "nose_rp" not in self.curves
+        return "nose_rp" not in self.curves and "tail_rp" not in self.curves
 
     @property
     def length(self):
@@ -264,6 +271,8 @@ class HullDesign:
         m = (x >= 0.0) & (x <= j[1])
         if np.any(m) and self.nose > 0:
             out[m] = top * self.curve(view, "nose").shape(x[m] / self.nose)
+        elif np.any(m):
+            out[m] = top                           # no nose: the front is the middle body's section (a flat face)
         m = (x > j[1]) & (x <= j[2])
         out[m] = top
         m = (x > j[2]) & (x <= j[3])
@@ -364,8 +373,9 @@ def read_params(path):
         raise ValueError(f"{path}: x must rise from row to row")
     ln, lm, lt = (float(head[k]) for k in ("nose_m", "middle_m", "tail_m"))
     lc = float(head.get("cap_m", 0.0))
-    if ln <= 0 or lt <= 0 or lm < 0 or lc < 0:
-        raise ValueError(f"{path}: nose and tail lengths must be positive, middle and cap not negative")
+    if ln < 0 or lt <= 0 or lm < 0 or lc < 0:
+        raise ValueError(f"{path}: the tail length must be positive, nose, middle and cap not negative (nose 0: "
+                         f"a body without a nose)")
     length = ln + lm + lt + lc
     if abs(tab[0, 0]) > 1e-6 * length or abs(tab[-1, 0] - (length - lc)) > 1e-6 * length and \
             abs(tab[-1, 0] - length) > 1e-6 * length:
@@ -458,7 +468,7 @@ def fit_design(params, orders=None, exponents=None):
     views = ("r",) if params.axisymmetric else VIEWS
     curves, radii = {}, {}
     for view in views:
-        for kind in KINDS:
+        for kind in part_kinds(params.nose):
             name = f"{kind}_{view}"
             psi, y, top, end = region_data(params, view, kind)
             curves[name], _ = fit_cst(kind, psi, y, int(orders.get(name, DEFAULT_ORDER)), exponents.get(name))
@@ -485,6 +495,8 @@ def fit_report(params, design):
     for view in (("r",) if design.axisymmetric else VIEWS):
         v = params.values(view)
         for kind, (a, b) in (("nose", (j[0], j[1])), ("tail", (j[2], j[3]))):
+            if kind not in part_kinds(design.nose):
+                continue
             m = (params.x >= a) & (params.x <= b)
             out[f"{kind}_{view}"] = float(np.abs(design.radius(view, params.x[m]) - v[m]).max())
     return out
@@ -495,7 +507,9 @@ def fit_report(params, design):
 # --------------------------------------------------------------------------
 
 def global_slots(design):
-    return list(LENGTHS) + (["r", "re"] if design.axisymmetric else ["r", "rp", "re", "rpe"])
+    """The lengths and radii that are variables; a body without a nose has no nose length (it stays 0)."""
+    lengths = [g for g in LENGTHS if g != "nose" or design.nose > 0]
+    return lengths + (["r", "re"] if design.axisymmetric else ["r", "rp", "re", "rpe"])
 
 
 def default_bounds(design):
@@ -590,7 +604,8 @@ class HullSpace:
             kind = name.split("_")[0]
             curves[name] = CSTCurve.from_keys(kind, {k: vals[f"{name}.{k}"] for k in
                                                      CSTCurve.keys_of(kind, order)}, order)
-        d = HullDesign(vals["nose"], vals["middle"], vals["tail"], vals["cap"], vals["r"], vals["re"], curves)
+        d = HullDesign(vals.get("nose", 0.0), vals["middle"], vals["tail"], vals["cap"], vals["r"], vals["re"],
+                       curves)                     # no nose slot: a body without a nose
         if not self.axisymmetric:
             d.rp, d.rpe = vals["rp"], vals["rpe"]
         return d
@@ -612,7 +627,8 @@ class HullSpace:
             kind = name.split("_")[0]
             curves[name] = CSTCurve.from_keys(kind, {k: vals[f"{name}.{k}"] for k in
                                                      CSTCurve.keys_of(kind, int(order))}, int(order))
-        d = HullDesign(vals["nose"], vals["middle"], vals["tail"], vals["cap"], vals["r"], vals["re"], curves)
+        d = HullDesign(vals.get("nose", 0.0), vals["middle"], vals["tail"], vals["cap"], vals["r"], vals["re"],
+                       curves)
         if not rec["axisymmetric"]:
             d.rp, d.rpe = vals["rp"], vals["rpe"]
         space = cls(d, {q["name"]: (q["lo"], q["hi"]) for q in rec["slots"]},
@@ -683,8 +699,9 @@ def _component_params(comp):
     rp = comp.column("rp_m") if comp.has("rp_m") else r.copy()
     if len(x) < 4 or np.any(np.diff(x) <= 0):
         raise ValueError(f"{path}: x must rise from row to row, at least 4 rows")
-    if ln <= 0 or lt <= 0 or lm < 0 or lc < 0:
-        raise ValueError(f"{path}: nose and tail lengths must be positive, middle and cap not negative")
+    if ln < 0 or lt <= 0 or lm < 0 or lc < 0:
+        raise ValueError(f"{path}: the tail length must be positive, nose, middle and cap not negative (nose 0: "
+                         f"a body without a nose)")
     length = ln + lm + lt + lc
     if abs(x[0]) > 1e-6 * length or abs(x[-1] - (length - lc)) > 1e-6 * length and \
             abs(x[-1] - length) > 1e-6 * length:
@@ -704,7 +721,7 @@ def _component_design(comp, params, orders=None):
     geometry and the fit (a length given in both: they must agree)."""
     path = comp.path
     views = ("r",) if params.axisymmetric else VIEWS
-    names = [f"{kind}_{view}" for view in views for kind in KINDS]
+    names = [f"{kind}_{view}" for view in views for kind in part_kinds(params.nose)]
     bad = [c for c in comp.curves if c not in names]
     if bad:
         raise ValueError(f"{path}: curve lines for {', '.join(bad)}: this hull's curves are {', '.join(names)}")
@@ -928,13 +945,17 @@ def _profile_parts(design, n):
         return d / np.linalg.norm(d)
 
     eps = 1e-9 * design.length
-    x = pts_of(j[0], j[1], n)
-    p = np.column_stack((x, design.radius("rp", x), design.radius("r", x)))
-    p[0, 1:] = 0.0
     top_r, end_r = design.radii("r")
     top_p, end_p = design.radii("rp")
-    p[-1, 1:] = (top_p, top_r)
-    parts.append((p, tangent(j[0], j[0] + eps), (1.0, 0.0, 0.0)))
+    if design.nose > 0:
+        x = pts_of(j[0], j[1], n)
+        p = np.column_stack((x, design.radius("rp", x), design.radius("r", x)))
+        p[0, 1:] = 0.0
+        p[-1, 1:] = (top_p, top_r)
+        parts.append((p, tangent(j[0], j[0] + eps), (1.0, 0.0, 0.0)))
+    else:                                          # no nose: a flat face at x 0, from the axis to the section
+        p = np.column_stack((np.zeros(3), np.linspace(0.0, top_p, 3), np.linspace(0.0, top_r, 3)))
+        parts.append((p, (0.0, top_p, top_r), (0.0, top_p, top_r)))
     if design.middle > 0:
         x = np.linspace(j[1], j[2], 3)
         parts.append((np.column_stack((x, np.full(3, top_p), np.full(3, top_r))), (1.0, 0.0, 0.0), (1.0, 0.0, 0.0)))
@@ -1047,8 +1068,10 @@ def build_solid(design, n=150, scale=1000.0, half=False):
 def design_problems(design, n=401):
     """What makes a design unusable, as messages (none: usable)."""
     out = []
-    if design.nose <= 0 or design.tail <= 0:
-        out.append("the nose and the tail need positive lengths")
+    if design.nose < 0 or design.tail <= 0:
+        out.append("the tail needs a positive length, the nose cannot be negative")
+    if design.nose > 0 and "nose_r" not in design.curves:
+        out.append("a nose needs its curves (a body without a nose keeps its nose length 0)")
     if design.middle < 0 or design.cap < 0:
         out.append("the middle body and the cap cannot be negative")
     for view in (("r",) if design.axisymmetric else VIEWS):
@@ -1074,7 +1097,8 @@ def design_params(design, n=41):
     """The design as a parameter file: n stations per part."""
     x = stations_x(design, n)
     r, rp = design.radius("r", x), design.radius("rp", x)
-    r[0] = rp[0] = 0.0
+    if design.nose > 0:
+        r[0] = rp[0] = 0.0
     if design.cap > 0:
         r[-1] = rp[-1] = 0.0
     return HullParams(design.nose, design.middle, design.tail, design.cap, x, r, rp, design.axisymmetric)
@@ -1096,14 +1120,14 @@ def plot_case(path, case, design, params=None):
         if params is not None:
             ax.plot(params.x, params.values(view), ".", color="#9a9994", ms=3, label="parameter file")
         ax.plot(xs, design.radius(view, xs), "-", color="#2a78d6", lw=1.8, label="design")
-        for kind in KINDS:
+        for kind in part_kinds(design.nose):
             cx, cy = design.ctrl(view, kind)
             ax.plot(cx, cy, "o--", color="#2a78d6", lw=0.7, ms=4, mfc="white")
-        c_n, c_t = design.curve(view, "nose"), design.curve(view, "tail")
         ax.set_ylabel(("half-height r (m), XZ view" if view == "r" else "half-width r' (m), XY view")
                       if not design.axisymmetric else "radius r (m)")
-        ax.set_title(f"nose: order {c_n.order}, N1 {c_n.exponent:.4f}    tail: order {c_t.order}, N2 "
-                     f"{c_t.exponent:.4f}", fontsize=9, loc="left")
+        ax.set_title("    ".join(f"{kind}: order {design.curve(view, kind).order}, {EXP_KEY[kind]} "
+                                 f"{design.curve(view, kind).exponent:.4f}" for kind in part_kinds(design.nose))
+                     + ("" if design.nose > 0 else "    no nose: the front a flat face"), fontsize=9, loc="left")
         ax.grid(True, color="#e4e3df")
     axs[-1].set_xlabel("x from the nose (m)")
     axs[0].legend(fontsize=8, loc="lower center")
@@ -1150,8 +1174,10 @@ def write_case(out_dir, case, design, params=None, space=None, cad=True, plot=Tr
         if half:
             cadline = f"V, S and LCB from the stations; the STEP is the half body ({'valid' if valid else 'NOT valid'})"
         else:
-            exact.update({"volume": vol, "wetted_surface": area, "lcb": float(c[0])})
-            cadline = f"V, S and LCB from the solid ({'valid' if valid else 'NOT valid'})"
+            cut = 0.0 if design.nose > 0 else math.pi * design.radii("r")[0] * design.radii("rp")[0]
+            exact.update({"volume": vol, "wetted_surface": area - cut, "lcb": float(c[0])})
+            cadline = f"V, S and LCB from the solid ({'valid' if valid else 'NOT valid'})" + (
+                "" if design.nose > 0 else f"; S without the flat front face (the cut, {cut:.6g} m^2)")
     hs = HE.hydrostatics(st, exact=exact)
     title = f"hull case {case}"
     files["stations"] = HE.write_stations(os.path.join(out_dir, f"{case}_stations.dat"), st, hs, title)
@@ -1184,7 +1210,7 @@ def main():
     else:
         ap.error("give a parameter file or --suboff")
     params = read_params(path)
-    names = [f"{k}_{v}" for v in (("r",) if params.axisymmetric else VIEWS) for k in KINDS]
+    names = [f"{k}_{v}" for v in (("r",) if params.axisymmetric else VIEWS) for k in part_kinds(params.nose)]
     design = fit_design(params, {n: args.order for n in names})
     files, hs = write_case(args.out, case, design, params, HullSpace(design), not args.no_cad)
     rep = fit_report(params, design)

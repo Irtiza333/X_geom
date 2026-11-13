@@ -211,7 +211,7 @@ class HullAdapter:
         r'e = re). Off: circular sections, r' = r."""
         d = self.design.copy()
         if on and d.axisymmetric:
-            for kind in HM.KINDS:
+            for kind in HM.part_kinds(d.nose):
                 if self.params.axisymmetric:
                     d.curves[f"{kind}_rp"] = d.curves[f"{kind}_r"].copy()
                     if f"{kind}_r" in self.as_fitted:
@@ -224,7 +224,7 @@ class HullAdapter:
             else:
                 _, _, d.rp, d.rpe = HM.region_data(self.params, "rp", "tail", 50)
         elif not on and not d.axisymmetric:
-            for kind in HM.KINDS:
+            for kind in HM.part_kinds(d.nose):
                 d.curves.pop(f"{kind}_rp")
                 self.as_fitted.discard(f"{kind}_rp")
             d.rp = d.rpe = None
@@ -235,8 +235,9 @@ class HullAdapter:
 
     # ---------------------------------------------------------------- rows
     def global_rows(self):
-        """Rows for the lengths and the radii (m)."""
-        return [Row("var", label, name, 4) for name, label in GLOBAL_ROWS if name in self.meta]
+        """Rows for the lengths and the radii (m); a body without a nose (an aft half) has no nose row."""
+        return [Row("var", label, name, 4) for name, label in GLOBAL_ROWS
+                if name in self.meta and not (name == "nose" and self.design.nose <= 0)]
 
     def curve_rows(self, curve):
         """Rows for one curve: its exponent, then its control points from the nose tip (or the middle body)
@@ -302,7 +303,8 @@ class HullAdapter:
                      f"Cp {hs['cp']:.4f}")
         except Exception:                                    # a design with problems: the status bar says why
             hydro = ""
-        return f"{n} of {m} variables free; L {d.length:.4g} m, {size}{hydro}"
+        aft = "" if d.nose > 0 else " (no nose: an aft half, the front a flat face)"
+        return f"{n} of {m} variables free; L {d.length:.4g} m{aft}, {size}{hydro}"
 
     def describe(self, curve):
         c = self.design.curves[curve]
@@ -478,12 +480,13 @@ class HullViews:
         for view in views:
             col = VIEW_COLORS[view]
             ax.plot(pv["x"], pv[view], "-", color=col, lw=1.8, label=self._label(d, view))
-            for kind in HM.KINDS:
+            kinds = HM.part_kinds(d.nose)
+            for kind in kinds:
                 name = f"{kind}_{view}"
                 cx, cy = d.ctrl(view, kind)
                 ax.plot(cx, cy, "--", color=col, lw=1.2 if name == curve else 0.6)
                 _markers(ax, cx, cy, a.ctrl_kinds(name), col, 4.5 if name == curve else 3.5,
-                         labels=view == "r" and kind == "nose")
+                         labels=view == "r" and kind == kinds[0])
         top = max(float(np.max(pv["r"])), float(np.max(pv["rp"])), float(np.max(p.r)), float(np.max(p.rp)))
         ax.set_ylim(0.0, 1.18 * max(top, 1e-9))
         ax.set_xlim(-0.01 * d.length, 1.01 * max(d.length, float(p.x[-1])))

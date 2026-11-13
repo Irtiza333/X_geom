@@ -306,6 +306,58 @@ class FakeAdapter:
         self.design = WM.fit_design(self.params)[0]
 
 
+def planar_rudder_file(tmp):
+    """fin.txt written again as a planar rudder's component file (kind rudder)."""
+    ld = WM.load_component(os.path.join(HERE, "fin.txt"))
+    return WM.write_component(os.path.join(tmp, "planar_rudder.txt"), ld.params, ld.design, ld.space,
+                              {"sections": 41, "half": False}, "planar_rudder", ["a planar rudder for the checks"],
+                              "rudder")
+
+
+def test_planar_rudder(tmp):
+    print("\nthe planar rudder (xgeom_wing.PlanarRudderAdapter, xgeom_from_cad.wing_setup)")
+    import xgeom_files as XF
+    import xgeom_from_cad as FC
+    import xgeom_vehicle as XV
+    import xgeom_wing as XW
+    path = planar_rudder_file(tmp)
+    ad = XW.PlanarRudderAdapter(params=path)
+    saved = ad.save_file(os.path.join(tmp, "planar_rudder_saved.txt"))
+    rec = ad.space_record()
+    js = ad.save_space(os.path.join(tmp, "planar_design_space.json"))
+    ad2 = XW.PlanarRudderAdapter(params=saved)
+    ad2.load_space(js)
+    rudder_h = os.path.join(tmp, "rudder_h.json")
+    with open(rudder_h, "w") as fh:
+        json.dump({"geometry": "rudder", "space": {}}, fh)
+    part = XV.rudder_part(ad)
+    eta = np.linspace(0.0, 1.0, 41)
+    v = ad.design.values(eta)
+    th = np.deg2rad(v["pitch"])
+    x_te = v["sweep"] + v["chord"] * (ad.params.ref_xc + (1.0 - ad.params.ref_xc) * np.cos(th))
+    check("a rudder on the planar model: from a component file of kind rudder (none without one), Save set-up "
+          "writes kind rudder, its JSON set-up says rudder_planar (a rudder-h set-up refused), the vehicle's part "
+          "the wing's with its TE line's slope",
+          [ad.title.startswith("Rudder"), refused(XW.PlanarRudderAdapter), XF.component_kind(saved) == "rudder",
+           rec["geometry"] == "rudder_planar", refused(ad2.load_space, rudder_h),
+           max(abs(ad2.values[n] - ad.values[n]) for n in ad.values), len(part["loops"]) > 2,
+           part["te_slope"] - np.polyfit(eta * ad.design.span, x_te, 1)[0], ad.out_dir.endswith("rudder_planar")],
+          [1, 1, 1, 1, 1, 0, 1, 0, 1], 1e-9)
+    params = WM.read_params(path)
+    forms = FC.best_wing_forms(params)
+    setup, forms2 = FC.wing_setup(params, os.path.join(tmp, "set_up.txt"), "rudder", "set_up")
+    ld = WM.load_component(setup)
+    space = ld.space
+    inside = all(lo - 1e-9 <= ld.space.values(ld.design)[n] <= hi + 1e-9
+                 for n, (lo, hi) in zip(space.all_names, space.all_bounds))
+    free = {n.split(".")[0] for n in space.names}
+    check("wing_setup: every curve in its best form (the fin's chord straight: 2 points, its zero rake 2), kind "
+          "rudder, the variables of xgeom_wing.FREE free, every value inside its bounds",
+          [forms == forms2, forms["chord"][0] == (1, 1), forms["rake"][0] == (1, 1), ld.kind == "rudder",
+           free <= set(XW.FREE), inside, all(ld.design.curves[c].segments == f[0][0] for c, f in forms.items())],
+          [1, 1, 1, 1, 1, 1, 1], 0)
+
+
 def test_vehicle():
     print("\nfins and wings on the hull (xgeom_vehicle.py)")
     import hull_modify as HM
@@ -417,6 +469,44 @@ def test_gui(tmp):
     cwd = os.getcwd()
     os.chdir(HERE)
     try:
+        planar = planar_rudder_file(tmp)
+        import modify_control as MC
+        rudder_h = all(os.path.exists(os.path.join(HERE, p)) for p in (MC.CORNER_POINTS, MC.SECTION_TABLE,
+                                                                       MC.XCAD_ORIGINAL, MC.STACK))
+        if rudder_h:
+            app = XT.App(root, "vehicle", params=[planar])
+            settle()
+            app.switch("rudder")
+            settle()
+            first = (type(app.ad).__name__, app.build_btn.cget("text"), "span" in [r.name for r in app.rows])
+            ask = XT.filedialog.askopenfilename
+            try:
+                import xgeom_rudder as XR
+                setup = XR.RudderAdapter(out_dir=tmp).save_space(os.path.join(tmp, "rh_design_space.json"))
+                XT.filedialog.askopenfilename = lambda **kw: setup
+                app.on_load_params()                               # the planar file box: a rudder-h set-up
+                settle()
+                second = (type(app.ad).__name__, app.ad.setup_file == setup, "H" in [r.name for r in app.rows])
+                XT.filedialog.askopenfilename = lambda **kw: planar
+                app.on_load_space()                                # the Set-up box: a planar rudder's file
+                settle()
+                third = (type(app.ad).__name__, app.ad.file == os.path.abspath(planar))
+                app.book.select(XT.VEHICLE_TAB)
+                app.update_views()
+                settle()
+            finally:
+                XT.filedialog.askopenfilename = ask
+            check("the Rudder slot: a planar rudder's file opens it on the planar model (the wing's panel, 'CAD "
+                  "rudder'); a set-up of the model modified below H puts it on that one, a planar file back; the "
+                  "Vehicle tab places the planar rudder",
+                  [first == ("PlanarRudderAdapter", "CAD rudder", True), second == ("RudderAdapter", True, True),
+                   third == ("PlanarRudderAdapter", True), app.status.cget("background") != XT.STATUS["error"][0]],
+                  [1, 1, 1, 1], 0)
+            app.root.update()
+            for w in root.winfo_children():
+                w.destroy()
+        else:
+            print("       the Rudder slot's models: skipped, the extraction's outputs are not here")
         app = XT.App(root, "vehicle")
         settle()
         app.switch("fin")
@@ -499,6 +589,7 @@ def main():
             test_curves()
             test_case(tmp)
             test_adapter(tmp)
+            test_planar_rudder(tmp)
             test_vehicle()
             test_vehicle_cad(tmp)
             if "--gui" in sys.argv:

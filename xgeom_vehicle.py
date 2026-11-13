@@ -148,7 +148,10 @@ def rudder_part(ad, n=LOOPS, every=2):
     """The rudder (mm, its working frame: x chordwise, y the height, z the thickness): n of the loops of its
     3D sections tab (modified below H, the cut, the original above with the tip and the cap), evenly from the
     root to the top, every other point; the whole root loop (the lowest) and its x range; the slope dx/dy of
-    its TE line (te_slope, the least-squares line through the original's TE rows); the design's problems."""
+    its TE line (te_slope, the least-squares line through the original's TE rows); the design's problems. A
+    planar rudder (xgeom_wing.PlanarRudderAdapter): wing_part, its TE line's slope from the design."""
+    if getattr(ad, "role", None) is not None:
+        return planar_rudder_part(ad, n)
     import rudder_modify as RM
     d, s = ad.design, ad.settings
     problems = RM.design_problems(d, ad.orig, s["n_sections"], s["te_radius_mm"])
@@ -172,6 +175,19 @@ def wing_part(ad, n=LOOPS):
     root = WM.section_loops(d, p, [0.0])[0]
     return {"design": d, "loops": loops, "root": root, "root_x": (float(root[:, 0].min()), float(root[:, 0].max())),
             "problems": problems, "warnings": warnings}
+
+
+def planar_rudder_part(ad, n=LOOPS):
+    """A planar rudder (wing_modify): wing_part, and the slope dx/dy of its TE line (least squares over the
+    span: the TE at sweep + the chord's projection, its pitch about ref_xc), which the TE rake rule keeps."""
+    out = wing_part(ad, n)
+    d, p = ad.design, ad.params
+    eta = np.linspace(0.0, 1.0, 41)
+    v = d.values(eta)
+    th = np.deg2rad(v["pitch"])
+    x_te = v["sweep"] + v["chord"] * p.ref_xc + v["chord"] * (1.0 - p.ref_xc) * np.cos(th)
+    out["te_slope"] = float(np.polyfit(eta * d.span, x_te, 1)[0])
+    return out
 
 
 PARTS = {"hull": hull_part, "blade": blade_part, "rudder": rudder_part, "fin": wing_part, "wing": wing_part}

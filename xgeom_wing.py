@@ -3,7 +3,9 @@ xgeom_wing.py
 
 The wing and the fin in the XGeom design tool (xgeom_tool.py): a wing parameter file (wing_modify.py) as the
 tool's variables, its live views and the CAD build. The two share all of it; each has its own parameter file
-and output folder (ROLES).
+and output folder (ROLES). Since 13 Nov 2026 the rudder too, as a planar lifting surface (PlanarRudderAdapter: a
+component file of kind rudder, such as BB2's stern plane, bb2/outputs/bb2_sternplane.txt), the Rudder slot's
+other model beside the modified-below-H one (xgeom_rudder.py); it has no default file.
 
 A wing or a fin starts from a parameter file: the span, the airfoil, the pitch axis and the spanwise table.
 Its variables: the span (mm), and each distribution (chord, sweep, rake, pitch, thickness, camber) and each
@@ -38,7 +40,9 @@ MAX_ORDER = 12
 VIEW_FRACTIONS = (0.0, 0.25, 0.5, 0.75, 1.0)     # sections in the Design tab's views, fractions of the span
 FREE = ("chord", "pitch")                         # the curves whose variables start free
 ROLES = {"wing": {"name": "Wing", "params": "wing.txt", "out_dir": os.path.join("outputs", "wing")},
-         "fin": {"name": "Fin", "params": "fin.txt", "out_dir": os.path.join("outputs", "fin")}}
+         "fin": {"name": "Fin", "params": "fin.txt", "out_dir": os.path.join("outputs", "fin")},
+         "rudder": {"name": "Rudder", "params": None, "out_dir": os.path.join("outputs", "rudder_planar")}}
+PLANAR_RUDDER_GEOMETRY = "rudder_planar"          # a planar rudder's JSON set-up (the rudder-h model's say rudder)
 TWO_SEGMENT_ROWS = (("v1", "P1 value (root)"), ("d1", "P2=P3 d1"), ("w23", "P2=P3 weight"), ("u4", "P4 position"),
                     ("v4", "P4 value"), ("d2", "P5=P6 d2"), ("w56", "P5=P6 weight"), ("v7", "P7 value (tip)"))
 TWO_SEGMENT_POINT = {"v1": 0, "d1": 1, "w23": 1, "u4": 3, "v4": 3, "d2": 4, "w56": 4, "v7": 6}
@@ -56,6 +60,8 @@ class WingAdapter:
         r = ROLES[self.role]
         self.settings = {"sections": WM.SECTIONS, "points": WM.POINTS, "plot": True, "free": FREE, "half": False}
         self.out_dir = r["out_dir"]
+        if not (params or r["params"]):
+            raise ValueError(f"a planar {r['name'].lower()} starts from its component file (kind {self.role})")
         self.load_params(params or r["params"])
 
     # ---------------------------------------------------------------- the file
@@ -407,7 +413,8 @@ class WingAdapter:
 
     def space_record(self):
         """The set-up as plain data (wing_modify.load_wing_space reads it back)."""
-        return WM.space_record(self.free_space(), self.design, self.params, self._case_settings(), self.role)
+        geometry = PLANAR_RUDDER_GEOMETRY if self.role == "rudder" else self.role
+        return WM.space_record(self.free_space(), self.design, self.params, self._case_settings(), geometry)
 
     def save_space(self, path):
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -419,8 +426,9 @@ class WingAdapter:
         """Start from a saved set-up (<case>_design_space.json); its parameter file is read again."""
         with open(path) as fh:
             rec = json.load(fh)
-        if rec.get("geometry") not in ROLES:
-            raise ValueError(f"{path} is not a wing or fin design space")
+        ok = (PLANAR_RUDDER_GEOMETRY,) if self.role == "rudder" else ("wing", "fin")
+        if rec.get("geometry") not in ok:
+            raise ValueError(f"{path} is not a {' or '.join(ok)} design space")
         params = WM.read_params(rec["params_file"])
         space, design = WM.WingSpace.from_dict(params, rec["space"])
         self.params, self.design, self._original = params, design, None
@@ -474,6 +482,13 @@ class WingAdapter:
 
 class FinAdapter(WingAdapter):
     role = "fin"
+
+
+class PlanarRudderAdapter(WingAdapter):
+    """The rudder as a planar lifting surface: a component file of kind rudder on wing_modify's engine (for
+    example bb2/outputs/bb2_sternplane.txt, BB2's stern plane, bb2_aft_setup.py), the tool's Rudder slot's
+    other model beside the modified-below-H one (xgeom_rudder.RudderAdapter). Save set-up writes kind rudder."""
+    role = "rudder"
 
 
 # --------------------------------------------------------------------------

@@ -169,6 +169,63 @@ def gaps_along(pts, eh, outside, reach=0.05):
     return np.array(out)
 
 
+def aft_params():
+    """SUBOFF's stations from its middle body on: a body without a nose (an aft half), its front the cut."""
+    p = HM.suboff_params()
+    m = p.x >= p.nose - 1e-12
+    x = np.r_[0.0, p.x[m] - p.nose]
+    r = np.r_[p.r[m][0], p.r[m]]
+    x, i = np.unique(x, return_index=True)
+    return HM.HullParams(0.0, p.middle, p.tail, p.cap, x, r[i], r[i].copy(), True, None, ["SUBOFF's aft part"])
+
+
+def test_aft_hull(tmp):
+    print("\na body without a nose (the aft half: hull_modify with Ln 0)")
+    import xgeom_from_cad as FC
+    params = aft_params()
+    pp = HM.write_params(os.path.join(tmp, "aft_params.dat"), params)
+    d = HM.fit_design(HM.read_params(pp))
+    space = HM.HullSpace(d)
+    full = HM.suboff_params()
+    xs = np.linspace(0.0, d.length, 2001)
+    xt = xs[xs <= d.joins[3]]                          # the cap's stations are too sparse to interpolate
+    e = float(np.abs(d.radius("r", xt) - np.interp(xt + full.nose, full.x, full.r)).max())
+    check("SUBOFF from its middle body on: no nose curves and no nose variable, the radius r* at x 0 (the flat "
+          "front), the tail within 0.2 mm of the stations, no problems",
+          [list(d.curves) == ["tail_r"], "nose" in space.all_names, any(n.startswith("nose") for n in space.all_names),
+           d.radius("r", 0.0)[0] / d.r, e < 2e-4, len(HM.design_problems(d))], [1, 0, 0, 1, 1, 0], 0)
+    comp = HM.write_component(os.path.join(tmp, "aft.txt"), HM.read_params(pp), d, space, "aft")
+    ld = HM.load_component(comp)
+    ad = XH.HullAdapter(comp)
+    rows = [r.name for r in ad.global_rows()]
+    msg = ad.set_order("tail_r", 6)
+    ad.set_elliptic(True)
+    ell = sorted(ad.design.curves)
+    ad.set_elliptic(False)
+    setup, orders = FC.hull_setup(pp, os.path.join(tmp, "aft_setup.txt"))
+    check("its component file: nose_m 0 and no nose var line, read back exactly; the tool's adapter: no nose row, "
+          "'aft half' in its summary, a tail order and elliptical sections (tail r' only); hull_setup: the tail's "
+          "order only",
+          ["# nose_m        0" in open(comp).read(), "var    nose " in open(comp).read(),
+           np.abs(ld.design.radius("r", xs) - d.radius("r", xs)).max(), "nose" in rows, "aft half" in ad.summary(),
+           msg.startswith("fitted to the parameter file"), ell == ["tail_r", "tail_rp"], list(orders) == ["tail_r"],
+           os.path.exists(setup)], [1, 0, 0, 0, 1, 1, 1, 1, 1], 1e-12)
+    if not XL.occ_available():
+        print("       its CAD skipped: no OCC here")
+        return
+    import hull_extraction as HE
+    solid = HM.build_solid(d)
+    half = HM.build_solid(d, half=True)
+    v, a, _ = HE.solid_properties(solid)
+    files, hs = HM.write_case(tmp, "aft_case", d, params, space, cad=True, plot=False)
+    st = HM.hydrostatics(d)
+    check("its CAD: one valid solid of 4 faces (the flat front, the middle body, the tail, the cap), the volume the "
+          "stations'; the half body valid and half of it; write_case's S without the cut face (the stations')",
+          [HE.is_valid(solid), XL.count_faces(solid), v / st["volume"] - 1.0, HE.is_valid(half),
+           HE.solid_properties(half)[0] / v, hs["wetted_surface"] / st["wetted_surface"] - 1.0],
+          [1, 4, 0, 1, 0.5, 0], 2e-4)
+
+
 def test_from_cad(tmp):
     print("\nthe hull's set-up from a parameter file or a CAD (xgeom_from_cad.py)")
     import xgeom_from_cad as FC
@@ -833,6 +890,7 @@ def main():
     try:
         with tempfile.TemporaryDirectory() as tmp:
             hull = test_adapter(tmp)
+            test_aft_hull(tmp)
             test_from_cad(tmp)
             test_vehicle(hull)
             test_rake(hull)

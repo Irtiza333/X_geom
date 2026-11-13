@@ -46,6 +46,9 @@ points or of segments in the tool, which refits the curve and shows the error
     from_cad(kind, cad_path, out_dir, case, progress)   -> dict: "setup", "file", "forms", "report"
     best_blade_forms, best_hull_orders, best_rudder_orders   the chosen forms with their errors
     blade_setup, hull_setup                               the set-up of an extracted table
+    best_wing_forms, wing_setup                           the same for a planar rudder, fin or wing's table
+                                                          (wing_modify.WingParams; bb2/bb2_aft_setup.py
+                                                          extracts BB2's stern plane into one)
 
 Command line (the file a STEP or IGES; for the blade an extracted <case>.txt, for
 the hull a <case>_params.dat: the set-up only; written next to the file):
@@ -227,6 +230,55 @@ def hull_from_cad(cad_path, out_dir, case=None, progress=print, n=201):
     progress(f"done in {time.time() - t0:.0f} s")
     return {"kind": "hull", "setup": setup, "file": path, "forms": orders, "report": report, "hydrostatics": hs,
             "seconds": time.time() - t0}
+
+
+# --------------------------------------------------------------------------
+# A planar rudder, fin or wing (wing_modify)
+# --------------------------------------------------------------------------
+
+WING_FLOORS = {"chord": 1.0, "sweep": 1.0, "rake": 1.0, "pitch": 0.01, "thickness": 1.0e-4, "camber": 1.0e-4}
+CHANGE_FLOOR = 1.0e-5   # a section change (dt, dc), a fraction of the chord
+
+
+def best_wing_forms(params, max_points=MAX_POINTS):
+    """{curve: ((segments, order), error)} for a wing_modify.WingParams (the six distributions and the section
+    changes): 1 segment of 2 .. max_points control points, or 2 segments, the least error (pick) as a fraction
+    of the distribution's range along the span, the range at least WING_FLOORS (mm, deg, t/c, f/c) or
+    CHANGE_FLOOR (a change), since a distribution that hardly changes has a range of the extraction's scatter."""
+    import wing_modify as WM
+    eta = WM.fit_stations(params)
+    out = {}
+    for c in params.names:
+        v = params.spline(c)(eta)
+        span = max(float(np.ptp(v)), WING_FLOORS.get(c, CHANGE_FLOOR))
+        cands = []
+        for n in range(2, max_points + 1):
+            cu = WM.fit_curve_to(eta, v, c, 1, n - 1)
+            cands.append((n, (1, n - 1), float(np.abs(WM.curve_at(cu, 0.0, 1.0, eta) - v).max() / span)))
+        cu = WM.fit_curve_to(eta, v, c, 2)
+        cands.append((7, (2, None), float(np.abs(WM.curve_at(cu, 0.0, 1.0, eta) - v).max() / span)))
+        out[c] = pick(cands)
+    return out
+
+
+def wing_setup(params, setup_path, kind=None, name=None, notes=(), free=None):
+    """The set-up of a planar component's table (a WingParams with its section and change columns): each
+    distribution in the form that fits it best (best_wing_forms), the variables of free (default
+    xgeom_wing.FREE, as the tool starts a file) free, the others held; written as a component file of kind
+    (default the table's). Returns (path, forms)."""
+    import wing_modify as WM
+    forms = best_wing_forms(params)
+    design, _ = WM.fit_design(params, orders={c: f[0][1] for c, f in forms.items() if f[0][0] == 1},
+                              segments={c: f[0][0] for c, f in forms.items()}, changes=params.changes)
+    if free is None:
+        import xgeom_wing as XW
+        free = XW.FREE
+    space = WM.WingSpace(params, design, free=tuple(free))
+    notes = list(notes) + [f"the set-up: each distribution in the form that fits the table best (xgeom_from_cad.py); "
+                           f"the variables of {', '.join(free)} free"]
+    path = WM.write_component(setup_path, params, design, space, {"sections": WM.SECTIONS, "half": False}, name,
+                              notes, kind)
+    return path, forms
 
 
 # --------------------------------------------------------------------------

@@ -138,11 +138,12 @@ def test_files(p, d):
         x = np.linspace(0.0, d.length, 2001)
         tab = np.loadtxt(files["stations"])
         pts = [ln for ln in open(files["sections"]) if ln.startswith("#")]
-        sp, d2, rec = HM.load_hull_space(files["space"])
+        ld = HM.load_component(files["component"])          # the set-up: the component file (since 26 Oct)
+        sp, d2 = ld.space, ld.design
         check("write_case: design (exact), stations, sections, set-up, plot",
               [np.abs(back.radius("r", x) - d.radius("r", x)).max(), tab.shape[1], len(pts) > 50,
                np.abs(sp.to_vector(d2) - HM.HullSpace(d).to_vector(d)).max(), os.path.exists(files["plot"])],
-              [0, 8, 1, 0, 1], 0)
+              [0, 8, 1, 0, 1], 1e-9)                        # the component file: 12 figures
 
 
 def test_cad(d):

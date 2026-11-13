@@ -503,6 +503,39 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   the largest difference, so a curve's error need not fall with every added point (BB2 pitch: 6 points 1.33 %,
   8 points 1.52 %). Tests: blade 82 with the GUI and the CAD (69 here), tool 52 (28 here), hull 62 (36 here),
   wing, files.
+- BB2's aft half: the hull and the stern plane as set-ups (13 Nov 2026; the user: "the hull and the rudder is
+  incorrect ... We will only build the aft half of the sub for now, so just the hull aft half, rudder and
+  propeller"; the casing's non-round sections and the decks later; the rudder as a planar rudder component,
+  the user's choice). `bb2/bb2_aft_setup.py <quarter.iges> [out_dir]` from BB2_H3_DRDC_Q2R_quarter_hull_half_
+  upstream.iges (now in bb2/, with BB2_Drawings.pdf; byte for byte the hull.iges of 22 Oct). The IGES's hull is a
+  body of revolution (r the same all round each section within 0.002 mm, x 44 to 35078 mm, the hub included).
+  The earlier bb2_hull.txt (from bb2_build.py's table: a dummy 3 m nose, L 37.148 m) is replaced:
+  `bb2/outputs/bb2_hull.txt` is the aft half alone, no nose (its front the flat cut at mid-length), the middle
+  body 12.875 m (r* 4799.81 mm), the tail 20.273 m to the hub's forward end (r 797.22 mm, F6's hub base: the hub
+  is the propeller's), L 33.148 m, the tail's CST order 3 within 0.96 mm of the IGES (its stations
+  `bb2_hull_aft_params.dat`). hull_modify takes Ln 0: no nose curves and no nose variable, the radius r* at x 0,
+  the solid's flat front face (valid, 4 faces; the half body exactly half), S without the cut face; xgeom_hull
+  shows no nose row and says "aft half"; fit_cst clips psi to [0, 1] (round-off past the tail's end gave NaN).
+  `bb2/outputs/bb2_sternplane.txt` (kind rudder) with `bb2_sternplane_section.dat`: the stern plane as a planar
+  rudder, its sections normal to the span in its 45 deg plane, from s 3061.4 (its LE line meets the hull: the
+  root section lies outside the hull, the vehicle extends it to the hull along the TE line) to the cap's foot at
+  s 6811.5 (the 236 mm rounded cap left off, the planar tip flat): span 3750.07 mm, chord 3535.01 to 2766.12 mm
+  and sweep 0 to 760.08 mm (straight, 2 points each), rake, pitch and camber 0 (the sections symmetric to 1e-5
+  of the chord), t/c 0.1606 to 0.1628 (4 points); the section the sections' mean thickness shape (NACA
+  0016-like, its blunt TE's round kept); no change points (8 of them fit only 0.007 % of the chord better:
+  the TE's round is about 35 mm thick at every chord). Rebuilt: the planform within 0.001 mm of the CAD, the
+  sections within 0.5 to 1.5 mm (the most at the TE's round, near the root and the tip). xgeom_from_cad:
+  best_wing_forms and wing_setup (a planar table's best forms and set-up). The tool: a planar rudder in the
+  Rudder slot (xgeom_wing.PlanarRudderAdapter, role rudder): `--file` with a planar rudder's file, or Load ...
+  of one in the Set-up box, puts the rudder on the planar model (the wing's panel, "CAD rudder"); Load ... of
+  a <case>_design_space.json in its file box puts it back on the model modified below H; its JSON set-up says
+  rudder_planar; From CAD stays the rudder-h one. xgeom_vehicle.rudder_part takes a planar rudder (wing_part
+  and its TE line's slope). Placed as BB2's (4 rudders at 45 deg, TE rake 0, the TE at x 29.773 m from the cut)
+  its root LE rests 2.5 mm from BB2's; the vehicle CAD of the aft hull, the four stern planes and the whole
+  propeller on the F6 hub (prop_dx 0.576 m): one valid solid, V 1808.58 m^3, 56 s. _hull_modify_test.py's
+  write_case check reads the component file (the JSON set-up went on 26 Oct). Tests: hull 65 with the GUI (38
+  here), wing with the GUI (41 here), tool 52 (28 here), blade 79 with the GUI, hull_modify 14, hull 12, files
+  35.
 
 ## Next steps
 
@@ -525,3 +558,6 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   overwritten by runs at other heights; Fig. 5 of the plan still labels the tip y = 218.07.
 - From CAD for the other components (the wing, the fin, the planar rudder: their extraction codes) once the
   blade, hull and rudder runs are checked in use (the user, 13 Nov 2026).
+- BB2's aft half (the user, 13 Nov 2026): the hull's sections that are not round or elliptical (the casing) and the decks;
+  then the assembly of bb2_hull.txt, bb2_prop_setup.txt and bb2_sternplane.txt in the Vehicle tab (placement:
+  4 rudders at 45 deg, TE rake 0, prop_dx 0.576 m).

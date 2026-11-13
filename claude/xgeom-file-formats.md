@@ -100,6 +100,11 @@ Rules:
   `hub_x` (held unless Y). Without them the hub is the cylinder of the root radius, centred on x = 0.
 - `part` (blade setting): what the CAD writes, `whole`, `half` (an even Z) or `sector` (one blade on 1/Z of the
   hub, the default).
+- `nose_m 0` (hull, 13 Nov 2026): a body without a nose, an aft half; its front the flat cut at x 0, tail curves
+  only, no nose var line (BB2's `bb2/outputs/bb2_hull.txt`).
+- kind `rudder` (the planar rudder, wing_modify's engine; 13 Nov 2026: BB2's stern plane,
+  `bb2/outputs/bb2_sternplane.txt`): the tool opens it in the Rudder slot on the planar model (the wing's panel;
+  xgeom_wing.PlanarRudderAdapter); its JSON set-up says `rudder_planar`, the rudder-h model's keep `rudder`.
 - Component and assembly files are written with LF line endings on every platform (write_component,
   write_assembly), so the same design gives byte-identical files on any machine, and a rewrite of a loaded
   file gives the same bytes (round-trip tested with filecmp in `_xgeom_files_test.py`).
@@ -162,7 +167,12 @@ new.txt`. Examples in X_geom (the tool's defaults): `msc_blade.txt`, `wing.txt`,
   minute, the wind-tunnel rudder about two minutes). Needs OCC, as the extraction codes do.
 - `python xgeom_from_cad.py blade|hull|rudder <file> [--out DIR] [--case NAME]`: the same without the window;
   for the blade an extracted `<case>.txt` and for the hull a `<case>_params.dat` give the set-up alone (no
-  OCC needed).
+  OCC needed). For a planar table (a WingParams) `best_wing_forms` and `wing_setup` do the same.
+- The Rudder slot has two models: the modified-below-H one (rudder-h, its JSON set-ups and From CAD) and, since
+  13 Nov 2026, the planar rudder (a component file of kind rudder). `--file` with a planar rudder's file, or
+  Load ... of one in the rudder-h Set-up box, puts the rudder on the planar model; Load ... of a
+  `<case>_design_space.json` in the planar panel's File box puts it back on rudder-h. The Vehicle tab places a
+  planar rudder as the rudder-h one (the TE rake rule takes its TE line's slope from the design).
 - Vehicle tab (step 4): Load assembly ... and Save assembly ... (each component written to its file; old .dat
   sources as new .txt files beside the assembly).
 - `python xgeom_tool.py --file <component file>` (`--params` the same); `--assembly <file>` (step 4).
@@ -188,5 +198,7 @@ xgeom_files.py's docstring names).
 
 13 Nov 2026: the blade's conic hub keys, `part` and `section_tables`; From CAD in the GUI for the blade, the
 hull and the rudder (the other components once these are checked in use). Set-ups made with it:
-`bb2/outputs/bb2_prop_setup.txt`, `bb2/outputs/bb2_hull.txt` (from `bb2_hull_params.dat`: BB2's hull IGES is a
-quarter model without closed sections), `outputs/modified/Wind_Tunnel_Rudder_design_space.json`.
+`bb2/outputs/bb2_prop_setup.txt`, `outputs/modified/Wind_Tunnel_Rudder_design_space.json`. Later the same day
+(the user: only BB2's aft half for now, the hull and the rudder set-ups were incorrect): `bb2/bb2_aft_setup.py`
+writes `bb2/outputs/bb2_hull.txt` (the aft half without a nose) and `bb2/outputs/bb2_sternplane.txt` (BB2's stern
+plane as a planar rudder), the planar rudder in the tool (`claude/bb2.md`).

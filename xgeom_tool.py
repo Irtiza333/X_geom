@@ -290,6 +290,8 @@ from xgeom_common import Row                                         # noqa: E40
 ADAPTERS = {"rudder": ("xgeom_rudder", "RudderAdapter"), "blade": ("xgeom_blade", "BladeAdapter"),
             "hull": ("xgeom_hull", "HullAdapter"), "wing": ("xgeom_wing", "WingAdapter"),
             "fin": ("xgeom_wing", "FinAdapter")}
+PLANAR_RUDDER = ("xgeom_wing", "PlanarRudderAdapter")   # the Rudder slot's planar model: a component file of
+                                                         # kind rudder (13 Nov 2026; BB2's stern plane)
 VEHICLE = ("hull", "blade", "rudder", "fin", "wing")   # the vehicle's components, in the switcher's order
 NAMES = {"hull": "Hull", "blade": "Propeller", "rudder": "Rudder", "fin": "Fin", "wing": "Wing"}
 COUNTS = ("rudders", "fins", "wings")              # the Vehicle tab's whole numbers
@@ -303,8 +305,26 @@ CAD_TYPES = [("STEP", "*.step *.stp"), ("IGES", "*.igs *.iges")]   # Save CAD's 
 FROM_CAD_KINDS = ("blade", "hull", "rudder")   # From CAD ...: the components with an extraction (xgeom_from_cad)
 
 
+def planar_rudder_file(path):
+    """Is path a planar rudder's component file (kind rudder: the Rudder slot then takes the planar model,
+    xgeom_wing.PlanarRudderAdapter), rather than a set-up of the modified-below-H model (JSON)?"""
+    if not path or str(path).lower().endswith(".json") or not os.path.isfile(path):
+        return False
+    if importlib.util.find_spec(PLANAR_RUDDER[0]) is None:          # the Rudder folder: no planar model
+        return False
+    import xgeom_files as XF
+    return XF.component_kind(path) == "rudder"
+
+
+def is_planar(ad):
+    """An adapter of a planar component (xgeom_wing: the wing, the fin, the planar rudder)?"""
+    return getattr(ad, "role", None) is not None
+
+
 def load_adapter(name, params=None):
-    module, cls = ADAPTERS[name]
+    """The adapter of a component, from its parameter or component file when given; the rudder's is the
+    planar model for a planar rudder's component file (planar_rudder_file), else the modified-below-H one."""
+    module, cls = PLANAR_RUDDER if name == "rudder" and planar_rudder_file(params) else ADAPTERS[name]
     return getattr(importlib.import_module(module), cls)(**({"params": params} if params else {}))
 
 
@@ -480,6 +500,22 @@ class App:
         self.adapters[kind] = ad
         return ad
 
+    def replace_adapter(self, kind, ad):
+        """Another model in a component's slot (the Rudder: the planar model or the modified-below-H one): the
+        new adapter, its views made afresh, the Vehicle tab's part and the last build forgotten; shown at once
+        when the slot is."""
+        old = self.frames.pop(kind, None)
+        if old:
+            old["design"].destroy()
+            old["sk"].destroy()
+        self.adapters[kind] = ad
+        self.errors.pop(kind, None)
+        self._vcache.pop(kind, None)
+        self.built.pop(kind, None)
+        if self.kind == kind:
+            self.kind = None                                # switch() shows the slot afresh
+            self.switch(kind)
+
     def _frames(self, kind):
         """A component's Design and 3D sections figures, made when it is first shown."""
         if kind not in self.frames:
@@ -649,7 +685,7 @@ class App:
         ttk.Label(self.panel, text=ad.title, font=("TkDefaultFont", 11, "bold")).pack(anchor="w", padx=6, pady=(6, 0))
         self.free_label = ttk.Label(self.panel, text="", foreground=INK2, wraplength=590, justify="left")
         self.free_label.pack(anchor="w", padx=6)
-        PANELS[self.kind](self)
+        (wing_panel if is_planar(ad) else PANELS[self.kind])(self)
 
         c = self.curve.get()
         if c not in ad.names:
@@ -1311,10 +1347,25 @@ class App:
 
     def on_load_params(self):
         cur = getattr(self.ad, "file", None)
+        rudder = self.kind == "rudder"                 # the planar rudder: a set-up of the other model switches back
         path = filedialog.askopenfilename(title=f"{NAMES.get(self.kind, self.kind)}: a component file (or an old "
                                                 f"parameter file)", initialdir=os.path.dirname(cur) if cur else HERE,
-                                          filetypes=[("component files", "*.txt"), ("old parameter files", "*.dat"),
-                                                     ("all files", "*")])
+                                          filetypes=[("component files", "*.txt"), ("old parameter files", "*.dat")]
+                                          + ([("modified-below-H set-ups", "*_design_space.json")] if rudder else [])
+                                          + [("all files", "*")])
+        if path and rudder and path.lower().endswith(".json"):
+            def back():                                  # the modified-below-H model from its set-up
+                import xgeom_rudder as XR
+                ad = XR.RudderAdapter()
+                ad.load_space(path)
+                self.replace_adapter("rudder", ad)
+                return True
+            self.say(f"reading {os.path.basename(path)} ...")
+            self.root.update_idletasks()
+            if self.guard(back):
+                self._note = f"set-up loaded: {path} (the rudder modified below H)"
+                self.say(self._note)
+            return
         if path:
             self.say(f"reading {os.path.basename(path)} ...")
             self.root.update_idletasks()
@@ -1360,7 +1411,12 @@ class App:
         set-up), each curve put in the form that fits best (the blade, the hull: the adapter refits it to the
         file, as a change in the panel would), the panel rebuilt."""
         ad, kind = self.ad, self.kind
-        if kind == "rudder":
+        if kind == "rudder" and is_planar(ad):          # the extraction is the modified-below-H model's
+            import xgeom_rudder as XR
+            ad = XR.RudderAdapter()
+            ad.load_space(res["setup"])
+            self.replace_adapter("rudder", ad)
+        elif kind == "rudder":
             ad.load_space(res["setup"])
         elif kind == "blade":
             ad.load_params(res["file"])
@@ -1380,10 +1436,19 @@ class App:
         (<case>_design_space.json) takes the place of the design in the tool; the whole panel follows it."""
         cur = getattr(self.ad, "setup_file", None)
         folder = os.path.dirname(cur) if cur else os.path.join(HERE, self.ad.out_dir)
-        path = filedialog.askopenfilename(title="Rudder: a set-up file (<case>_design_space.json)",
+        path = filedialog.askopenfilename(title="Rudder: a set-up file (<case>_design_space.json), or a planar "
+                                                "rudder's component file (.txt)",
                                           initialdir=folder if os.path.isdir(folder) else HERE,
                                           filetypes=[("set-up files", "*_design_space.json"),
-                                                     ("JSON files", "*.json"), ("all files", "*")])
+                                                     ("JSON files", "*.json"),
+                                                     ("planar rudder component files", "*.txt"), ("all files", "*")])
+        if path and planar_rudder_file(path):            # the planar model takes the slot
+            self.say(f"reading {os.path.basename(path)} ...")
+            self.root.update_idletasks()
+            if self.guard(lambda: self.replace_adapter("rudder", load_adapter("rudder", path)) or True):
+                self._note = f"planar rudder loaded: {path}"
+                self.say(self._note)
+            return
         if path:
             self.say(f"reading {os.path.basename(path)} ...")
             self.root.update_idletasks()
@@ -1418,7 +1483,8 @@ def rudder_panel(app):
     ttk.Button(row, text="From CAD ...", command=app.on_from_cad).pack(side="left", padx=(0, 4))
     ttk.Label(row, text="Load: a set-up file that Save set-up (below) or XCAD wrote (<case>_design_space.json): "
                         "every variable's value, bounds and free flag, the curves, the full height and the "
-                        "settings. From CAD: a rudder's STEP or IGES, extracted (sections, tip, cap), its "
+                        "settings; a planar rudder's component file (.txt, kind rudder) puts the rudder on the "
+                        "planar model. From CAD: a rudder's STEP or IGES, extracted (sections, tip, cap), its "
                         "sections and laws fitted (the orders with the least error), the set-up saved",
               foreground=INK2, wraplength=380).pack(side="left", padx=6)
 
@@ -1472,13 +1538,15 @@ def file_box(app, path, info):
     row = ttk.Frame(box)
     row.pack(fill="x", pady=3)
     ttk.Button(row, text="Load ...", command=app.on_load_params).pack(side="left", padx=4)
-    from_cad = app.kind in FROM_CAD_KINDS
+    from_cad = app.kind in FROM_CAD_KINDS and not is_planar(app.ad)    # no planar extraction yet
     if from_cad:
         ttk.Button(row, text="From CAD ...", command=app.on_from_cad).pack(side="left", padx=(0, 4))
     ttk.Label(row, text="a component file (.txt) or an old parameter file (.dat); Save set-up (below) writes the "
                         "design as a component file" + ("; From CAD ...: a STEP or IGES file, its parameters "
                                                         "extracted and fitted (the form with the least error), "
-                                                        "the set-up saved" if from_cad else ""),
+                                                        "the set-up saved" if from_cad else "")
+                        + ("; the rudder on the planar model: a set-up of the model modified below H "
+                           "(<case>_design_space.json) puts it back on that one" if app.kind == "rudder" else ""),
               foreground=INK2, wraplength=470 if not from_cad else 380).pack(side="left", padx=6)
 
 
