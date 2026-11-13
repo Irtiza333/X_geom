@@ -246,6 +246,29 @@ class BladeAdapter:
         rel = float(np.abs(self.design.at(curve, rr) - old).max() / max(np.ptp(old), 1e-300))
         return f"fitted to the curve as it was (largest change {100 * rel:.2f} % of its range)"
 
+    def set_form(self, curve, segments, order=None):
+        """The curve as segments (0, 1, 2) and, with 1 segment, of the order given: fitted again (_refit);
+        xgeom_from_cad's best forms go in this way. Returns what was done."""
+        segments = int(segments)
+        if segments == 0:
+            return self._refit(curve, 0, None)
+        order = int(self.settings["orders"].get(curve, BM.DEFAULT_ORDER) if order is None else order)
+        if segments == 1 and not 1 <= order <= MAX_ORDER:
+            raise ValueError(f"the order must lie in 1 .. {MAX_ORDER}")
+        return self._refit(curve, segments, order)
+
+    def set_forms(self, forms):
+        """Every curve in the form given, {curve: (segments, order)} (xgeom_from_cad's best forms), fitted
+        (set_form), then the variables of the parameters _free0 names free (blade_control.FREE for an extracted
+        file), the others held: a file of table curves gives no variables to take the flags from. Returns what
+        was done, curve by curve."""
+        done = {c: self.set_form(c, segments, order) for c, (segments, order) in forms.items()}
+        free = set(self._free0())
+        for n, m in self.meta.items():
+            if "." in n:
+                m["free"] = n.split(".")[0] in free
+        return done
+
     def set_order(self, curve, order):
         """Number of control points of a 1-segment curve = order + 1; the curve
         is fitted again (_refit)."""

@@ -471,6 +471,38 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   the hub maths, the design and files, the parts, the adapter and window, the cone sector, the extraction of
   the MSc blade's DRDC CAD: its curves within 1.1 % of their ranges below r/R 0.9), tool 47, hull 59, wing 51,
   files 53. `blade_vary.py` (HUB_SLOTS) is in Prop_hull too, as the other shared files.
+- From CAD and the set-up files (13 Nov 2026; the user: set-up files for the BB2 propeller, the rudder and the
+  hull, and a tool feature that takes a CAD file, extracts the parameters, saves a set-up and shows it on the
+  sliders, "so users know where the parameters are on their starting geom and set bounds according to that";
+  blade, hull and rudder for now, the others once this works; of the forms that capture a curve, "the
+  combination that results in the least error", and the user's own changes refitted with the error shown).
+  `xgeom_from_cad.py`: `from_cad(kind, cad, out_dir, case)` runs the component's extraction
+  (`blade_extraction.extract`, `hull_extraction` stations, `Rudder_geom_extraction.run` plus
+  `fit_section_table`), fits every candidate form and keeps the one with the least error: blade 2 segments or
+  1 segment of 3 to 8 points, hull CST orders 3 to 8, rudder law orders 2 to 6; the error is the largest
+  difference from the extracted data over its range (hull: over r*; a rudder law's range at least 1 %), and a
+  form with more points must beat the best cheaper one by 0.1 % of the range (`FIT_TIE`), so alike fits keep
+  the fewer points. The set-up is written through the tool's adapter (`blade_setup`, `hull_setup`: the free
+  variables and bounds as the tool starts a file; blade_control.FREE for the blade) as `<case>_setup.txt`
+  (blade, next to the extracted `<case>.txt`), `<case>.txt` with `<case>_params.dat` (hull), or
+  `<case>_design_space.json` with `<case>_extraction/` (rudder; its laws at the orders found). Command line:
+  `python xgeom_from_cad.py blade|hull|rudder <file> [--out --case]`; for the blade an extracted `<case>.txt`
+  and for the hull a `<case>_params.dat` give the set-up alone. The tool: "From CAD ..." in the Parameter file
+  box (blade, hull) and the rudder's Set-up box; it runs off the GUI thread, then loads the file in the forms
+  found (the status line lists them and the error of each); changing points or segments refits and says the
+  error, as before. `xgeom_rudder.RudderAdapter(files=, fit_orders=, out_dir=)`, and `load_space` takes a set-up
+  of other files (switches to them). `xgeom_blade`: `set_form`, `set_forms`. `hull_modify.default_bounds`: a
+  negative coefficient (a high-order fit) is now inside its bounds (+-0.5 about it; before 0 to v + 0.5, which
+  left it out). Set-ups: `bb2/outputs/bb2_prop_setup.txt` (F6 hub; pitch 6, chord 8, thickness 6, camber 6,
+  skew 6, rake 5 points; 1.33, 0.13, 0.14, 0.62, 0.35, 0.34 % of the ranges; `bb2_prop.txt` and its section
+  files extracted again with the axis fix: the rows beyond r/R 0.99 moved, chord up to 2.9 % of its range at
+  the tip, the rest within 0.02 %), `bb2/outputs/bb2_hull.txt` (from `bb2_hull_params.dat`: the BB2 hull IGES is a quarter model, no
+  closed sections; orders 3 and 3), `outputs/modified/Wind_Tunnel_Rudder_design_space.json` (LE 2, P2x 3, the
+  others 2; within 0.73 % but P2x 3.4 %). SUBOFF's STEP: orders 4 and 7 (0.50, 0.38 % of r*). In the window:
+  hull 3 s, BB2 propeller 46 s, wind-tunnel rudder 107 s. The 1-segment fit is least squares and the pick by
+  the largest difference, so a curve's error need not fall with every added point (BB2 pitch: 6 points 1.33 %,
+  8 points 1.52 %). Tests: blade 82 with the GUI and the CAD (69 here), tool 52 (28 here), hull 62 (36 here),
+  wing, files.
 
 ## Next steps
 
@@ -491,3 +523,5 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   the way it drew the TE: a band of its own for it (as the TE strip now is for the TE's round).
 - Open items: section-fit bounds (X2 on its bound) and an LE-radius constraint; plain-named rudder outputs are
   overwritten by runs at other heights; Fig. 5 of the plan still labels the tip y = 218.07.
+- From CAD for the other components (the wing, the fin, the planar rudder: their extraction codes) once the
+  blade, hull and rudder runs are checked in use (the user, 13 Nov 2026).

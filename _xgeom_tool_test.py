@@ -468,6 +468,29 @@ def test_gui():
                        app.setup_label.cget("text") == named], [1, 1, 1, 1], 0)
             finally:
                 XT.filedialog.askopenfilename, app.ad.out_dir = ask_open, out_dir
+        import xgeom_from_cad as FC
+        import xgeom_rudder as XR
+        with tempfile.TemporaryDirectory() as tmp:
+            ad0 = XR.RudderAdapter(out_dir=tmp)
+            ad0.set("LE.dx3", -7.0)
+            fake = ad0.save_space(os.path.join(tmp, "fake_design_space.json"))
+            real, out_dir = FC.from_cad, app.ad.out_dir
+            FC.from_cad = lambda kind, path, out, case, progress: {"kind": kind, "setup": fake, "file": tmp,
+                                                                    "forms": {"LE": (2, 0.0)}, "report": ["LE: order 2"],
+                                                                    "seconds": 0.0}
+            XT.filedialog.askopenfilename = lambda **kw: os.path.join(tmp, "some.step")
+            try:
+                app.on_from_cad()
+                wait_job(app, root)
+                root.update()
+                check("From CAD ... (the extraction stubbed): the job runs off the GUI thread, its set-up is loaded "
+                      "into the panel when it ends (the value it holds, the Set-up box naming it)",
+                      [app.ad.get("LE.dx3"), app.ad.setup_file == fake, app.setup_label.cget("text").endswith(
+                          "fake_design_space.json"), app.status.cget("background") == XT.STATUS["ok"][0]],
+                      [-7.0, 1, 1, 1], 1e-12)
+            finally:
+                FC.from_cad, app.ad.out_dir = real, out_dir
+                XT.filedialog.askopenfilename = ask_open
         if not XL.occ_available():
             print("       Save CAD skipped: no pythonocc-core or cadquery-ocp here")
             return
@@ -505,6 +528,56 @@ def test_gui():
         os.chdir(cwd)
 
 
+def test_from_cad():
+    print("\nset-ups from other files (xgeom_from_cad.py, the rudder adapter on an extraction folder)")
+    import modify_control as MC
+    import xgeom_from_cad as FC
+    check("case names from CAD file names", [FC.case_name("a b/Wind Tunnel-Rudder (2).stp") == "Wind_Tunnel_Rudder_2",
+                                            FC.case_name("x/(-).stp") == "cad"], [1, 1], 0)
+    got = FC.pick([(3, "a", 0.05), (4, "b", 0.0101), (5, "c", 0.0100), (7, "d", 0.0094), (8, "e", 0.002)])
+    check("pick: the least error, a costlier form only when FIT_TIE better (c and d not over b, e over all)",
+          [got[0] == "e", got[1], FC.pick([(3, "a", 0.05), (5, "c", 0.0495)])[0] == "a"], [1, 0.002, 1], 0)
+    need = [MC.CORNER_POINTS, MC.SECTION_TABLE, MC.XCAD_ORIGINAL, MC.STACK]
+    missing = [p for p in need if not os.path.exists(os.path.join(HERE, p))]
+    if missing:
+        print("       the rudder adapter on an extraction folder skipped, not here: " + ", ".join(missing))
+        return
+    cwd = os.getcwd()
+    os.chdir(HERE)
+    try:
+        import shutil
+        import rudder_modify as RM
+        import xgeom_rudder as XR
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = os.path.join(tmp, "other_extraction")           # the repo's extraction, copied
+            os.makedirs(folder)
+            for p in need:
+                shutil.copy(os.path.join(HERE, p), folder)
+            files = FC.rudder_files(folder)
+            orders = FC.best_rudder_orders(files["corner_points"], files["section_table"])
+            ad = XR.RudderAdapter(files=files, fit_orders={c: v[0] for c, v in orders.items()}, out_dir=tmp)
+            ad.set("LE.dx3", -12.0)
+            setup = ad.save_space(os.path.join(tmp, "other_design_space.json"))
+            ad2 = XR.RudderAdapter()                                 # modify_control's files, then the set-up
+            ad2.load_space(setup)
+            rr = np.linspace(0.0, ad.get("H"), 101)
+            base = XR.RudderAdapter(files=files, out_dir=tmp)       # modify_control's orders (3) on the same files
+            d_orig = max(float(np.abs(ad.orig.value(c, rr) - base.orig.value(c, rr)).max()) for c in ad.orig.names)
+            check("the rudder adapter on an extraction folder: the files found, the laws at the orders that fit "
+                  "best (within 1e-4 of the cubic fits: this rudder's laws are that simple), a set-up from them "
+                  "loaded into the default adapter switches its files, the orders and the values",
+                  [all(os.path.isabs(v) for v in files.values()), all(2 <= v[0] <= FC.MAX_LAW_ORDER for v in orders.values()),
+                   d_orig < 1e-4, ad2.files == ad.files, {c: ad2.orig.curves[c].order for c in ad.orig.names} ==
+                   {c: ad.orig.curves[c].order for c in ad.orig.names}, ad2.get("LE.dx3"),
+                   max(abs(ad2.values[n] - ad.values[n]) for n in ad.values), len(ad2.preview()["problems"])],
+                  [1, 1, 1, 1, 1, -12.0, 0, 0], 1e-9)
+            sp, d, rec = RM.load_design_space(setup)
+            check("rudder_modify.load_design_space reads it too (the files it names)", [d.H, len(rec["files"])],
+                  [ad.get("H"), 4], 1e-12)
+    finally:
+        os.chdir(cwd)
+
+
 def wait_job(app, root, limit=600.0):
     """Let the window run until its build (or save) is done."""
     t0 = time.time()
@@ -518,6 +591,7 @@ def main():
     test_loft()
     test_adapter()
     test_span()
+    test_from_cad()
     if "--gui" in sys.argv:
         test_gui()
     print()

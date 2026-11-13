@@ -300,6 +300,7 @@ VEHICLE_TAB = 2                                    # the notebook's tabs: Design
 VEHICLE_DIR = os.path.join("outputs", "vehicle")   # the Vehicle CAD's files (relative to this folder)
 LOG = os.path.join(HERE, "outputs", "xgeom_tool_log.txt")   # every build's outcome
 CAD_TYPES = [("STEP", "*.step *.stp"), ("IGES", "*.igs *.iges")]   # Save CAD's file types
+FROM_CAD_KINDS = ("blade", "hull", "rudder")   # From CAD ...: the components with an extraction (xgeom_from_cad)
 
 
 def load_adapter(name, params=None):
@@ -1195,11 +1196,13 @@ class App:
         else:
             self.on_build(kind, save_to=path)
 
-    def _start(self, kind, label, case, run, message, keys=None):
+    def _start(self, kind, label, case, run, message, keys=None, then=None):
         """Run a build off the GUI thread: run(job) returns the result dict (report, message, error, view).
-        keys: the build keys (_design_key) of what it builds, by kind, kept with its STEP for Save CAD."""
+        keys: the build keys (_design_key) of what it builds, by kind, kept with its STEP for Save CAD. then:
+        called with the result on the GUI thread when the job succeeds (From CAD loads its set-up)."""
         job = self._job = {"kind": kind, "label": label, "case": case, "done": False, "result": None,
-                           "error": None, "t0": time.time(), "message": message + " ...", "keys": keys or {}}
+                           "error": None, "t0": time.time(), "message": message + " ...", "keys": keys or {},
+                           "then": then}
         self._buttons()
         self.say(job["message"], busy=True)
 
@@ -1258,6 +1261,12 @@ class App:
                     self.built[k] = {"key": key, "step": steps[k]}
         self._log(label, job["case"], secs, res["message"])
         self.say(f"{label} done in {secs:.1f} s: {res['message']}", error=res["error"], warn=res.get("warn", False))
+        if job.get("then") and not res["error"]:
+            try:
+                job["then"](res)
+            except Exception as exc:
+                traceback.print_exc()
+                self.say(f"{label}: {type(exc).__name__}: {exc}", error=True)
 
     @staticmethod
     def _log(label, case, seconds, text):
@@ -1314,6 +1323,58 @@ class App:
                 self.after_change(structure=True)
                 self.say(f"loaded {path}")
 
+    def on_from_cad(self):
+        """From CAD ...: a STEP or IGES file of the component; off the GUI thread its parameters are extracted
+        (xgeom_from_cad), fitted in the form with the least error and saved as a set-up (<case>.txt, or the
+        rudder's <case>_design_space.json), which is then loaded, so the panel shows where the starting
+        geometry's parameters lie."""
+        if self._job is not None:
+            return
+        import xgeom_from_cad as FC
+        kind = self.kind
+        if kind not in FROM_CAD_KINDS:
+            self.say(f"From CAD: no extraction for the {NAMES.get(kind, kind).lower()} yet", error=True)
+            return
+        start = self.save_dir or os.path.abspath(os.path.join(HERE, self.ad.out_dir))
+        path = filedialog.askopenfilename(title=f"{NAMES.get(kind, kind)}: a CAD file to extract",
+                                          initialdir=start if os.path.isdir(start) else HERE,
+                                          filetypes=CAD_TYPES + [("all files", "*")])
+        if not path:
+            return
+        case = FC.case_name(path)
+        out_dir = os.path.abspath(os.path.join(HERE, self.ad.out_dir))
+        label = f"From CAD ({NAMES.get(kind, kind).lower()})"
+
+        def run(job):
+            def progress(text):
+                job["message"] = f"{label}: {text} ..."
+            res = FC.from_cad(kind, path, out_dir, case, progress)
+            res["report"] = [f"{label}: {os.path.basename(path)} -> {res['setup']}"] + res["report"]
+            res.update(view=None, error=False, message=f"{os.path.basename(res['setup'])} from "
+                                                       f"{os.path.basename(path)} ({res['seconds']:.0f} s)")
+            return res
+        self._start(kind, label, case, run, f"{label}: reading {os.path.basename(path)}", then=self._from_cad_done)
+
+    def _from_cad_done(self, res):
+        """After From CAD: the extracted file loaded (the blade's and hull's parameter tables, the rudder's
+        set-up), each curve put in the form that fits best (the blade, the hull: the adapter refits it to the
+        file, as a change in the panel would), the panel rebuilt."""
+        ad, kind = self.ad, self.kind
+        if kind == "rudder":
+            ad.load_space(res["setup"])
+        elif kind == "blade":
+            ad.load_params(res["file"])
+            ad.set_forms({c: form for c, (form, _) in res["forms"].items()})
+        else:
+            ad.load_params(res["file"])
+            for c, (form, _) in res["forms"].items():
+                ad.set_order(c, form)
+        self._title()
+        self.after_change(structure=True)
+        forms = "; ".join(res["report"][1:1 + len(res["forms"])])
+        self._note = f"from {os.path.basename(res['file'])}: {forms}; set-up saved as {os.path.basename(res['setup'])}"
+        self.say(self._note)
+
     def on_load_space(self):
         """The rudder's Load ...: a set-up file that Save set-up or an XCAD run wrote
         (<case>_design_space.json) takes the place of the design in the tool; the whole panel follows it."""
@@ -1354,9 +1415,12 @@ def rudder_panel(app):
     row = ttk.Frame(box)
     row.pack(fill="x", pady=3)
     ttk.Button(row, text="Load ...", command=app.on_load_space).pack(side="left", padx=4)
-    ttk.Label(row, text="a set-up file that Save set-up (below) or XCAD wrote (<case>_design_space.json): every "
-                        "variable's value, bounds and free flag, the curves, the full height and the settings",
-              foreground=INK2, wraplength=470).pack(side="left", padx=6)
+    ttk.Button(row, text="From CAD ...", command=app.on_from_cad).pack(side="left", padx=(0, 4))
+    ttk.Label(row, text="Load: a set-up file that Save set-up (below) or XCAD wrote (<case>_design_space.json): "
+                        "every variable's value, bounds and free flag, the curves, the full height and the "
+                        "settings. From CAD: a rudder's STEP or IGES, extracted (sections, tip, cap), its "
+                        "sections and laws fitted (the orders with the least error), the set-up saved",
+              foreground=INK2, wraplength=380).pack(side="left", padx=6)
 
     box = ttk.LabelFrame(app.panel, text="Region")
     box.pack(fill="x", padx=6, pady=4)
@@ -1408,8 +1472,14 @@ def file_box(app, path, info):
     row = ttk.Frame(box)
     row.pack(fill="x", pady=3)
     ttk.Button(row, text="Load ...", command=app.on_load_params).pack(side="left", padx=4)
+    from_cad = app.kind in FROM_CAD_KINDS
+    if from_cad:
+        ttk.Button(row, text="From CAD ...", command=app.on_from_cad).pack(side="left", padx=(0, 4))
     ttk.Label(row, text="a component file (.txt) or an old parameter file (.dat); Save set-up (below) writes the "
-                        "design as a component file", foreground=INK2, wraplength=470).pack(side="left", padx=6)
+                        "design as a component file" + ("; From CAD ...: a STEP or IGES file, its parameters "
+                                                        "extracted and fitted (the form with the least error), "
+                                                        "the set-up saved" if from_cad else ""),
+              foreground=INK2, wraplength=470 if not from_cad else 380).pack(side="left", padx=6)
 
 
 def blade_panel(app):

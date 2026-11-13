@@ -169,6 +169,47 @@ def gaps_along(pts, eh, outside, reach=0.05):
     return np.array(out)
 
 
+def test_from_cad(tmp):
+    print("\nthe hull's set-up from a parameter file or a CAD (xgeom_from_cad.py)")
+    import xgeom_from_cad as FC
+    params = HM.read_params(os.path.join(HERE, HM.SUBOFF_PARAMS)) if os.path.exists(os.path.join(HERE, HM.SUBOFF_PARAMS)) \
+        else HM.suboff_params()
+    orders = FC.best_hull_orders(params)
+    scale = float(params.r.max())
+    d = HM.fit_design(params, orders={k: v[0] for k, v in orders.items()})
+    errs = {name: abs(HM.fit_report(params, d)[name] / scale - err) for name, (n, err) in orders.items()}
+    d3 = HM.fit_design(params, orders={k: 3 for k in orders})
+    check("SUBOFF's stations: an order 3 .. 8 per curve, its error as fit_report gives it (over r*), no worse "
+          "than the cubic by more than the tie band",
+          [all(3 <= v[0] <= FC.MAX_ORDER for v in orders.values()), max(errs.values())]
+          + [orders[k][1] <= HM.fit_report(params, d3)[k] / scale + FC.FIT_TIE for k in orders], [1, 0, 1, 1], 1e-12)
+    print("       " + "; ".join(f"{k}: order {v[0]} ({100 * v[1]:.3f} % of r*)" for k, v in orders.items()))
+    step = os.path.join(HERE, "outputs", "hull", "suboff.step")
+    if not XL.occ_available() or not os.path.exists(step):
+        print("       From CAD on outputs/hull/suboff.step skipped: " + ("no OCC here" if not XL.occ_available()
+                                                                          else "the STEP is not here"))
+        return
+    said = []
+    res = FC.hull_from_cad(step, tmp, progress=said.append)
+    ld = HM.load_component(res["setup"])
+    ad = XH.HullAdapter(res["setup"])
+    hs = HM.hydrostatics(ld.design)
+    inside = [n for n in ad.values if not ad.bounds(n)[0] - 1e-9 <= ad.values[n] <= ad.bounds(n)[1] + 1e-9]
+    check("From CAD: every variable inside its bounds (a negative coefficient of a high-order fit included), the "
+          "lengths and curves free, the radii held", [len(inside), ad.is_free("tail") and ad.is_free("tail_r.N2"),
+                                                     ad.is_free("r")], [0, 1, 0], 0)
+    check("From CAD (SUBOFF's STEP): the parameter file and the set-up written, the set-up's curves of the orders "
+          "found, L within 1 mm and the volume within 0.5 % of the STEP's, the adapter starts from it with no "
+          "problems, progress said",
+          [os.path.exists(res["file"]), os.path.exists(res["setup"]), ld.params.axisymmetric,
+           all(ld.design.curves[k].order == v[0] for k, v in res["forms"].items()),
+           abs(ld.design.length - res["hydrostatics"]["length"]) < 1e-3,
+           abs(hs["volume"] / res["hydrostatics"]["volume"] - 1) < 5e-3, len(ad.preview()["problems"]),
+           len(said) >= 3, len(res["report"]) == len(res["forms"]) + 1],
+          [1, 1, 1, 1, 1, 1, 0, 1, 1], 0)
+    print(f"       {res['seconds']:.0f} s; " + "; ".join(res["report"]))
+
+
 def check_rudders(name, segs, info, angles, te, chord, height, radii):
     """Each rudder (the FakeRudder plate): its root's LE and TE on the hull in its half-plane (radii(x, phi): the
     hull's r and r' there), a chord apart, the TE at x; its height along the normal to the root chord in that
@@ -792,6 +833,7 @@ def main():
     try:
         with tempfile.TemporaryDirectory() as tmp:
             hull = test_adapter(tmp)
+            test_from_cad(tmp)
             test_vehicle(hull)
             test_rake(hull)
             test_parts(hull)

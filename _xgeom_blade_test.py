@@ -388,6 +388,43 @@ def test_space(tmp):
            "radius" in s5.fixed, len(s5) - 12], [0, 0, 0, 1, 0], 1e-12)
 
 
+def test_forms(tmp):
+    print("\nthe forms that fit a blade's distributions best (xgeom_from_cad.best_blade_forms)")
+    import xgeom_from_cad as FC
+    p = BM.read_params(msc_file(tmp))
+    forms = FC.best_blade_forms(p)
+    r, vals = p.rows()
+    errs = {}
+    for c, ((seg, order), err) in forms.items():
+        cu, _ = BM.fit_form(r, vals[c], r[0], r[-1], seg, None if seg == 2 else order)
+        errs[c] = abs(np.abs(BM.curve_at(cu, r[0], r[-1], r) - vals[c]).max() / np.ptp(vals[c]) - err)
+    chord = {n: BM.fit_form(r, vals["chord"], r[0], r[-1], 1, n - 1)[0] for n in range(3, FC.MAX_POINTS + 1)}
+    chord_err = {n: np.abs(BM.curve_at(cu, r[0], r[-1], r) - vals["chord"]).max() / np.ptp(vals["chord"])
+                 for n, cu in chord.items()}
+    best_n = min(chord_err, key=chord_err.get)
+    picked = forms["chord"][0]
+    check("every curve: 2 segments or 1 segment of 3 .. 8 points, the error as refitting in that form gives it, "
+          "under 2 % of the range for the MSc polynomials; the chord's pick no worse than the best 1-segment fit "
+          "plus the tie band",
+          [all(f[0] in [(2, None)] + [(1, n) for n in range(2, FC.MAX_POINTS)] for f in forms.values()),
+           max(errs.values()), max(f[1] for f in forms.values()) < 0.02,
+           forms["chord"][1] <= chord_err[best_n] + FC.FIT_TIE + 1e-12,
+           picked == (2, None) or picked[1] + 1 <= best_n],
+          [1, 0, 1, 1, 1], 1e-12)
+    import xgeom_blade as XBL
+    free0 = set(XBL.BladeAdapter(params=msc_file(tmp))._free0())
+    setup, forms2 = FC.blade_setup(msc_file(tmp), os.path.join(tmp, "msc_setup.txt"))
+    ad = XBL.BladeAdapter(params=setup)
+    got = {c: (ad.segments(c), ad.order(c) if ad.segments(c) == 1 else None) for c in BM.CURVES}
+    free = {n.split(".")[0] for n, m in ad.meta.items() if m["free"] and "." in n}
+    inside = all(ad.bounds(n)[0] - 1e-9 <= ad.values[n] <= ad.bounds(n)[1] + 1e-9 for n in ad.values)
+    check("blade_setup: the set-up file in those forms (the tool reads them back), the variables of the file's "
+          "free parameters free (blade_control.FREE when it says none), every value inside its bounds",
+          [got == {c: f[0] for c, f in forms2.items()}, forms2 == forms, free == free0, inside,
+           len(ad.preview()["problems"])], [1, 1, 1, 1, 0], 0)
+    return forms
+
+
 def test_hub(tmp, table):
     print("\nthe hub (prop_hub.py): the cone with its rounded nose, the design, the files, the CAD part")
     import dataclasses
@@ -602,6 +639,14 @@ def test_adapter(tmp, table):
            BM.fit_report(ad.params, ad.design)["chord"][1] < 0.01, msg3.startswith("fitted to the curve as it was")],
           [0.1, 1, 1, 1, 6, 12, 1, 1, 1, 1], 0)
     print(f"       {msg1}; {msg2}; pitch: {msg3}")
+    msg4 = ad.set_form("thickness", 1, 4)                    # From CAD puts a curve in its best form this way
+    form4 = (ad.segments("thickness"), ad.order("thickness"))
+    msg5 = ad.set_form("thickness", 2)
+    bad_form = refused(ad.set_form, "thickness", 1, 0)
+    check("set_form: thickness as 1 segment of 5 points, then 2 segments again, fitted to the file each time "
+          "(the error said); order 0 refused",
+          [msg4.startswith("fitted to the parameter file"), "% of its range" in msg4, form4 == (1, 4),
+           ad.segments("thickness"), msg5.startswith("fitted to the parameter file"), bad_form], [1, 1, 1, 2, 1, 1], 0)
     pv = ad.preview(skeleton=True)
     check(f"preview: no problems, 6 sections, {BM.SECTIONS} sections in the skeleton",
           [len(pv["problems"]), np.shape(pv["sections"])[0], np.shape(pv["skeleton"])[0]], [0, 6, BM.SECTIONS], 0)
@@ -852,6 +897,35 @@ def test_gui(tmp, table):
               "half refused with 5 blades (said in red) and taken with 6; cylinder again",
               [rows_cone - rows0, n_hub > 14, part5 == "sector", "even number of blades" in said5, part6 == "half",
                app.ad.hub_shape == "cylinder", len(app.rows) - rows0], [3, 1, 1, 1, 1, 1, 0], 0)
+        import time
+        import xgeom_from_cad as FC
+        tables = app.ad.design                                 # as blade_extraction writes it: six tables
+        for c in BM.CURVES:
+            tables = BM.refit_to_file(app.ad.params, tables, c, 0)
+        comp = BM.write_component(os.path.join(tmp, "extracted.txt"), app.ad.params, tables,
+                                  BM.BladeSpace(app.ad.params, tables))
+        forms = {"pitch": ((1, 4), 0.001), "chord": ((2, None), 0.002), "thickness": ((1, 6), 0.001),
+                 "camber": ((1, 2), 0.004), "skew": ((1, 3), 0.002), "rake": ((2, None), 0.003)}
+        real, ask = FC.from_cad, XT.filedialog.askopenfilename
+        FC.from_cad = lambda kind, path, out, case, progress: {"kind": kind, "setup": comp, "file": comp, "forms": forms,
+                                                                "report": [f"{c}: ..." for c in forms], "seconds": 0.0}
+        XT.filedialog.askopenfilename = lambda **kw: os.path.join(tmp, "some.igs")
+        try:
+            app.on_from_cad()
+            t0 = time.time()
+            while app._job is not None and time.time() - t0 < 60.0:
+                root.update()
+                time.sleep(0.05)
+            root.update()
+        finally:
+            FC.from_cad, XT.filedialog.askopenfilename = real, ask
+        got = {c: (app.ad.segments(c), app.ad.order(c) if app.ad.segments(c) == 1 else None) for c in BM.CURVES}
+        free = {n.split(".")[0] for n, m in app.ad.meta.items() if m["free"] and "." in n}
+        check("From CAD ... (the extraction stubbed): the extracted file loaded, each curve in its form, the "
+              "variables of the free parameters free, the panel rebuilt, the status names the set-up",
+              [got == {c: f[0] for c, f in forms.items()}, free == set(app.ad._free0()), bool(free),
+               app.ad.file == os.path.abspath(comp), "set-up saved as extracted.txt" in app.status.cget("text"),
+               app.status.cget("background") == XT.STATUS["ok"][0]], [1, 1, 1, 1, 1, 1], 0)
     finally:
         root.destroy()
 
@@ -943,6 +1017,7 @@ def main():
         test_sampling(tmp)
         test_curves(tmp)
         test_space(tmp)
+        test_forms(tmp)
         test_hub(tmp, table)
         if test_geometry(tmp, table):
             test_adapter(tmp, table)

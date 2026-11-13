@@ -502,7 +502,8 @@ def default_bounds(design):
     """Bounds by slot: nose and tail lengths 50 % to 150 %, the middle body 0 to 150 % (0 to half the nose
     when there is none), the cap 0 to 200 % (0 to 10 % of the tail when there is none); r* and r'* 75 % to
     125 %; the end radii 0 to 200 % (0 to 25 % of the largest when 0); to the mm; the exponents EXP_BOUNDS;
-    each coefficient its value +-0.5, not below 0 (positive coefficients keep the radii positive)."""
+    each coefficient its value +-0.5, not below 0 (positive coefficients keep the radii positive) unless the
+    value is (a fit of a high order can make one negative: its bounds then hold it, +-0.5)."""
     b = {}
     when_zero = {"middle": lambda: 0.5 * design.nose / 1.5, "cap": lambda: 0.05 * design.tail,
                  "re": lambda: 0.125 * design.r, "rpe": lambda: 0.125 * design.rp}
@@ -518,7 +519,8 @@ def default_bounds(design):
         b[f"{name}.{EXP_KEY[c.kind]}"] = EXP_BOUNDS[c.kind]
         for k in c.keys()[1:]:
             v = c.get(k)
-            b[f"{name}.{k}"] = (max(0.0, round(v - 0.5, 4)), round(v + 0.5, 4))
+            lo = round(v - 0.5, 4)
+            b[f"{name}.{k}"] = (lo if v < 0.0 else max(0.0, lo), round(v + 0.5, 4))
     return b
 
 

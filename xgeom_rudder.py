@@ -59,6 +59,16 @@ N_VIEW = 5                       # sections drawn in the Design tab's 3D view, f
 Z_STRETCH = 3.0                  # the 3D view stretches the thickness by this, so the polygons show
 
 
+def _same_file(a, b):
+    """Are two paths the same file (None when either is missing)?"""
+    if not a or not b:
+        return None
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
 def _strip_frac(value):
     """modify_control's strip_frac as xcad_loft takes it: one fraction (the TE strip then narrowed to the TE's
     rounding) or a pair (LE, TE), used as given."""
@@ -69,33 +79,48 @@ class RudderAdapter:
     joins = True                  # curves join the original at H: the tool offers the tangent switch
     build_label = "XCAD"
 
-    def __init__(self):
+    def __init__(self, files=None, fit_orders=None, out_dir=None):
+        """The rudder of modify_control.py's files and settings, or of other files (files: corner_points,
+        section_table, xcad_original, stack, as an extraction and rudder_modify.fit_section_table write them;
+        xgeom_from_cad.py) with the original's laws fitted at fit_orders (by name; default modify_control's)."""
         import modify_control as MC
         s = MC.settings
-        self.files = {"corner_points": MC.CORNER_POINTS, "section_table": MC.SECTION_TABLE,
-                      "xcad_original": MC.XCAD_ORIGINAL, "stack": MC.STACK}
-        self.out_dir = MC.OUT_DIR
-        self.orig = RM.fit_original(MC.CORNER_POINTS, MC.SECTION_TABLE, None, MC.FIT_ORDERS,
-                                    free_heights=s.fit_free_heights, degree=getattr(MC, "DEGREE", RM.BASE_DEGREE))
-        z_top = self.orig.z_top
-        self.settings = {"z_top": z_top, "h_min": float(s.h_min), "h_max": min(float(s.h_max), z_top),
+        self.out_dir = out_dir or MC.OUT_DIR
+        self.settings = {"h_min": float(s.h_min), "h_max": float(s.h_max),
                          "n_sections": int(s.n_sections), "num_pts": int(s.num_pts),
                          "te_radius_mm": float(s.te_radius_mm), "gap_mm": s.gap_mm, "xcad_units": s.xcad_units,
-                         "plot": bool(s.plot), "fit_orders": dict(MC.FIT_ORDERS),
+                         "plot": bool(s.plot), "fit_orders": dict(MC.FIT_ORDERS if fit_orders is None else fit_orders),
                          "fit_free_heights": bool(s.fit_free_heights), "half": bool(getattr(s, "half", False)),
                          "strip_frac": _strip_frac(getattr(s, "strip_frac", 0.07))}
         self.title = "Rudder, modified below H"
-        self.stack = self._stack0 = RM.read_stack(MC.STACK)
-        self.loops0 = self._loops00 = [RM.xcad_to_working(pts, "m") for _, pts in RM.read_xcad(MC.XCAD_ORIGINAL)]
-        self._offsets = None                                  # (orig, loops0, TE radius, Offsets), see offsets()
         self.setup_file = None                                # the set-up file loaded or saved last (the tool shows it)
-        self.span0 = float(max(lp[:, 1].max() for lp in self._loops00))     # the extracted rudder's full height
+        self.meta = {}
+        self._load_files(files or {"corner_points": MC.CORNER_POINTS, "section_table": MC.SECTION_TABLE,
+                                   "xcad_original": MC.XCAD_ORIGINAL, "stack": MC.STACK},
+                         getattr(MC, "DEGREE", RM.BASE_DEGREE))
         H = min(max(float(MC.H), self.settings["h_min"]), self.settings["h_max"])
-        self.orders = {c: int(MC.ORDERS.get(c, RM.DEFAULT_ORDER)) for c in self.orig.names}
+        self.orders = {c: int(MC.ORDERS.get(c, max(RM.DEFAULT_ORDER, self.orig.curves[c].order)))
+                       for c in self.orig.names}                # at least the fit's order: the baseline exact
         self.join = {c: MC.JOIN for c in self.orig.names}
         self.design = RM.baseline_design(self.orig, H, self.orders, self.join)
-        self.meta = {}
         self._rebuild()
+
+    def _load_files(self, files, degree):
+        """The original shape from the files (fit_original at the settings' fit orders), the stack and the
+        extracted loops; z_top and the H bounds follow them."""
+        self.files = dict(files)
+        self.orig = RM.fit_original(self.files["corner_points"], self.files["section_table"], None,
+                                    self.settings["fit_orders"], free_heights=self.settings["fit_free_heights"],
+                                    degree=degree)
+        z_top = self.orig.z_top
+        self.settings["z_top"] = z_top
+        self.settings["h_max"] = min(float(self.settings["h_max"]), z_top)
+        self.settings["h_min"] = min(float(self.settings["h_min"]), 0.5 * self.settings["h_max"])
+        self.stack = self._stack0 = RM.read_stack(self.files["stack"])
+        self.loops0 = self._loops00 = [RM.xcad_to_working(pts, "m")
+                                       for _, pts in RM.read_xcad(self.files["xcad_original"])]
+        self._offsets = None                                  # (orig, loops0, TE radius, Offsets), see offsets()
+        self.span0 = float(max(lp[:, 1].max() for lp in self._loops00))     # the extracted rudder's full height
 
     # ---------------------------------------------------------------- state
     @property
@@ -420,6 +445,17 @@ class RudderAdapter:
             for k in ("n_sections", "te_radius_mm", "half", "strip_frac"):
                 if k in rec.get("settings", {}):
                     self.settings[k] = rec["settings"][k]
+            files = rec.get("files") or {}
+            if files and any(_same_file(files.get(k), self.files.get(k)) is False for k in self.files):
+                for k in ("fit_orders", "fit_free_heights", "h_min", "h_max"):    # another rudder: its files
+                    if k in rec.get("settings", {}):
+                        self.settings[k] = rec["settings"][k]
+                self.settings["fit_orders"] = {str(c): int(v) for c, v in self.settings["fit_orders"].items()}
+                self.meta = {}
+                self._load_files(files, int(rec["space"].get("degree", RM.BASE_DEGREE)))
+                self.orders = {c: max(RM.DEFAULT_ORDER, self.orig.curves[c].order) for c in self.orig.names}
+                self.join = {c: "G1" for c in self.orig.names}
+                self.design = RM.baseline_design(self.orig, self.settings["h_max"], self.orders, self.join)
             self._apply_scale(float(rec.get("settings", {}).get("height_scale") or 1.0))     # its full height
             space, design = RM.DesignSpace.from_dict(self.orig, rec["space"])
             self.orig = space.orig

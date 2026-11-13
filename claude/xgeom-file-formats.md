@@ -72,7 +72,7 @@ Keys and columns:
 
 | kind | geometry | settings | columns |
 |---|---|---|---|
-| blade | diameter_m, blades, root_r, hub_height_m, section, section_tables | sections, tip_band, tip_sections, clearance_mm, hub | r/R P/D c/D t/c f/c skew_deg rake/D |
+| blade | diameter_m, blades, root_r, hub_height_m, hub_base_m, hub_top_m, hub_x_m, section, section_tables | sections, tip_band, tip_sections, clearance_mm, hub, part | r/R P/D c/D t/c f/c skew_deg rake/D |
 | rudder, fin, wing | span_mm, section, ref_xc, camber_xc | sections, change_points | eta pitch_deg chord_mm t/c f/c sweep_mm rake_mm [dt1 .. dtk dc1 .. dck] |
 | hull | nose_m, middle_m, tail_m, cap_m, axisymmetric | | x_m r_m [rp_m] |
 
@@ -88,9 +88,18 @@ Rules:
   (airfoils.py). A name that is no known airfoil fails the load with the file and the close matches named, so
   a missing table is never papered over silently.
 - `section_tables` (blade only): the per-radius section tables, one para.py table per r/R station in one file
-  (`# r/R <value>` block headers; bb2_section_tables.dat has 34). The key is kept and written back
-  (load_component returns it under `extra`), and the path is read like `section`, relative to the component
-  file; the tool itself builds with `section` alone for now. Only bb2_build.py consumes per-radius shapes.
+  (`# r/R <value>` block headers; blade_extraction.py writes one per cut). The path is read like `section`,
+  relative to the component file (a missing file fails the load). Since 13 Nov 2026 the tool builds with them
+  (blade_sections.SectionsBladeSurface, cubic in r/R between the tables): the views, the CAD and the checks;
+  the XCAD points file (para.py) keeps the one `section`.
+- `hub_base_m`, `hub_top_m`, `hub_x_m` (blade only, 13 Nov 2026; all three or none): a conic hub with a rounded
+  nose (prop_hub.py): the base radius (the larger end, upstream), the top radius where the cone meets the
+  nose (the sphere tangent to the cone through the tip, `hub_height_m` from the base), and the x of the base
+  plane in the blade frame (m, downstream positive; the generator line is x = 0). With them `root_r` is the
+  blade root, where the table starts; the blade runs on into the hub. Their var lines `hub_base`, `hub_top`,
+  `hub_x` (held unless Y). Without them the hub is the cylinder of the root radius, centred on x = 0.
+- `part` (blade setting): what the CAD writes, `whole`, `half` (an even Z) or `sector` (one blade on 1/Z of the
+  hub, the default).
 - Component and assembly files are written with LF line endings on every platform (write_component,
   write_assembly), so the same design gives byte-identical files on any machine, and a rewrite of a loaded
   file gives the same bytes (round-trip tested with filecmp in `_xgeom_files_test.py`).
@@ -136,6 +145,24 @@ new.txt`. Examples in X_geom (the tool's defaults): `msc_blade.txt`, `wing.txt`,
 
 - The File box's Load ... reads a component file (or an old .dat) and sets the whole panel. Save set-up ...
   writes the component file; the dialog opens on the file it came from (an old .dat gives a .txt beside it).
+- From CAD ... (13 Nov 2026, `xgeom_from_cad.py`): in the File box of the blade and the hull and in the
+  rudder's Set-up box. A STEP or IGES file of the component is extracted (blade_extraction.py, hull_extraction's
+  stations, Rudder_geom_extraction.py with the per-section fits), every curve is fitted in each candidate form
+  and the form with the least error kept, and the set-up is written and loaded, so the sliders start at the
+  extracted geometry and the bounds can be set about it. Candidates: blade 2 segments, or 1 segment of 3 to 8
+  points; hull CST orders 3 to 8; rudder-h the original's law orders 2 to 6. The error is the largest
+  difference from the extracted data over the data's range (hull: over r*; a rudder law's range taken as at
+  least 1 %); a form with more points is kept only when it beats the best one with fewer by 0.1 % of the
+  range (`FIT_TIE`). The status line lists the forms and their errors. Changing points or segments afterwards
+  refits the curve to the extracted file and the status line gives the new error. Files, in the component's
+  output folder, the case named after the CAD file: blade `<case>.txt` (the six distributions as tables, the
+  reference) and `<case>_setup.txt` (the set-up; blade_control.FREE free); hull `<case>_params.dat` (the
+  stations) and `<case>.txt` (the set-up; lengths and curves free); rudder `<case>_extraction/` and
+  `<case>_design_space.json`. The run is off the GUI thread (a hull a few seconds, the BB2 propeller about a
+  minute, the wind-tunnel rudder about two minutes). Needs OCC, as the extraction codes do.
+- `python xgeom_from_cad.py blade|hull|rudder <file> [--out DIR] [--case NAME]`: the same without the window;
+  for the blade an extracted `<case>.txt` and for the hull a `<case>_params.dat` give the set-up alone (no
+  OCC needed).
 - Vehicle tab (step 4): Load assembly ... and Save assembly ... (each component written to its file; old .dat
   sources as new .txt files beside the assembly).
 - `python xgeom_tool.py --file <component file>` (`--params` the same); `--assembly <file>` (step 4).
@@ -158,3 +185,8 @@ installed in X_geom (xgeom_tool.py also in the Rudder folder): checked in the cl
 6 Nov 2026: LF line endings pinned in the writers, with checks in `_xgeom_files_test.py`, so saved files are
 byte-identical across machines; this spec added to the repo as `claude/xgeom-file-formats.md` (the path
 xgeom_files.py's docstring names).
+
+13 Nov 2026: the blade's conic hub keys, `part` and `section_tables`; From CAD in the GUI for the blade, the
+hull and the rudder (the other components once these are checked in use). Set-ups made with it:
+`bb2/outputs/bb2_prop_setup.txt`, `bb2/outputs/bb2_hull.txt` (from `bb2_hull_params.dat`: BB2's hull IGES is a
+quarter model without closed sections), `outputs/modified/Wind_Tunnel_Rudder_design_space.json`.
