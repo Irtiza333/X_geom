@@ -384,7 +384,8 @@ def vehicle_setup(case, steps, parts, info, placement):
     if "blade" in steps and b is not None and "prop_x" in info:
         out["propeller"] = {"x": float(info["prop_x"]), "d": float(info["prop_d"]),
                             "scale": float(info["prop_scale"]), "blades": int(b["blades"]),
-                            "hub_radius_mm": 1000.0 * float(b["hub"][0]), "hub_height_mm": 1000.0 * float(b["hub"][1])}
+                            "hub_radius_mm": 1000.0 * float(b["hub"][0]), "hub_height_mm": 1000.0 * float(b["hub"][1]),
+                            "hub": dict(b.get("hub_record") or {}), "part": "whole"}
     return out
 
 
@@ -399,9 +400,15 @@ def build_from_setup(setup, out_dir, progress=print):
     propeller = None
     pr = setup.get("propeller")
     if "propeller" in steps and pr:
-        progress(f"the propeller as a solid (the blade closed at its root, {pr['blades']} blades and the hub)")
-        blade = blade_solid(XL.read_step(steps["propeller"]), pr["hub_radius_mm"])
-        propeller = propeller_solid(blade, pr["blades"], pr["hub_radius_mm"], pr["hub_height_mm"])
+        shape = XL.read_step(steps["propeller"])
+        if pr.get("part") == "whole" and _shapes(shape, "SOLID"):      # the component's build: the whole propeller
+            progress(f"the propeller: the whole propeller of the blade's own build ({pr['blades']} blades and the "
+                     f"{pr.get('hub', {}).get('shape', 'cylinder')} hub)")
+            propeller = _shapes(shape, "SOLID")[0]
+        else:
+            progress(f"the propeller as a solid (the blade closed at its root, {pr['blades']} blades and the hub)")
+            blade = blade_solid(shape, pr["hub_radius_mm"])
+            propeller = propeller_solid(blade, pr["blades"], pr["hub_radius_mm"], pr["hub_height_mm"])
     progress("the parts placed")
     placed = place_parts(hull, solid["rudder"], propeller, setup, solid["fin"], solid["wing"])
     progress(f"the fuse of {len(placed)} parts")

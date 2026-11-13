@@ -30,8 +30,20 @@ Parameter file (.dat; '#' header, np.loadtxt reads the table):
     root_r         r/R of the blade root, the hub radius over R (default: the
                    first row); rows below it are ignored
     hub_height_m   axial length of the hub in the CAD, m (optional, default
-                   HUB_HEIGHT = hub_new.DEFAULT_HUB_HEIGHT); the hub is centred
-                   at x = 0
+                   HUB_HEIGHT = hub_new.DEFAULT_HUB_HEIGHT); a cylinder of the
+                   hub radius centred at x = 0, unless the next three keys make
+                   it a cone
+    hub_base_m, hub_top_m, hub_x_m
+                   a conic hub with a rounded nose (prop_hub.py, 13 Nov 2026):
+                   the base radius (the larger end, upstream), the top radius
+                   where the cone meets the nose (the sphere tangent to the
+                   cone through the tip, hub_height_m from the base), and the
+                   x of the base plane (m, downstream positive; the generator
+                   line is x = 0). All three, or none. The blade root (root_r,
+                   the table's first row) then lies in the hub where it is
+                   wider and clear of it where it is narrower: the blade is
+                   extended below its root into the hub (root_extension) and
+                   the hub trims it in the CAD
     section_table  the section family: x/c, camber, camber slope and thickness
                    (para.py's airfoil_data_fixed.csv format), relative to the
                    parameter file's folder
@@ -50,7 +62,8 @@ Parameter file (.dat; '#' header, np.loadtxt reads the table):
     rake/D         rake over the diameter
     vary           which parameters change, one line each: '# vary <name> Y|N [low high]'
                    (blade_vary.py) with <name> one of pitch, chord, thickness, camber, skew, rake (the
-                   distributions), radius, hub_radius, hub_height (m). Y: a design
+                   distributions), radius, hub_radius, hub_height (m) and, for a conic hub,
+                   hub_base, hub_top, hub_x (m). Y: a design
                    variable; low high (optional) the range of its values (every control
                    value of a distribution, in its units), else default_bounds. N: as the
                    file has it, a distribution exactly (its cubic spline, FileCurve), a
@@ -72,8 +85,9 @@ exactly (or an old parameter file, fitted as below); write_component writes
 one (the design tool's Save set-up, write_case's <case>.txt).
 
 Design (BladeDesign): the blade radius R and the hub radius (m), the hub height
-(m), and per distribution a curve in the (r/R, value) plane from the root (r/R =
-hub radius / R) to the tip. Positions along a curve are fractions of the span, so
+(m), for a conic hub its base and top radii and base x (m), and per distribution
+a curve in the (r/R, value) plane from the root (r/R = hub radius / R) to the
+tip. Positions along a curve are fractions of the span, so
 a change of either radius stretches the curves over the new span. A curve has
 1 or 2 segments:
   1 segment (BladeCurve): a Bezier with control points C0 at the root .. Cm at
@@ -125,7 +139,8 @@ from scipy.optimize import least_squares
 from scipy.spatial import cKDTree
 
 import xgeom_files as XF
-from blade_vary import CURVES, GLOBAL_SLOTS, VARY_NAMES, Vary, read_vary   # the names; the vary lines
+from blade_vary import CURVES, GLOBAL_SLOTS, HUB_SLOTS, VARY_NAMES, Vary, read_vary   # the names; the vary lines
+from prop_hub import HubProfile
 from hub_new import DEFAULT_HUB_HEIGHT
 from rudder_modify import Bezier, fit_values, fractions_from_heights, heights_from_fractions, law_basis
 
@@ -139,7 +154,14 @@ DESCRIPTIONS = {
     "skew": "skew angle, deg",
     "rake": "rake over the diameter, rake/D",
 }
-GLOBALS = ("diameter_m", "blades", "root_r", "hub_height_m", "section_table", "airfoil")
+GLOBALS = ("diameter_m", "blades", "root_r", "hub_height_m", "hub_base_m", "hub_top_m", "hub_x_m", "section_table",
+           "airfoil", "section_tables")
+HUB_KEYS = {"hub_base": "hub_base_m", "hub_top": "hub_top_m", "hub_x": "hub_x_m"}   # the slots' file keys
+PARTS = ("whole", "half", "sector")  # what the CAD writes: the whole propeller, half of it (an even Z), one blade
+                                     # on its 1/Z of the hub
+ROOT_MARGIN = 0.02                   # a conic hub: the blade runs this fraction of the span below the hub's
+                                     # smallest radius under its root (at least ROOT_MARGIN_M)
+ROOT_MARGIN_M = 0.005
 DEFAULT_SEGMENTS = 2              # each curve 2 segments (para_control_bez_updated) unless set otherwise
 DEFAULT_ORDER = 5                 # 1 segment: 6 control points
 D_BOUNDS = (0.01, 0.99)           # 1 segment: the position fractions d, in the fit and the design space
@@ -174,6 +196,27 @@ class BladeParams:
     hub_height: float = None      # m; None: not in the file (HUB_HEIGHT)
     airfoil: str = None           # an airfoil by name instead of a section table
     vary: dict = None             # name -> Vary for every VARY_NAMES; None: the file has no vary line
+    hub_base: float = None        # m; a conic hub (prop_hub.py): its base and top radii and base x, all three
+    hub_top: float = None
+    hub_x: float = None
+    section_tables: str = None    # the section shape per r/R (blade_sections.py; blade_extraction.py writes
+                                  # it), as written in the file; None: the one section everywhere
+
+    @property
+    def hub_cone(self):
+        return self.hub_top is not None
+
+    def tables_path(self):
+        """The section tables file, relative to the parameter file's folder when it is there, else as written;
+        None without one."""
+        p = self.section_tables
+        if not p:
+            return None
+        if not os.path.isabs(p) and self.path:
+            q = os.path.join(os.path.dirname(os.path.abspath(self.path)), p)
+            if os.path.exists(q):
+                return q
+        return p
 
     def rows(self):
         """The table rows from the root to the tip; a root between two rows gets
@@ -285,15 +328,33 @@ def read_params(path):
     if not r[0] - ROW_TOL <= root < r[-1] or np.sum(r > root + ROW_TOL) < 3:
         raise ValueError(f"{path}: root_r {root:g} must lie in the table, with 4 rows from it to the tip")
     hub_h = float(head["hub_height_m"]) if "hub_height_m" in head else None
+    tables = (head.get("section_tables") or "").split()
     params = BladeParams(float(head["diameter_m"]), int(head["blades"]), root, head.get("section_table", ""), r,
                          {c: tab[:, i + 1] for i, c in enumerate(CURVES)}, os.path.abspath(path), hub_h,
-                         head.get("airfoil"), read_vary(path) or None)
+                         head.get("airfoil"), read_vary(path) or None, *_hub_values(head, path),
+                         tables[0] if tables else None)
     if params.airfoil:
         try:
             params.section_path()                    # the airfoil exists; its table is made
         except ValueError as exc:
             raise ValueError(f"{path}: {exc}") from None
     return params
+
+
+def _hub_values(head, path):
+    """(hub_base, hub_top, hub_x) in m from a header's hub_base_m, hub_top_m, hub_x_m (all three or none)."""
+    keys = tuple(HUB_KEYS.values())
+    have = [k for k in keys if k in head]
+    if not have:
+        return None, None, None
+    if len(have) != 3:
+        raise ValueError(f"{path}: a conic hub needs {', '.join(keys)} together ({', '.join(have)} given)")
+    try:
+        vals = [float(head[k]) for k in keys]
+    except ValueError as exc:
+        raise ValueError(f"{path}: {exc}") from None
+    HubProfile(vals[0], vals[1], float(head.get("hub_height_m", HUB_HEIGHT)), vals[2])     # refused if impossible
+    return tuple(vals)
 
 
 def with_blades(params, blades):
@@ -322,7 +383,17 @@ def write_params(path, params, notes=()):
               f"# root_r         {params.root_r:.10g}"]
     if params.hub_height is not None:
         lines.append(f"# hub_height_m   {params.hub_height:.10g}")
+    if params.hub_cone:
+        lines += [f"# {k:<14s} {getattr(params, g):.10g}" for g, k in HUB_KEYS.items()]
     lines.append(f"# airfoil        {params.airfoil}" if params.airfoil else f"# section_table  {table}")
+    if params.section_tables:
+        tables = params.section_tables
+        if os.path.isabs(tables) and os.path.exists(tables):
+            try:
+                tables = os.path.relpath(tables, os.path.dirname(os.path.abspath(path))).replace(os.sep, "/")
+            except ValueError:
+                pass
+        lines.append(f"# section_tables {tables}")
     if params.vary is not None:
         lines.append("# Y/N per parameter: Y changes it (a design variable; low high, optional: the range of its "
                      "values), N keeps it as this file has it")
@@ -579,16 +650,56 @@ class BladeDesign:
     """A blade: its radius R and hub radius (m), the hub height (m, the CAD's
     hub), and one curve per distribution over r/R from the root (r0 = hub
     radius / R) to r1 (the tip). Positions along the curves are fractions of the
-    span, so a change of either radius stretches them over the new span."""
+    span, so a change of either radius stretches them over the new span. A
+    conic hub (prop_hub.py) has its base and top radii and base x (m) too; the
+    hub radius is then the blade's root radius, where the table starts."""
     radius: float
     hub_radius: float
     hub_height: float
     r1: float
     curves: dict
+    hub_base: float = None
+    hub_top: float = None
+    hub_x: float = None
 
     @property
     def r0(self):
         return self.hub_radius / self.radius
+
+    @property
+    def hub_cone(self):
+        return self.hub_top is not None
+
+    @property
+    def hub_shape(self):
+        return "cone" if self.hub_cone else "cylinder"
+
+    @property
+    def hub(self):
+        """The hub's profile (prop_hub.HubProfile, m): the cylinder of the hub radius centred at x = 0, or
+        the cone."""
+        if self.hub_cone:
+            return HubProfile(self.hub_base, self.hub_top, self.hub_height, self.hub_x)
+        return HubProfile(self.hub_radius, None, self.hub_height, -0.5 * self.hub_height)
+
+    def hub_slots(self):
+        """The global slots this design has: GLOBAL_SLOTS, and HUB_SLOTS with a conic hub."""
+        return GLOBAL_SLOTS + (HUB_SLOTS if self.hub_cone else ())
+
+    def with_hub(self, shape, base=None, top=None, x=None):
+        """The same blade with its hub as a cylinder, or a cone of the base and top radii and base x given
+        (defaults: the hub radius, half of it, the hub centred on x = 0)."""
+        d = self.copy()
+        if shape == "cylinder":
+            d.hub_base = d.hub_top = d.hub_x = None
+        elif shape == "cone":
+            d.hub_base = float(self.hub_radius if base is None else base)
+            d.hub_top = float(0.5 * d.hub_base if top is None else top)
+            d.hub_x = float(-0.5 * self.hub_height if x is None else x)
+            d.hub                                                     # refused if impossible
+        else:
+            raise ValueError(f"a hub is a cylinder or a cone, not '{shape}'")
+        return d
 
     @property
     def diameter(self):
@@ -742,7 +853,8 @@ def fit_design(params, orders=None, segments=None):
         curves[c], res[c] = fit_form(r, vals[c], r[0], r[-1], seg, orders.get(c, DEFAULT_ORDER))
     radius = 0.5 * params.diameter
     hub_h = HUB_HEIGHT if params.hub_height is None else params.hub_height
-    return BladeDesign(radius, float(r[0]) * radius, float(hub_h), float(r[-1]), curves), res
+    return BladeDesign(radius, float(r[0]) * radius, float(hub_h), float(r[-1]), curves,
+                       params.hub_base, params.hub_top, params.hub_x), res
 
 
 def refit_curve(design, name, order=None, segments=None, n_samples=None):
@@ -797,7 +909,9 @@ def default_bounds(params, design):
     rows and control values, half that range again on either side (rounded
     outward), for chord, thickness and pitch not below 0 unless a fitted control
     value is; the blade radius 75 % to 125 %, the hub radius 50 % to 150 % and
-    the hub height 50 % to 200 % of the design's (to the mm)."""
+    the hub height 50 % to 200 % of the design's (to the mm); a conic hub's
+    base and top radii 50 % to 150 %, its base x half the hub height either
+    way."""
     b = {"d": D_BOUNDS, "seg.d": SEG_D_BOUNDS, "seg.u": SEG_U_BOUNDS}
     w = [x for c in CURVES if design.curves[c].segments == 2 for x in (design.curves[c].w23, design.curves[c].w56)]
     b["seg.w"] = (SEG_W_BOUNDS[0], float(max([2.0] + [np.ceil(15.0 * x) / 10.0 for x in w])))
@@ -814,16 +928,23 @@ def default_bounds(params, design):
             vmin = float(design.curves[c].v.min())
             lo = min(max(lo, 0.0), round(np.floor(vmin * 10.0 ** places) / 10.0 ** places, places))
         b[c] = (float(lo), float(hi))
-    for g, (f0, f1) in (("radius", (0.75, 1.25)), ("hub_radius", (0.5, 1.5)), ("hub_height", (0.5, 2.0))):
+    for g, (f0, f1) in (("radius", (0.75, 1.25)), ("hub_radius", (0.5, 1.5)), ("hub_height", (0.5, 2.0)),
+                        ("hub_base", (0.5, 1.5)), ("hub_top", (0.5, 1.5))):
+        if getattr(design, g) is None:
+            continue
         x = float(getattr(design, g))
         b[g] = (float(np.floor(f0 * x * 1000.0) / 1000.0), float(np.ceil(f1 * x * 1000.0) / 1000.0))
+    if design.hub_cone:
+        x, h = float(design.hub_x), 0.5 * float(design.hub_height)
+        b["hub_x"] = (float(np.floor((x - h) * 1000.0) / 1000.0), float(np.ceil((x + h) * 1000.0) / 1000.0))
     return b
 
 
 class BladeSpace:
     """A flat design vector for an optimiser, and the BladeDesign it stands for.
 
-    The slots: the globals radius, hub_radius, hub_height (m), then curve by
+    The slots: the globals radius, hub_radius, hub_height (m), with a conic
+    hub hub_base, hub_top, hub_x (m), then curve by
     curve (CURVES order) its own: 1 segment d1 .. d(m-1) (the fractions that
     place the inner control points), v0 (root) .. vm (tip); 2 segments v1, d1,
     w23, u4, v4, d2, w56, v7; a distribution as the file has it (FileCurve)
@@ -845,7 +966,7 @@ class BladeSpace:
         self.forms = {c: (design.curves[c].segments, design.curves[c].order) for c in CURVES}
         self.file_curves = {c: design.curves[c] for c in CURVES if design.curves[c].segments == 0}
         b = {**default_bounds(params, design), **(bounds or {})}
-        self._slots = [(None, g) for g in GLOBAL_SLOTS]
+        self._slots = [(None, g) for g in design.hub_slots()]
         for c in CURVES:
             self._slots += [(c, k) for k in design.curves[c].keys()]
         self.all_names = [k if c is None else f"{c}.{k}" for c, k in self._slots]
@@ -901,7 +1022,8 @@ class BladeSpace:
                 continue
             cls = CURVE_TYPES[seg]
             curves[c] = cls.from_keys({k: vals[f"{c}.{k}"] for k in cls.keys_of(order)}, order)
-        return BladeDesign(vals["radius"], vals["hub_radius"], vals["hub_height"], self.r1, curves)
+        return BladeDesign(vals["radius"], vals["hub_radius"], vals["hub_height"], self.r1, curves,
+                           *(vals.get(g) for g in HUB_SLOTS))
 
     def values(self, design):
         """{slot name: value} of a design, every slot."""
@@ -940,12 +1062,14 @@ class BladeSpace:
                 return TwoSegmentCurve(0.0, 0.5, 1.0, 0.5, 0.0, 0.5, 1.0, 0.0)
             n = int(rec["orders"][c])
             return BladeCurve(np.linspace(0.0, 1.0, n + 1), np.zeros(n + 1))
-        tmpl = BladeDesign(radius, float(rec.get("r0", params.root_r)) * radius, float(hub_h),
-                           float(rec.get("r1", 1.0)), {c: template(c) for c in CURVES})
         vals = {q["name"]: q["value"] for q in slots}
+        hub = [vals.get(g, getattr(params, g)) for g in HUB_SLOTS]          # a conic hub: the slots, else the file's
+        tmpl = BladeDesign(radius, float(rec.get("r0", params.root_r)) * radius, float(hub_h),
+                           float(rec.get("r1", 1.0)), {c: template(c) for c in CURVES},
+                           *(hub if all(v is not None for v in hub) else (None, None, None)))
         bounds = {q["name"]: (q["lo"], q["hi"]) for q in slots}
         fixed = {q["name"]: q["value"] for q in slots if not q["free"]}
-        for g in GLOBAL_SLOTS:
+        for g in tmpl.hub_slots():
             if g not in vals:
                 vals[g] = fixed[g] = float(getattr(tmpl, g))
         space = cls(params, tmpl, bounds, fixed)
@@ -958,7 +1082,8 @@ def space_record(space, design, params, settings=None):
     return {"geometry": "blade", "created": datetime.datetime.now().isoformat(timespec="seconds"),
             "params_file": params.path,
             "globals": {"diameter_m": params.diameter, "blades": params.blades, "root_r": params.root_r,
-                        "hub_height_m": params.hub_height, "section_table": params.section_table,
+                        "hub_height_m": params.hub_height, "hub_base_m": params.hub_base,
+                        "hub_top_m": params.hub_top, "hub_x_m": params.hub_x, "section_table": params.section_table,
                         "airfoil": params.airfoil},
             "vary": None if params.vary is None else {n: [v.on, v.lo, v.hi] for n, v in params.vary.items()},
             "settings": dict(settings or {}), "space": space.to_dict(design)}
@@ -1002,10 +1127,11 @@ def load_blade_space(path):
 # The component file (xgeom_files.py)
 # --------------------------------------------------------------------------
 
-SETTING_TYPES = {"sections": int, "tip_band": float, "tip_sections": int, "clearance_mm": float, "hub": bool}
+SETTING_TYPES = {"sections": int, "tip_band": float, "tip_sections": int, "clearance_mm": float, "hub": bool,
+                 "part": str}
 TABLE_TOL = 1e-6                  # a column of a curve with var lines may differ from the curve by this times
                                   # max(1, the column's range) (the file writes 8 decimals)
-GLOBAL_HEAD = {"radius": "diameter_m", "hub_radius": "root_r", "hub_height": "hub_height_m"}
+GLOBAL_HEAD = {"radius": "diameter_m", "hub_radius": "root_r", "hub_height": "hub_height_m", **HUB_KEYS}
 
 
 def _component_params(comp):
@@ -1042,7 +1168,9 @@ def _component_params(comp):
         vary = {n: Vary(*comp.vary[n]) if n in comp.vary else Vary(False) for n in VARY_NAMES}
     params = BladeParams(diameter, blades, root, table, r,
                          {c: comp.column(col) for c, col in XF.CURVE_COLUMNS["blade"].items()}, path, hub_h,
-                         airfoil, vary)
+                         airfoil, vary, *_hub_values(g, path), g.get("section_tables"))
+    if params.section_tables and not os.path.isfile(params.tables_path()):
+        raise ValueError(f"{path}: section_tables {params.section_tables}: no such file")
     if params.airfoil:
         try:
             params.section_path()                    # the airfoil exists; its table is made
@@ -1109,6 +1237,12 @@ def _component_design(comp, params, orders=None, segments=None):
     radius = 0.5 * params.diameter
     glob = {"radius": radius, "hub_radius": params.root_r * radius,
             "hub_height": HUB_HEIGHT if params.hub_height is None else params.hub_height}
+    if params.hub_cone:
+        glob.update({g: getattr(params, g) for g in HUB_SLOTS})
+    elif any(g in comp.vars for g in HUB_SLOTS):
+        raise ValueError(f"{comp.path}: var lines for a conic hub "
+                         f"({', '.join(g for g in HUB_SLOTS if g in comp.vars)}) need the geometry keys "
+                         f"{', '.join(HUB_KEYS.values())}")
     for g, v0 in list(glob.items()):
         if g not in comp.vars:
             continue
@@ -1117,7 +1251,8 @@ def _component_design(comp, params, orders=None, segments=None):
             raise ValueError(f"{comp.path}: var {g} {v:.10g} disagrees with the geometry's {GLOBAL_HEAD[g]} (which "
                              f"gives {v0:.10g}); change both, or delete the var line")
         glob[g] = v
-    design = BladeDesign(glob["radius"], glob["hub_radius"], glob["hub_height"], float(r[-1]), curves)
+    design = BladeDesign(glob["radius"], glob["hub_radius"], glob["hub_height"], float(r[-1]), curves,
+                         *(glob.get(g) for g in HUB_SLOTS))
     keep = comp.column("r/R") >= params.root_r - ROW_TOL
     if not keep.all():
         raise ValueError(f"{comp.path}: rows below root_r; the table starts at the root")
@@ -1134,7 +1269,7 @@ def _component_space(comp, params, design, free=None):
     unknown = [n for n in comp.vars if n not in full.all_names]
     if unknown:
         raise ValueError(f"{comp.path}: var lines for {', '.join(unknown)}, which this blade does not have (its "
-                         f"variables: {', '.join(GLOBAL_SLOTS)} and those of its curves)")
+                         f"variables: {', '.join(design.hub_slots())} and those of its curves)")
     names = vary_free(params)
     free0 = names if names is not None else tuple(free or ())
     vals = full.values(design)
@@ -1183,13 +1318,19 @@ def write_component(path, params, design, space, settings=None, name=None, notes
     g["blades"] = str(int(params.blades))
     g["root_r"] = XF.num(design.r0)
     g["hub_height_m"] = XF.num(design.hub_height)
+    if design.hub_cone:
+        for slot, key in HUB_KEYS.items():
+            g[key] = XF.num(getattr(design, slot))
     if params.airfoil:
         own = os.path.isabs(params.airfoil) and os.path.isfile(params.airfoil)     # a coordinate file
         g["section"] = XF.rel(params.airfoil, folder) if own else params.airfoil
     else:
         sp = params.section_path()
         g["section"] = XF.rel(os.path.abspath(sp), folder) if os.path.exists(sp) else params.section_table
-    for k, v in (extra or {}).items():
+    extra = dict(extra or {})
+    if params.section_tables and "section_tables" not in extra:
+        extra["section_tables"] = params.section_tables
+    for k, v in extra.items():
         full = XF.resolve(v, base)
         g[k] = XF.rel(full, folder) if os.path.exists(full) else v
     comp.settings = XF.settings_text(settings, SETTING_TYPES)
@@ -1265,10 +1406,52 @@ def clearance(points, blades):
     return float(min(cKDTree(turned).query(points, k=1)[0].min(), cKDTree(points).query(turned, k=1)[0].min()))
 
 
+def root_extent(design, params, points=None, r=None):
+    """(x_lo, x_hi) of the root section along the axis (m, the blade frame), or of the section at r/R r below
+    the root (the distributions continued linearly): the root section's extent (points: blade_points at
+    x_blade_new's stations) scaled about its middle by the chord there over the root's."""
+    pts = blade_points(design, params)[0] if points is None else points
+    x = pts[:53, 0]                                         # the root section
+    a, b = float(x.min()), float(x.max())
+    if r is None or r >= design.r0:
+        return a, b
+    k = float(design.prop("chord")(r) / design.prop("chord")(design.r0))
+    m = 0.5 * (a + b)
+    return m - 0.5 * k * (b - a), m + 0.5 * k * (b - a)
+
+
+def root_extension(design, params, points=None):
+    """How far (m) the blade runs below its root radius into a conic hub (0 for the cylinder, whose surface
+    carries the root ring): down to ROOT_MARGIN of the span (at least ROOT_MARGIN_M) under the hub's smallest
+    radius along the root section's axial extent, taken at the extended section's own extent."""
+    if not design.hub_cone:
+        return 0.0
+    hub = design.hub
+    margin = max(ROOT_MARGIN * (design.radius - design.hub_radius), ROOT_MARGIN_M)
+    a, b = root_extent(design, params, points)
+    r_ext = design.hub_radius
+    for _ in range(20):                                     # the extended section is wider than the root's
+        r_new = min(design.hub_radius, hub.min_radius(a, b) - margin)
+        a, b = root_extent(design, params, points, r_new / design.radius)
+        done = abs(r_new - r_ext) < 1e-9 * design.radius
+        r_ext = r_new
+        if done:
+            break
+    return float(max(design.hub_radius - r_ext, 0.0))
+
+
 def blade_surface(design, params):
-    """blade_surface_new.BladeSurface of the design (the DRDC CAD path)."""
+    """blade_surface_new.BladeSurface of the design (the DRDC CAD path), or blade_sections.SectionsBladeSurface
+    when the parameters carry section tables (the shape per r/R); with a conic hub the blade runs
+    root_extension below its root into the hub."""
     from blade_surface_new import BladeSurface
-    return BladeSurface(*design.props(), d=design.diameter, r_root=design.r0, airfoil_path=params.section_path())
+    kw = dict(d=design.diameter, r_root=design.r0, airfoil_path=params.section_path(),
+              root_extension=root_extension(design, params))
+    tables = params.tables_path()
+    if tables:
+        from blade_sections import SectionsBladeSurface, read_tables
+        return SectionsBladeSurface(read_tables(tables), *design.props(), **kw)
+    return BladeSurface(*design.props(), **kw)
 
 
 def design_checks(design, params, clearance_mm=CLEARANCE_MM, points=None, gap_mm=None, hub=True):
@@ -1276,7 +1459,10 @@ def design_checks(design, params, clearance_mm=CLEARANCE_MM, points=None, gap_mm
     radius not between 0 and 90 % of the blade radius; chord, thickness or
     pitch not positive inside the blade; with the hub, a hub too short for the
     blade root (hub_new: the hub, centred at x = 0, must reach 2 % of the root
-    section's axial extent beyond it). The warning: blades closer than
+    section's axial extent beyond it); a conic hub that does not reach under
+    the whole root section (the blade, extended into the hub, would stick out
+    of its base plane or its nose), or chord, thickness or pitch not positive
+    down to the extended root. The warning: blades closer than
     clearance_mm (the MSc check), so neighbouring blades interfere; the design
     tool still builds the CAD then. points (blade_points at x_blade_new's
     stations) and gap_mm save computing them again."""
@@ -1299,12 +1485,32 @@ def design_checks(design, params, clearance_mm=CLEARANCE_MM, points=None, gap_mm
         warnings.append(f"blades {gap_mm:.1f} mm apart, less than {clearance_mm:g} mm (the clearance check): "
                         f"neighbouring blades interfere")
     if hub:
-        x = pts[:53, 0]                                     # the root section
-        a, b = float(x.min()), float(x.max())
-        half, margin = 0.5 * design.hub_height, 0.02 * (b - a)
-        if not (-half < a - margin and b + margin < half):
-            out.append(f"hub height {1000.0 * design.hub_height:.0f} mm does not cover the blade root (x from "
-                       f"{1000.0 * a:.0f} to {1000.0 * b:.0f} mm; the hub is centred at x = 0)")
+        a, b = root_extent(design, params, pts)
+        margin = 0.02 * (b - a)
+        if design.hub_cone:
+            hp = design.hub
+            r_min = hp.min_radius(a - margin, b + margin)
+            need = max(ROOT_MARGIN * (design.radius - design.hub_radius), ROOT_MARGIN_M)
+            if not hp.covers(a, b, margin) or r_min <= need:
+                out.append(f"the hub (x from {1000.0 * hp.x_base:.0f} to {1000.0 * hp.x_tip:.0f} mm) does not reach "
+                           f"under the whole blade root (x from {1000.0 * a:.0f} to {1000.0 * b:.0f} mm)")
+            else:
+                ext = root_extension(design, params, pts)
+                r_ext = (design.hub_radius - ext) / design.radius
+                a2, b2 = root_extent(design, params, pts, r_ext)
+                bad = [c for c in ("chord", "thickness", "pitch") if float(design.prop(c)(r_ext)) <= 0.0]
+                if bad:
+                    out.append(f"{', '.join(bad)} not positive at the root extended into the hub (r/R "
+                               f"{r_ext:.3f})")
+                elif not hp.covers(a2, b2, 0.02 * (b2 - a2)):
+                    out.append(f"the hub (x from {1000.0 * hp.x_base:.0f} to {1000.0 * hp.x_tip:.0f} mm) does not "
+                               f"cover the blade root extended into it (x from {1000.0 * a2:.0f} to "
+                               f"{1000.0 * b2:.0f} mm)")
+        else:
+            half = 0.5 * design.hub_height
+            if not (-half < a - margin and b + margin < half):
+                out.append(f"hub height {1000.0 * design.hub_height:.0f} mm does not cover the blade root (x from "
+                           f"{1000.0 * a:.0f} to {1000.0 * b:.0f} mm; the hub is centred at x = 0)")
     return out, warnings
 
 
@@ -1337,9 +1543,12 @@ def design_params(design, params, n=101, vary=None):
     if not params.airfoil:
         table = params.section_path()
         table = os.path.abspath(table) if os.path.exists(table) else params.section_table
+    tables = params.tables_path()
     return BladeParams(design.diameter, params.blades, design.r0, table, r, design.values(r),
                        hub_height=design.hub_height, airfoil=params.airfoil,
-                       vary=copy.deepcopy(params.vary if vary is None else vary))
+                       vary=copy.deepcopy(params.vary if vary is None else vary),
+                       hub_base=design.hub_base, hub_top=design.hub_top, hub_x=design.hub_x,
+                       section_tables=os.path.abspath(tables) if tables and os.path.exists(tables) else tables)
 
 
 def design_record(design, params, space=None, problems=(), gap_mm=None, settings=None, warnings=()):
@@ -1349,7 +1558,9 @@ def design_record(design, params, space=None, problems=(), gap_mm=None, settings
     rep = fit_report(params, design)
     rec = {"created": datetime.datetime.now().isoformat(timespec="seconds"), "params_file": params.path,
            "globals": {"radius_m": design.radius, "diameter_m": design.diameter, "hub_radius_m": design.hub_radius,
-                       "root_r": design.r0, "hub_height_m": design.hub_height, "blades": params.blades,
+                       "root_r": design.r0, "hub_height_m": design.hub_height, "hub_shape": design.hub_shape,
+                       "hub_base_m": design.hub_base, "hub_top_m": design.hub_top, "hub_x_m": design.hub_x,
+                       "root_extension_m": root_extension(design, params), "blades": params.blades,
                        "section_table": params.section_table, "airfoil": params.airfoil},
            "curves": {c: {"segments": cu.segments, "variables": {k: cu.get(k) for k in cu.keys()},
                           "control_points": design.ctrl(c).tolist(), "weights": cu.weights().tolist(),
@@ -1396,35 +1607,61 @@ def write_case(out_dir, case, design, params, space=None, cad=True, settings=Non
     return out
 
 
+def cad_part(settings, blades):
+    """The part the CAD writes (PARTS; the settings' 'part', default 'sector'), and how many blades it has: the
+    whole propeller Z, half of it Z / 2 (an even Z only), one blade on its 1/Z of the hub 1."""
+    part = str((settings or {}).get("part", "sector") or "sector").strip().lower()
+    if part not in PARTS:
+        raise ValueError(f"the CAD part is one of {', '.join(PARTS)}, not '{part}'")
+    z = int(blades)
+    if part == "half" and z % 2:
+        raise ValueError(f"half the propeller needs an even number of blades ({z} blades): the whole or 1/{z}")
+    return part, {"whole": z, "half": z // 2, "sector": 1}[part]
+
+
 def write_cad(out_dir, case, design, params, settings=None):
-    """The DRDC five-surface blade and the hub sector of the design's hub
-    height (tip_surfaces_new, X_CAD_new) as <case>.iges, and the same shape as
-    <case>.step. X_CAD names its file from an integer case id
-    (pipeline_config.cad_output_paths), so it writes into a folder of its own,
-    the file is moved out of it and the folder removed (also when X_CAD fails)."""
+    """The CAD of the design as <case>.iges and <case>.step: the part the settings name (cad_part): 'sector'
+    (default) with the cylindrical hub the DRDC five-surface blade and the hub sector of the design's hub
+    height (tip_surfaces_new, X_CAD_new; the IGES the MSc pipeline writes, untrimmed surfaces); otherwise
+    solids (prop_hub.propeller_solid): the whole propeller (Z blades fused with the hub), half of it or one
+    blade on its 1/Z of the hub (the periodic sector), the blade closed at its root ring (vehicle_cad.
+    blade_solid) and, with a conic hub, extended into the hub and trimmed by it; IGES in BRep mode. X_CAD
+    names its file from an integer case id (pipeline_config.cad_output_paths), so it writes into a folder of
+    its own, the file is moved out of it and the folder removed (also when X_CAD fails)."""
     import tempfile
     import time
     from tip_surfaces_new import TipConfig, build_drdc_grids
     from X_CAD_new import X_CAD
     from pipeline_config import cad_output_paths
+    import xcad_loft as XL
     st = dict(settings or {})
+    part, k = cad_part(st, params.blades)
+    solids = part != "sector" or design.hub_cone
     t0 = time.time()
     grids = build_drdc_grids(blade_surface(design, params), TipConfig(**st.get("tip_config", {})), verbose=False)
     t1 = time.time()
     tmp = tempfile.mkdtemp(prefix="x_cad_", dir=out_dir)
+    iges, step = os.path.join(out_dir, f"{case}.iges"), os.path.join(out_dir, f"{case}.step")
+    out = {"cad_paths": {"iges": iges, "step": step}, "part": part, "blades": k, "hub": design.hub.describe()}
     try:
-        shape = X_CAD(grids, 0, output_dir=tmp, hub=st.get("hub", True), hub_height=design.hub_height,
+        shape = X_CAD(grids, 0, output_dir=tmp, hub=st.get("hub", True) and not solids, hub_height=design.hub_height,
                       n_blades=params.blades)
-        iges = os.path.join(out_dir, f"{case}.iges")
-        os.replace(cad_output_paths(0, tmp)["iges"], iges)
+        if not solids:
+            os.replace(cad_output_paths(0, tmp)["iges"], iges)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    step = os.path.join(out_dir, f"{case}.step")
-    from OCC.Core.STEPControl import STEPControl_AsIs, STEPControl_Writer
-    w = STEPControl_Writer()
-    w.Transfer(shape, STEPControl_AsIs)
-    w.Write(step)
-    return {"cad_paths": {"iges": iges, "step": step}, "grid_seconds": t1 - t0, "cad_seconds": time.time() - t1}
+    if solids:
+        import prop_hub as PH
+        import vehicle_cad as VC
+        r_ring = 1000.0 * (design.hub_radius - root_extension(design, params))     # the ring the faces end on, mm
+        blade = VC.blade_solid(shape, r_ring)
+        shape, info = PH.propeller_solid(blade, design.hub.scaled(1000.0), params.blades, k)
+        out.update(info, root_ring_mm=r_ring, valid=VC.is_valid(shape), volume_mm3=VC.volume(shape),
+                   faces=len(VC._shapes(shape, "FACE")))
+        PH.write_iges_solids(shape, iges)
+    XL.write_step(shape, step)
+    out.update(grid_seconds=t1 - t0, cad_seconds=time.time() - t1)
+    return out
 
 
 def plot_case(path, case, design, params):

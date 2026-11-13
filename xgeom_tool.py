@@ -126,6 +126,13 @@ Left panel (blade)
               the blade radius R, the hub radius and the hub height (m; the hub
               is centred at x = 0 and must cover the blade root). A change of
               either radius stretches the distributions over the new span.
+              hub: a cylinder (the above), or a cone (13 Nov 2026, prop_hub.py):
+              three more variables, the base radius (the larger end, upstream,
+              at the base's x) and the top radius, where the cone meets its
+              rounded nose, the sphere tangent to the cone through the tip, the
+              hub height from the base; the hub radius is then the blade root
+              radius, where the table starts, and the blade runs on into the
+              hub, which trims it in the CAD. All held to start with.
               blades Z: the number of blades, 2 to 7 (the parameter file's to
               start with); the clearance check, the propeller tab, the vehicle,
               the CAD's hub sector and the parameter file written follow it. It
@@ -221,8 +228,11 @@ The build button builds the component of its panel (in the vehicle its text
 names it): XCAD (rudder) writes the case to the output folder (XCAD file, section
 table, design and the same set-up JSON), lofts the XCAD file into a solid and
 writes it as STEP. CAD (blade) writes the case (parameter file, XCAD points,
-design and set-up JSON) and the DRDC five-surface blade with the hub sector as
-IGES and STEP. CAD (hull) writes the case (parameter file, design and set-up
+design and set-up JSON) and the CAD the Output box's "CAD writes" names: one
+blade on its 1/Z of the hub (with a cylinder hub the DRDC five-surface blade
+and the hub sector of the MSc pipeline, untrimmed surfaces; with a cone the
+periodic sector as a solid), half the propeller (an even Z) or the whole, as
+solids, IGES and STEP (blade_modify.write_cad). CAD (hull) writes the case (parameter file, design and set-up
 JSON, stations, hydrostatics, section points, check plot) and the STEP. CAD
 (wing, fin) writes the case (parameter file, XCAD file, sections table, design
 and set-up JSON, check plot) to outputs/wing or outputs/fin and the loft of the
@@ -708,6 +718,16 @@ class App:
             ttk.Checkbutton(box, text="half body: the CAD cut at the plane of symmetry (for CFD on half the "
                                       "domain; the Vehicle CAD always uses full bodies)",
                             variable=self.vhalf, command=self.on_half).pack(anchor="w", padx=4, pady=(0, 3))
+        if getattr(ad, "parts", None):                               # the blade: what the CAD writes
+            row = ttk.Frame(box)
+            row.pack(fill="x", padx=4, pady=(0, 3))
+            ttk.Label(row, text="CAD writes").pack(side="left", padx=(0, 4))
+            self.vpart = tk.StringVar(value=ad.settings.get("part", ad.parts[0]))
+            for part in ad.parts:
+                ttk.Radiobutton(row, text=ad.part_label(part, short=True), value=part, variable=self.vpart,
+                                command=self.on_part).pack(side="left", padx=(0, 6))
+            ttk.Label(row, text="(1/Z with a cylinder hub: the DRDC surfaces; else solids)", foreground=INK2,
+                      wraplength=200, justify="left").pack(side="left")
         self.refresh_labels()
 
     def _pick(self, parent, r, c, name, text):
@@ -821,6 +841,28 @@ class App:
         for k, sb in self.sec.items():                              # what is used
             sb.set(f"{s[k]:.3f}" if k == "tip_band" else s[k])
         self.sec_info.configure(text=self.ad.sections_info())
+
+    def on_hub_shape(self):
+        """Blade: the hub as a cylinder or a cone (the adapter's set_hub_shape): new rows in the Blade and hub
+        box."""
+        shape = self.vhub.get()
+        if shape == self.ad.hub_shape:
+            return
+        msg = self.guard(lambda: self.ad.set_hub_shape(shape))
+        self.after_change(structure=True)
+        if msg is not None:
+            self._note = f"hub: {msg}"
+
+    def on_part(self):
+        """Blade: what the CAD button writes (whole, half, one blade on 1/Z of the hub)."""
+        part = self.vpart.get()
+        got = self.guard(lambda: self.ad.set_part(part))
+        if got is None:                                              # refused (half of an odd Z): as it was
+            self.vpart.set(self.ad.settings["part"])
+            return
+        self.say(f"CAD writes {self.ad.part_label()}" + (" (solids)" if part != "sector" or self.ad.hub_shape == "cone"
+                                                          else " (the DRDC surfaces of the MSc pipeline)"))
+        self.refresh_labels()
 
     def on_blades(self, _event=None):
         """Blade: the number of blades from the Blade and hub box."""
@@ -1394,6 +1436,19 @@ def blade_panel(app):
         app.rows.append(VarRow(app, box, r, spec))
     row = ttk.Frame(box)
     row.grid(row=len(specs) + 1, column=0, columnspan=7, sticky="w", padx=2, pady=(4, 2))
+    ttk.Label(row, text="hub").pack(side="left", padx=(2, 4))
+    app.vhub = tk.StringVar(value=ad.hub_shape)
+    for shape in ad.hub_shapes:
+        ttk.Radiobutton(row, text=shape, value=shape, variable=app.vhub, command=app.on_hub_shape).pack(side="left")
+    ttk.Label(row, text=("a cone from the base radius (the larger end, upstream, at hub base x) to the top "
+                         "radius, closed by the sphere tangent to it through the tip, hub height from the base; "
+                         "root r is where the table starts: the blade runs on into the hub, which trims it"
+                         if ad.hub_shape == "cone" else
+                         "a cylinder of the hub radius centred on x = 0 (the blade root ring lies on it); a cone: "
+                         "base and top radii, the base's x and a rounded nose"),
+              foreground=INK2, wraplength=440, justify="left").pack(side="left", padx=6)
+    row = ttk.Frame(box)
+    row.grid(row=len(specs) + 2, column=0, columnspan=7, sticky="w", padx=2, pady=(2, 2))
     ttk.Label(row, text="blades Z").pack(side="left", padx=(2, 4))
     app.nblades = ttk.Spinbox(row, from_=BM.BLADES[0], to=BM.BLADES[1], width=4, command=app.on_blades)
     app.nblades.set(p.blades)

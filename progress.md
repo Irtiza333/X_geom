@@ -427,6 +427,50 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   name is left alone, so the next XCAD or Save set-up does not write over the file loaded unless that is
   the case's own. Save set-up now shows its file in the Set-up box too. Tests: tool 47 with the GUI (24
   without OCC), wing 51, hull 59, files 53, blade 64.
+- Propeller extraction and the conic hub (13 Nov 2026; the user: an extraction script for the propeller "so we
+  can back out the six curves", and a hub of two radii, the base and the smaller top, a height, and the narrow
+  end "capped off with a rounded top" to match the original hub; the CAD to write the whole propeller, half or
+  1/Z at the user's choice). The 5 Oct decision against CAD extraction for blades is reversed.
+  `blade_extraction.py <cad> [--case --out --stations --diameter --x0 --hub BASE TOP HEIGHT X --hub-height
+  --tip-pitch --ref-rr --axis --blade]`: the general form of `bb2/bb2_sections.py`. The axis is found from the
+  faces' edges (a root or tip edge is a circle about it; the candidates x, y, z and the principal axes), faces
+  of revolution about it are the hub's and left out, the blades are faces that touch along their edges, one is
+  cut by cylinders (the root cut moved in until it closes, the tip cut 0.1 % R in), the leading edge is the
+  blunter end (upstream: the axis is turned round if not; turning the other way: a left-handed propeller,
+  mirrored and said so). Per cut, as before: P/D from the nose-tail line, c' = c / 1.005, the shape on para.py's
+  26 stations (`airfoils.shape`), skew and rake of the mid-chord point (x0 the generator line, default the
+  root's reference point); the rows at the root (where the faces start) and r/R 1 continued from the nearest
+  three cuts. Writes the component file (`<case>.txt`: table curves, the globals held, the hub, the section
+  table at --ref-rr and `section_tables` with every cut's), `_cuts.dat`, `_check.png`, and rebuilds the blade
+  from the file to report its distance from the cuts. BB2's propeller (`bb2/outputs/bb2_prop.txt`, from the IGES
+  the user put there, which is prop.igs of 22 Oct: six blades, no hub): 40 cuts, the same numbers as
+  `bb2_blade_params.dat`; rebuilt with the section tables within 0.71 mm of the cuts (rms 0.14), with one table
+  23.5 mm (the shape changes along the span). `blade_sections.py` (SectionsBladeSurface, from bb2_build.py)
+  now serves `blade_modify.blade_surface` whenever the parameters carry `section_tables`, so the tool's views
+  and CAD follow the shapes; one table where the file has none, as before.
+  `prop_hub.py`: `HubProfile(base, top, height, x_base)`: the cone from the base radius (upstream, at the base
+  plane x_base) to the top radius, closed by the sphere tangent to the cone through the tip (height from the
+  base; height tan a - top sin a / (1 + sin a) = base - top fixes the half angle a); the cylinder as before
+  (top None, centred on x = 0). F6's numbers (797.22, 138.04, 1568.75 mm, the base 576.13 mm upstream of the
+  generator line) give bb2_build.py's hub exactly. `BladeDesign` has `hub_base`, `hub_top`, `hub_x` (m; slots
+  `hub_base`, `hub_top`, `hub_x` after the three globals when the hub is a cone, held to start with; the hub
+  radius is then the blade's root radius, where the table starts); the component and parameter files carry
+  `hub_base_m`, `hub_top_m`, `hub_x_m` (all three or none); the blade is extended below its root into the hub
+  (`root_extension`: 2 % of the span under the hub's smallest radius along the root section) and the hub
+  trims it; `design_checks` refuses a hub that does not reach under the whole root. The CAD (`write_cad`,
+  setting `part`: whole, half, sector; `cad_part`): sector with a cylinder hub the DRDC surfaces as before;
+  otherwise solids (`prop_hub.propeller_solid`: the blade closed at its root ring, cut by the hub, Z copies
+  fused with the hub, or the k/Z periodic sector of hub_new's wedge about the footprint's mid-line with the k
+  blades; half needs an even Z); IGES in BRep mode. The tool: a hub radio (cylinder, cone) in the Blade and hub
+  box with the three rows, the hub drawn from its profile in the propeller and Vehicle tabs, "CAD writes" in the
+  Output box (the status line says what it writes; the vehicle builds the whole propeller and takes it as the
+  solid). BB2 from `bb2_prop.txt` on the F6 hub: the sector 3.37671e8 mm^3 (bb2_blade_sector 3.376802e8), 10
+  faces, the footprint 18.8 deg from the sector's edges; half 1.013013e9, 21 faces; whole 2.026021e9
+  (bb2_prop6 2.026082e9), 33 faces; all valid, read back from IGES as one solid (`bb2/outputs/bb2_prop_sector`,
+  `_half`, `_whole` .step and .iges; `bb2_prop_parts.png`). Tests: blade 78 with the GUI and the CAD (66 here;
+  the hub maths, the design and files, the parts, the adapter and window, the cone sector, the extraction of
+  the MSc blade's DRDC CAD: its curves within 1.1 % of their ranges below r/R 0.9), tool 47, hull 59, wing 51,
+  files 53. `blade_vary.py` (HUB_SLOTS) is in Prop_hull too, as the other shared files.
 
 ## Next steps
 
@@ -435,6 +479,8 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
 - Vehicle: the placement is not loaded back yet (the set-up JSON records it); blended wing bodies later.
 - Review the blade in the tool: default segments, orders and free variables (`blade_control.py`); camber and
   rake fit poorly as 2 segments.
+- Propeller: `Initial_sampling.py` and the pipeline still build the cylinder hub's DRDC files; a conic hub there
+  when a campaign needs it. The BB2 assembly (hull, bb2_prop.txt, stern planes) in the Vehicle tab.
 - Input files, steps 3 to 5: the planar rudder (the wind-tunnel rudder fitted into a component file; the
   modified-below-H model as `rudder-h`), the assembly file in the Vehicle tab (Load and Save assembly), then
   `Initial_sampling.py` and the infill reading the assembly (claude/xgeom-file-formats.md).

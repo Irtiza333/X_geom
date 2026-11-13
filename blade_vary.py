@@ -18,7 +18,9 @@ from dataclasses import dataclass
 
 CURVES = ("pitch", "chord", "thickness", "camber", "skew", "rake")   # the radial distributions
 GLOBAL_SLOTS = ("radius", "hub_radius", "hub_height")             # the blade's own design variables, m
-VARY_NAMES = CURVES + GLOBAL_SLOTS                                 # the parameters a '# vary' line names
+HUB_SLOTS = ("hub_base", "hub_top", "hub_x")                      # a conic hub's (prop_hub.py): its base and top
+                                                                  # radii and the x of its base plane, m
+VARY_NAMES = CURVES + GLOBAL_SLOTS + HUB_SLOTS                     # the parameters a '# vary' line names
 
 
 @dataclass

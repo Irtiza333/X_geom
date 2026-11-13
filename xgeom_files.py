@@ -81,10 +81,11 @@ ASSEMBLY = "# XGeom assembly"
 PLANAR = ("rudder", "fin", "wing")
 KINDS = ("blade",) + PLANAR + ("hull",)
 _PLANAR_GEOMETRY = ("span_mm", "section", "ref_xc", "camber_xc")
-GEOMETRY = {"blade": ("diameter_m", "blades", "root_r", "hub_height_m", "section", "section_tables"),
+GEOMETRY = {"blade": ("diameter_m", "blades", "root_r", "hub_height_m", "hub_base_m", "hub_top_m", "hub_x_m",
+                      "section", "section_tables"),
             **{k: _PLANAR_GEOMETRY for k in PLANAR},
             "hull": ("nose_m", "middle_m", "tail_m", "cap_m", "axisymmetric")}
-SETTINGS = {"blade": ("sections", "tip_band", "tip_sections", "clearance_mm", "hub"),
+SETTINGS = {"blade": ("sections", "tip_band", "tip_sections", "clearance_mm", "hub", "part"),
             **{k: ("sections", "change_points", "half") for k in PLANAR},
             "hull": ("half",)}
 ALIASES = {"blade": {"section_table": "section", "airfoil": "section"},          # old files' keys, read as these
@@ -269,6 +270,9 @@ def typed_settings(comp, types):
         if types[k] is bool:
             out[k] = as_bool(text, where)
             continue
+        if types[k] is str:
+            out[k] = text.strip()
+            continue
         try:
             v = float(text)
         except ValueError:
@@ -287,7 +291,7 @@ def settings_text(settings, types):
     for k, t in types.items():
         if k in (settings or {}) and settings[k] is not None:
             v = settings[k]
-            out[k] = yn(v) if t is bool else str(int(v)) if t is int else num(v)
+            out[k] = yn(v) if t is bool else str(int(v)) if t is int else str(v) if t is str else num(v)
     return out
 
 

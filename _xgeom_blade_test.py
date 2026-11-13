@@ -28,6 +28,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
@@ -148,7 +149,7 @@ def test_vary(tmp):
                           alone, p.path], capture_output=True, text=True)
     check("blade_vary.py alone (standard library only) reads them; blade_modify's names and reader are its own",
           [run.stdout.strip() == "pitch chord radius", BM.read_vary is BV.read_vary,
-           BM.VARY_NAMES == BM.CURVES + BM.GLOBAL_SLOTS], [1, 1, 1], 0)
+           BM.VARY_NAMES == BM.CURVES + BM.GLOBAL_SLOTS + BM.HUB_SLOTS], [1, 1, 1], 0)
     design, _ = BM.fit_design(p, segments={"chord": 1, "thickness": 1})
     kept = [c for c in BM.CURVES if c not in ("pitch", "chord")]
     rr = np.linspace(design.r0, design.r1, 2001)
@@ -387,6 +388,111 @@ def test_space(tmp):
            "radius" in s5.fixed, len(s5) - 12], [0, 0, 0, 1, 0], 1e-12)
 
 
+def test_hub(tmp, table):
+    print("\nthe hub (prop_hub.py): the cone with its rounded nose, the design, the files, the CAD part")
+    import dataclasses
+    from prop_hub import HubProfile
+    S = 18.348                                              # BB2's drawing F6, model scale mm to full scale
+    hp = HubProfile(0.5 * 86.9 * S, 138.0353, 85.5 * S, x_base=-31.4 * S)
+    k = (0.5 * 86.9 * S - 0.5 * 45.9 * S) / (46.0 * S)       # the drawing's cone: through the split radius
+    sin_a = k / np.hypot(1.0, k)
+    rho = (0.5 * 86.9 * S / k - 85.5 * S) * sin_a / (1.0 - sin_a)          # bb2_build's sphere through the tip
+    x = np.array([hp.x_base, hp.x_base + 46.0 * S, hp.x_tangent, 0.5 * (hp.x_tangent + hp.x_tip), hp.x_tip])
+    check("BB2's F6 hub (base 797.2, top 138.0, 1568.8 mm): the drawing's cone (its radius at the split) and "
+          "bb2_build.py's nose sphere, tangent to the cone through the tip; the radius along it",
+          [hp.slope / k, hp.rho / rho, hp.radius(x[1]) / (0.5 * 45.9 * S), hp.radius(x[0]) / hp.base,
+           hp.radius(x[2]) / hp.top, hp.radius(x[4]), hp.radius(x[3]) < hp.top, hp.radius(hp.x_tip + 1.0),
+           hp.outline(60)[-1, 1], hp.scaled(0.001).rho / rho * 1000.0], [1, 1, 1, 1, 1, 0, 1, 0, 0, 1], 1e-6)
+    cyl = HubProfile(0.126, None, 0.625)
+    bad = [refused(HubProfile, 100.0, 120.0, 300.0), refused(HubProfile, 0.0, None, 1.0),
+           refused(HubProfile, 100.0, 50.0, -1.0)]
+    check("a cylinder centred on x = 0 (its radius inside, 0 outside); refused: a top radius above the base, no "
+          "radius, no height", [cyl.x_base, cyl.x_tip, cyl.radius(0.0), cyl.radius(0.4), len(cyl.outline())] + bad,
+          [-0.3125, 0.3125, 0.126, 0.0, 4, 1, 1, 1], 1e-12)
+
+    p = BM.read_params(msc_file(tmp, table))
+    d, _ = BM.fit_design(p, segments=ONE)
+    dc = d.with_hub("cone", base=0.2, top=0.07, x=-0.4)
+    ext = BM.root_extension(dc, p)
+    a, b = BM.root_extent(dc, p)
+    a2, b2 = BM.root_extent(dc, p, r=(dc.hub_radius - ext) / dc.radius)
+    r_min = dc.hub.min_radius(a2, b2)
+    check("a design with the cone: the slots hub_base, hub_top, hub_x after the three globals; the blade root "
+          "extended into the hub to the margin under its smallest radius there (at the extended section's own "
+          "axial extent); no problem; the cylinder again drops them",
+          [BM.BladeSpace(p, dc).all_names[:6] == list(BM.GLOBAL_SLOTS + BM.HUB_SLOTS), dc.hub_shape == "cone",
+           d.hub_shape == "cylinder", ext > 0.0, (dc.hub_radius - ext) < r_min, r_min - (dc.hub_radius - ext),
+           b2 - a2 > 0.0 and (a2, b2) != (a, b), len(BM.design_checks(dc, p)[0]), BM.root_extension(d, p),
+           len(dc.with_hub("cylinder").hub_slots())],
+          [1, 1, 1, 1, 1, max(BM.ROOT_MARGIN * (dc.radius - dc.hub_radius), BM.ROOT_MARGIN_M), 1, 0, 0, 3], 1e-6)
+    short = d.with_hub("cone", base=0.126, top=0.05, x=-0.1)       # the base plane under the blade root
+    prob = BM.design_checks(short, p)[0]
+    check("a cone that does not reach under the whole root: a problem (no CAD)",
+          [len(prob), "does not reach under" in prob[0]], [1, 1], 0)
+    sp = BM.BladeSpace(p, dc, free=("hub_top", "hub_x"))
+    vals = sp.values(dc)
+    vals.update(hub_top=0.05, hub_x=-0.35)
+    d2 = sp.design_of(vals)
+    rec = BM.space_record(sp, d2, p)
+    s3, d3 = BM.BladeSpace.from_dict(p, rec["space"])
+    check("hub_top and hub_x free: the design from the vector, the set-up record read back with the cone",
+          [sp.names == ["hub_top", "hub_x"], d2.hub_top, d2.hub_x, d2.hub_base, d3.hub_top, d3.hub_x, d3.hub_base,
+           s3.names == sp.names], [1, 0.05, -0.35, 0.2, 0.05, -0.35, 0.2, 1], 1e-12)
+    comp = os.path.join(tmp, "cone.txt")
+    BM.write_component(comp, p, d2, sp, {"part": "half", "sections": 40})
+    ld = BM.load_component(comp)
+    text = open(comp).read()
+    dat = os.path.join(tmp, "cone.dat")
+    BM.write_params(dat, BM.design_params(ld.design, ld.params))
+    pd = BM.read_params(dat)
+    lines = [l for l in open(dat).read().splitlines() if not l.startswith("# hub_x_m")]
+    with open(os.path.join(tmp, "two.dat"), "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+    check("the component file: hub_base_m, hub_top_m, hub_x_m and the var lines; the part setting; read back "
+          "exactly; a parameter file (.dat) carries the keys too; two of the three keys refused",
+          ["# hub_top_m     0.05" in text, "# var    hub_x" in text, ld.settings["part"] == "half",
+           ld.design.hub_top, ld.design.hub_x, ld.design.hub_base, ld.space.names == sp.names,
+           pd.hub_top, pd.hub_x, pd.hub_cone, refused(BM.read_params, os.path.join(tmp, "two.dat"))],
+          [1, 1, 1, 0.05, -0.35, 0.2, 1, 0.05, -0.35, 1, 1], 1e-12)
+    parts = [BM.cad_part({"part": s}, 6) for s in ("whole", "half", "sector")] + [BM.cad_part({}, 6)]
+    check("cad_part: whole (6 blades), half (3), sector (1), the default sector; half of 5 blades refused, an "
+          "unknown part refused",
+          [parts[0] == ("whole", 6), parts[1] == ("half", 3), parts[2] == ("sector", 1), parts[3] == ("sector", 1),
+           refused(BM.cad_part, {"part": "half"}, 5), refused(BM.cad_part, {"part": "all"}, 6)], [1] * 6, 0)
+    rec = BM.design_record(d2, p)["globals"]
+    check("design.json's globals: the hub's shape, radii, base x and the root extension",
+          [rec["hub_shape"] == "cone", rec["hub_top_m"], rec["hub_x_m"], rec["root_extension_m"] > 0], [1, 0.05, -0.35, 1],
+          1e-12)
+
+    # the section shape per r/R (blade_sections.py): the same table at three radii is the plain surface
+    from blade_sections import SectionsBladeSurface, read_tables
+    tab = open(table).read()
+    tables = os.path.join(tmp, "tables.dat")
+    with open(tables, "w") as fh:
+        fh.write("# three copies of one table\n" + "".join(f"# r/R {r}\n{tab}" for r in (0.2, 0.6, 1.0)))
+    pt = dataclasses.replace(p, section_tables=tables)
+    bs0, bs1 = BM.blade_surface(d, p), BM.blade_surface(d, pt)
+    rng = np.random.default_rng(3)
+    xi, eta = rng.random(200), rng.random(200)
+    diff = np.abs(bs1.b(xi, eta) - bs0.b(xi, eta)).max()
+    comp2 = os.path.join(tmp, "tables.txt")
+    BM.write_component(comp2, pt, d, BM.BladeSpace(pt, d), None)
+    ld2 = BM.load_component(comp2)
+    check("section tables: SectionsBladeSurface with one shape at three radii is BladeSurface; the component file "
+          "names the file and reads it back; a missing file refused",
+          [isinstance(bs1, SectionsBladeSurface), diff, len(read_tables(tables)), "section_tables tables.dat" in
+           open(comp2).read(), os.path.basename(ld2.params.tables_path()) == "tables.dat",
+           refused(BM.load_component, _without_tables(comp2, tmp))], [1, 0, 3, 1, 1, 1], 1e-7)
+
+
+def _without_tables(comp, tmp):
+    """A copy of a component file whose section tables file does not exist."""
+    path = os.path.join(tmp, "no_tables.txt")
+    with open(comp) as src, open(path, "w") as dst:
+        dst.write(src.read().replace("section_tables tables.dat", "section_tables gone.dat"))
+    return path
+
+
 def test_geometry(tmp, table):
     print("\nthe geometry (MSc code: para.py, BladeSurface)")
     if not os.path.exists(table):
@@ -556,6 +662,31 @@ def test_adapter(tmp, table):
           [len(pvw["problems"]), len(pvw["warnings"]), "interfere" in pvw["warnings"][0], len(res["problems"]),
            len(rec["warnings"]), len(strict)], [0, 1, 1, 0, 1, 1], 0)
     ad.settings["clearance_mm"] = BM.CLEARANCE_MM
+    msg = ad.set_hub_shape("cone")
+    rows = [r.name for r in ad.global_rows()]
+    pv = ad.preview()
+    ad.set_bounds("hub_x", -0.9, 0.1)
+    ad.set("hub_x", -0.2)
+    vs = ad.vary_state()
+    held = [ad.is_free(n) for n in BM.HUB_SLOTS]
+    hub_x = ad.get("hub_x")
+    part = ad.set_part("whole")
+    bad_part = refused(ad.set_part, "half")                  # 7 blades: no half
+    ad.set_blades(6)
+    half = ad.set_part("half")
+    comp = ad.save_file(os.path.join(tmp, "cone_gui.txt"))
+    ad2 = XBL.BladeAdapter(params=comp)
+    ad.set_hub_shape("cylinder")
+    check("the adapter: the hub a cone (six global rows, its variables held, a negative hub_x allowed, vary lines "
+          "N for it), the preview's hub outline, CAD part whole, half refused with 7 blades and allowed with 6; "
+          "the set-up saved and read back with the cone and the part; a cylinder again",
+          [msg.startswith("cone"), rows == list(BM.GLOBAL_SLOTS + BM.HUB_SLOTS), pv["hub_shape"] == "cone",
+           pv["hub_outline"].shape[1], any(held), hub_x, vs["hub_top"].on, part == "whole", bad_part,
+           half == "half", ad2.design.hub_shape == "cone", ad2.design.hub_x, ad2.settings["part"] == "half",
+           ad2.n_free()[1] - ad.n_free()[1], ad.hub_shape == "cylinder", len(ad.global_rows())],
+          [1, 1, 1, 2, 0, -0.2, 0, 1, 1, 1, 1, -0.2, 1, 3, 1, 3], 1e-12)
+    ad.set_blades(5)
+    ad.set_part("sector")
 
 
 def test_adapter_vary(tmp, table):
@@ -699,6 +830,28 @@ def test_gui(tmp, table):
               "its 10; 'file' again (the status bar says so)",
               [texts["skew"].endswith("(file)"), texts["pitch"].endswith("(file)"), seg0, rows0, rows1, len(app.rows),
                note.startswith("skew: as the parameter file has it")], [1, 0, 0, 3, 13, 3, 1], 0)
+        app.vhub.set("cone")
+        app.on_hub_shape()
+        rows_cone = len(app.rows)
+        app.book.select(1)
+        root.update()
+        app.update_views()
+        root.update()
+        n_hub = len(app.view3.col["hub"].get_segments())
+        app.vpart.set("half")                                  # 5 blades: refused, the radio back to sector
+        app.on_part()
+        part5, said5 = app.vpart.get(), app.status.cget("text")
+        app.nblades.set(6)
+        app.on_blades()
+        app.vpart.set("half")
+        app.on_part()
+        part6 = app.ad.settings["part"]
+        app.vhub.set("cylinder")
+        app.on_hub_shape()
+        check("the window: hub cone from the radio (3 more rows, the cone drawn in the propeller tab), CAD writes "
+              "half refused with 5 blades (said in red) and taken with 6; cylinder again",
+              [rows_cone - rows0, n_hub > 14, part5 == "sector", "even number of blades" in said5, part6 == "half",
+               app.ad.hub_shape == "cylinder", len(app.rows) - rows0], [3, 1, 1, 1, 1, 1, 0], 0)
     finally:
         root.destroy()
 
@@ -740,6 +893,42 @@ def test_cad(tmp, table):
           [os.path.exists(out["cad_paths"]["iges"]), n, BRepCheck_Analyzer(shape).IsValid(),
            not any(f.startswith("x_cad_") for f in os.listdir(tmp)), (x1 - x0) / 800.0], [1, 8, 1, 1, 1], 2e-3)
 
+    # the six curves backed out of that CAD (blade_extraction.py): the design's own, para.py's model
+    import blade_extraction as BX
+    t0 = time.time()
+    res = BX.extract(out["cad_paths"]["step"], "back", tmp, stations_n=24, log=lambda *a, **k: None)
+    rr = res["table"][1:-1, 0]                              # the cuts' rows
+    got = {c: res["table"][1:-1, i + 1] for i, c in enumerate(BM.CURVES)}
+    want = design.values(rr)
+    inner = rr < 0.9                                        # below the tip taper and closure
+    err = {c: float(np.abs(got[c] - want[c])[inner].max() / max(np.ptp(want[c]), 1e-9)) for c in BM.CURVES}
+    print(f"       extracted in {time.time() - t0:.0f} s: {res['blades']} blades, R {res['R_mm']:.1f} mm; the "
+          f"curves within " + ", ".join(f"{c} {100 * e:.2f} %" for c, e in err.items()) + " of their ranges below "
+          f"r/R 0.9; the rebuilt blade within {res['deviation'][0, :, 0].max():.3f} mm of the cuts")
+    check("blade_extraction on the DRDC CAD: its one blade found, the hub sector and caps left out, the axis "
+          "turned round (X_CAD's x runs downstream), R and the root as the design's; pitch, chord, thickness, "
+          "camber, skew and rake within 1.5 % of their ranges below r/R 0.9 (the distributions para.py built it "
+          "from); the rebuilt blade within 1 mm of the cuts (the blunt TE's cap)",
+          [res["blades"], res["R_mm"] / 700.0, res["table"][0, 0] / design.r0, res["flipped"], res["mirrored"],
+           max(err.values()) < 0.015, res["deviation"][0, :, 0].max() < 1.0,
+           os.path.exists(res["paths"]["component"])], [1, 1, 1, 1, 0, 1, 1, 1], 2e-3)
+
+    # a conic hub: one blade on its 1/Z of the hub as a solid (the blade extended into the hub and trimmed)
+    import prop_hub as PH
+    import vehicle_cad as VC
+    dc = design.with_hub("cone", base=0.2, top=0.07, x=-0.4)
+    t0 = time.time()
+    out2 = BM.write_cad(tmp, "cone", dc, p, {"part": "sector"})
+    back = PH._xl().read_iges(out2["cad_paths"]["iges"])
+    n_solids, valid, vol = VC.solid_report(back)
+    print(f"       the cone sector in {time.time() - t0:.0f} s: {out2['faces']} faces, {vol / 1e6:.3f} dm^3, the "
+          f"footprint {out2['footprint_gap_deg']:.1f} deg from the sector's edges")
+    check("the cone hub, one blade on 1/5 of the hub: a valid solid, its IGES read back as one solid of the same "
+          "volume; the root ring below the hub's radius there; the footprint clear of the sector's edges",
+          [out2["part"] == "sector", out2["valid"], n_solids, valid, vol / out2["volume_mm3"],
+           out2["root_ring_mm"] < 1000.0 * dc.hub.min_radius(*BM.root_extent(dc, p)),
+           out2["footprint_gap_deg"] > 1.0], [1, 1, 1, 1, 1, 1, 1], 1e-6)
+
 
 def main():
     print("blade self-check")
@@ -754,6 +943,7 @@ def main():
         test_sampling(tmp)
         test_curves(tmp)
         test_space(tmp)
+        test_hub(tmp, table)
         if test_geometry(tmp, table):
             test_adapter(tmp, table)
             test_adapter_vary(tmp, table)

@@ -127,7 +127,13 @@ def blade_part(ad, every=BLADE_EVERY):
     import blade_modify as BM
     d, p = ad.design, ad.params
     out = {"design": d, "blades": int(p.blades), "diameter": float(d.diameter),
-           "hub": (float(d.hub_radius), float(d.hub_height)), "sections": [], "problems": [], "warnings": []}
+           "hub": (float(d.hub_radius), float(d.hub_height)), "hub_outline": d.hub.outline(),
+           "hub_record": {"shape": d.hub_shape, "base_mm": 1000.0 * float(d.hub.base),
+                          "top_mm": None if d.hub.top is None else 1000.0 * float(d.hub.top),
+                          "height_mm": 1000.0 * float(d.hub_height), "x_base_mm": 1000.0 * float(d.hub.x_base),
+                          "root_radius_mm": 1000.0 * float(d.hub_radius),
+                          "root_extension_mm": 1000.0 * BM.root_extension(d, p)},
+           "sections": [], "problems": [], "warnings": []}
     try:
         st = ad.stations()
         st = np.unique(np.r_[st[::every], st[-1]])
@@ -505,13 +511,12 @@ def assemble(parts, pl):
         for k in range(b["blades"]):
             turn = _turn_x(2.0 * np.pi * k / b["blades"])
             segs["blades"] += [s * sec @ turn + shift for sec in b["sections"]]
-        hr, hh = s * b["hub"][0], s * b["hub"][1]
-        t = np.linspace(0.0, 2.0 * np.pi, 73)
-        for x in (x0 - 0.5 * hh, x0 + 0.5 * hh):
-            segs["hub"].append(np.column_stack((np.full_like(t, x), hr * np.sin(t), hr * np.cos(t))))
-        for a in np.linspace(0.0, 2.0 * np.pi, 12, endpoint=False):
-            segs["hub"].append(np.array([[x0 - 0.5 * hh, hr * np.sin(a), hr * np.cos(a)],
-                                         [x0 + 0.5 * hh, hr * np.sin(a), hr * np.cos(a)]]))
+        from xgeom_blade import hub_lines
+        outline = b.get("hub_outline")
+        if outline is None:                                           # a part with the hub's radius and height only
+            from prop_hub import HubProfile
+            outline = HubProfile(b["hub"][0], None, b["hub"][1]).outline()
+        segs["hub"] += [s * seg + shift for seg in hub_lines(outline, n_rings=5)]
         info.update(prop_x=x0, prop_scale=s, prop_d=pl.prop_d, design_d=b["diameter"], blades=b["blades"])
     ru = parts.get("rudder")
     if ru and pl.rudders > 0:

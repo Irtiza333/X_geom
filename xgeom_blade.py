@@ -39,6 +39,17 @@ setting, not in the design vector). Blades closer than the clearance (they
 interfere) are a warning, not a problem: the CAD is still built (the hub radius
 moves the root section, which may make room for them).
 
+The hub (13 Nov 2026; prop_hub.py): a cylinder of the hub radius centred on
+x = 0 (the DRDC hub sector), or a cone with a rounded nose, set_hub_shape:
+its base radius, top radius and base x are variables like the hub height (held
+to start with; defaults when switched on: the hub radius, half of it, the hub
+centred on x = 0), and the hub radius is then the blade's root radius, where
+the table starts; the blade is extended into the hub and trimmed by it in the
+CAD. set_part chooses what the CAD button writes (blade_modify.PARTS): the
+whole propeller, half of it (an even Z) or one blade on its 1/Z of the hub (the
+default; with the cylinder the DRDC files of the MSc pipeline, otherwise
+solids). The vehicle builds the whole propeller.
+
 The adapter has the methods of xgeom_rudder.RudderAdapter that the tool uses.
 """
 
@@ -57,6 +68,10 @@ from xgeom_common import BLUE, GREY, GRID, INK2, RED, SECTION_COLORS, Row, fit_b
 MAX_ORDER = 12
 VIEW_FRACTIONS = (0.0, 0.2, 0.4, 0.6, 0.8, 0.95)   # sections in the Design tab's 3D view, fractions of the span
 GLOBAL_ROWS = (("radius", "radius R"), ("hub_radius", "hub radius"), ("hub_height", "hub height"))
+CONE_ROWS = (("radius", "radius R"), ("hub_radius", "root r"), ("hub_height", "hub height"),
+             ("hub_base", "hub base r"), ("hub_top", "hub top r"), ("hub_x", "hub base x"))
+PART_LABELS = {"whole": "the whole propeller", "half": "half of it", "sector": "one blade on 1/Z of the hub"}
+PART_SHORT = {"whole": "whole propeller", "half": "half", "sector": "1 blade on 1/Z hub"}
 TWO_SEGMENT_ROWS = (("v1", "P1 value (root)"), ("d1", "P2=P3 d1"), ("w23", "P2=P3 weight"), ("u4", "P4 position"),
                     ("v4", "P4 value"), ("d2", "P5=P6 d2"), ("w56", "P5=P6 weight"), ("v7", "P7 value (tip)"))
 TWO_SEGMENT_POINT = {"v1": 0, "d1": 1, "w23": 1, "u4": 3, "v4": 3, "d2": 4, "w56": 4, "v7": 6}   # control point
@@ -67,12 +82,15 @@ class BladeAdapter:
     segment_choice = True         # each curve 1 or 2 segments, or the file's own (0)
     segment_options = (0, 1, 2)   # 0: as the parameter file has it ("file")
     build_label = "CAD"
+    parts = BM.PARTS              # what the CAD writes: the tool offers the choice (set_part)
+    hub_shapes = ("cylinder", "cone")
 
     def __init__(self, params=None):
         import blade_control as BC
         s = BC.settings
         self.settings = {"clearance_mm": float(s.clearance_mm), "sections": int(s.sections),
                          "tip_band": float(s.tip_band), "tip_sections": int(s.tip_sections), "hub": bool(s.hub),
+                         "part": str(getattr(s, "part", "sector")),
                          "plot": bool(s.plot), "orders": dict(BC.ORDERS), "segments": dict(BC.SEGMENTS),
                          "free": tuple(BC.FREE)}
         self.out_dir = BC.OUT_DIR
@@ -115,10 +133,13 @@ class BladeAdapter:
         """Vary lines for the design as it stands: Y for a curve or global with a free variable (its range when
         all its values share one), N for the others."""
         out = {}
+        glob = self.design.hub_slots()
         for n in BM.VARY_NAMES:
-            slots = [n] if n in BM.GLOBAL_SLOTS else [s for s in self.space.all_names if s.startswith(n + ".")]
+            if n in BM.HUB_SLOTS and n not in glob:
+                continue
+            slots = [n] if n in glob else [s for s in self.space.all_names if s.startswith(n + ".")]
             on = any(self.meta[s]["free"] for s in slots)
-            vals = slots if n in BM.GLOBAL_SLOTS else [s for s in slots if s.split(".")[1][0] == "v"]
+            vals = slots if n in glob else [s for s in slots if s.split(".")[1][0] == "v"]
             rng = {(self.meta[s]["lo"], self.meta[s]["hi"]) for s in vals}
             lo, hi = next(iter(rng)) if on and len(rng) == 1 else (None, None)
             out[n] = BM.Vary(on, lo, hi)
@@ -174,7 +195,7 @@ class BladeAdapter:
         if not lo < hi:
             raise ValueError("the lower bound must be below the upper one")
         key = name.split(".")[-1]
-        if name in BM.GLOBAL_SLOTS and lo <= 0.0:
+        if name in BM.GLOBAL_SLOTS + ("hub_base", "hub_top") and lo <= 0.0:
             raise ValueError("a radius or height is positive")
         if "." in name and key[0] == "d" and not 0.0 <= lo < hi <= 1.0:
             raise ValueError("a position fraction d lies in [0, 1]")
@@ -255,8 +276,43 @@ class BladeAdapter:
 
     # ---------------------------------------------------------------- rows
     def global_rows(self):
-        """Rows for the blade radius, hub radius and hub height (m)."""
-        return [Row("var", f"{label} (m)", name, 4) for name, label in GLOBAL_ROWS]
+        """Rows for the blade radius, hub radius and hub height (m); a conic hub: its base and top radii and
+        base x too (the hub radius then the blade root's)."""
+        rows = CONE_ROWS if self.design.hub_cone else GLOBAL_ROWS
+        return [Row("var", f"{label} (m)", name, 4) for name, label in rows]
+
+    @property
+    def hub_shape(self):
+        return self.design.hub_shape
+
+    def set_hub_shape(self, shape):
+        """The hub as a cylinder or a cone (blade_modify.BladeDesign.with_hub: the cone's base radius the hub
+        radius, its top radius half of it, centred on x = 0, to start with); its variables start held. Returns
+        the hub's description."""
+        shape = str(shape).strip().lower()
+        if shape not in self.hub_shapes:
+            raise ValueError(f"a hub is one of {', '.join(self.hub_shapes)}, not '{shape}'")
+        if shape == self.design.hub_shape:
+            return self.design.hub.describe()
+        self.design = self.design.with_hub(shape)
+        for n in BM.HUB_SLOTS:
+            self.meta.pop(n, None)
+        self._rebuild()
+        for n in BM.HUB_SLOTS:
+            if n in self.meta:
+                self.meta[n]["free"] = False
+        return self.design.hub.describe()
+
+    def set_part(self, part):
+        """What the CAD button writes (blade_modify.cad_part): whole, half or sector; refused when half does not
+        tile the propeller (an odd Z)."""
+        part, _ = BM.cad_part({"part": part}, self.params.blades)
+        self.settings["part"] = part
+        return part
+
+    def part_label(self, part=None, short=False):
+        labels = PART_SHORT if short else PART_LABELS
+        return labels[part or self.settings["part"]].replace("1/Z", f"1/{self.params.blades}")
 
     def curve_rows(self, curve):
         """Rows for the variables of one curve, from the root to the tip (the file's own: none)."""
@@ -285,7 +341,14 @@ class BladeAdapter:
         if name == "hub_radius":
             return f"r/R {d.r0:.3f}"
         if name == "hub_height":
-            return f"x ±{0.5 * d.hub_height:.3f}"
+            hp = d.hub
+            return f"x {hp.x_base:.3f} to {hp.x_tip:.3f}" if d.hub_cone else f"x ±{0.5 * d.hub_height:.3f}"
+        if name == "hub_base":
+            return f"x {d.hub.x_base:.3f}"
+        if name == "hub_top":
+            return f"x {d.hub.x_tangent:.3f}"
+        if name == "hub_x":
+            return f"tip x {d.hub.x_tip:.3f}"
         curve, key = name.split(".")
         k = TWO_SEGMENT_POINT[key] if self.segments(curve) == 2 else int(key[1:])
         return f"r/R {d.ctrl(curve)[k, 0]:.3f}"
@@ -310,9 +373,11 @@ class BladeAdapter:
         n, m = self.n_free()
         d = self.design
         kept = [c for c in BM.CURVES if d.curves[c].segments == 0]
-        return (f"{n} of {m} variables free; R {d.radius:.4g} m, hub radius {d.hub_radius:.4g} m (r/R {d.r0:.3f}), "
-                f"hub height {d.hub_height:.4g} m, {self.params.blades} blades"
-                + (f"; as the file (vary N): {', '.join(kept)}" if kept else ""))
+        hub = (f"hub a cone, base radius {d.hub_base:.4g} m, top {d.hub_top:.4g} m, {d.hub_height:.4g} m to the tip "
+               f"from x {d.hub_x:.4g} m" if d.hub_cone else f"hub height {d.hub_height:.4g} m")
+        return (f"{n} of {m} variables free; R {d.radius:.4g} m, {'blade root' if d.hub_cone else 'hub'} radius "
+                f"{d.hub_radius:.4g} m (r/R {d.r0:.3f}), {hub}, {self.params.blades} blades; CAD: "
+                f"{self.part_label()}" + (f"; as the file (vary N): {', '.join(kept)}" if kept else ""))
 
     def pick_note(self, curve):
         """The picker's note: the file's own curve, or no free variable."""
@@ -397,7 +462,8 @@ class BladeAdapter:
         file_rr = np.linspace(p.root_r, p.r[-1], 200)
         out = {"design": d, "rr": rr, "curves": {c: d.prop(c)(rr) for c in BM.CURVES}, "file_rr": file_rr,
                "file": {c: p.spline(c)(file_rr) for c in BM.CURVES}, "rows": p.rows(), "radii": self._view_radii(),
-               "hub": (1000.0 * d.hub_radius, 1000.0 * d.hub_height)}
+               "hub": (1000.0 * d.hub_radius, 1000.0 * d.hub_height), "hub_outline": 1000.0 * d.hub.outline(),
+               "hub_shape": d.hub_shape}
         warnings = []
         try:
             pts, _ = BM.blade_points(d, p)
@@ -408,7 +474,7 @@ class BladeAdapter:
             problems = [f"{type(exc).__name__}: {exc}"]
         try:
             bs = BM.blade_surface(d, p)
-            eta = np.linspace(bs.eta_min, 1.0, 120)
+            eta = np.linspace(float(bs.eta_of_r(d.r0)), 1.0, 120)       # from the design root (not the extension)
             xi_m = _mid_chord_xi(bs)
             mid = 0.5 * (bs.b(np.full_like(eta, xi_m), eta) + bs.b(np.full_like(eta, 1.0 - xi_m), eta))
             out.update(sections=self._sections(bs), le=bs.b(np.full_like(eta, 0.5), eta) * 1000.0,
@@ -447,7 +513,7 @@ class BladeAdapter:
         """The set-up as plain data (blade_modify.load_blade_space reads it back)."""
         return BM.space_record(self.free_space(), self.design, self.params, self._case_settings())
 
-    CASE_KEYS = ("clearance_mm", "sections", "tip_band", "tip_sections", "hub")
+    CASE_KEYS = ("clearance_mm", "sections", "tip_band", "tip_sections", "hub", "part")
 
     def _case_settings(self):
         return {k: self.settings[k] for k in self.CASE_KEYS}
@@ -479,13 +545,18 @@ class BladeAdapter:
                 self.settings[k] = rec["settings"][k]
         self._rebuild()
 
-    def build_task(self, case, half=None):
+    def build_task(self, case, half=None, part=None):
         """A function that writes the case as the design is now (blade_modify.
         write_case: the component file, the XCAD points, the design, the check
-        plot) and then the CAD (<case>.iges, <case>.step). half is ignored (a
-        blade has no half body); the vehicle passes it to every component. The
-        state is copied here, so it can run off the GUI thread."""
+        plot) and then the CAD (<case>.iges, <case>.step: the part of the
+        settings, or part). half is ignored (a blade has no half body); the
+        vehicle passes it to every component, and part 'whole' (half=False).
+        The state is copied here, so it can run off the GUI thread."""
         design, params, space, st = self.design.copy(), self.params, self.free_space(), self._case_settings()
+        if part is not None:
+            st["part"] = BM.cad_part({"part": part}, params.blades)[0]
+        elif half is False:
+            st["part"] = "whole"
         out_dir, plot, extra = self.out_dir, self.settings["plot"], dict(self.extra)
 
         def run():
@@ -503,13 +574,45 @@ class BladeAdapter:
                 return out
             cad = BM.write_cad(out_dir, case, design, params, st)
             res["paths"].update(cad["cad_paths"])
-            out["report"].append(f"  CAD: grids {cad['grid_seconds']:.1f} s, faces and IGES {cad['cad_seconds']:.1f} s:"
-                                 f" {cad['cad_paths']['iges']}, {cad['cad_paths']['step']}")
+            what = PART_LABELS[cad["part"]].replace("1/Z", f"1/{params.blades}")
+            out["report"].append(f"  CAD ({what}; hub {cad['hub']}): grids {cad['grid_seconds']:.1f} s, faces and "
+                                 f"IGES {cad['cad_seconds']:.1f} s: {cad['cad_paths']['iges']}, "
+                                 f"{cad['cad_paths']['step']}")
+            if "valid" in cad:
+                out["report"].append(f"  solid {'valid' if cad['valid'] else 'NOT valid'}, "
+                                     f"{cad['volume_mm3'] / 1e3:.2f} cm^3, {cad['faces']} faces"
+                                     + (f", the root footprint {cad['footprint_gap_deg']:.1f} deg from the sector's "
+                                        f"edges" if "footprint_gap_deg" in cad else ""))
             out.update(view=cad["cad_paths"]["step"],
-                       message=f"{files}, {os.path.basename(cad['cad_paths']['iges'])} and {case}.step; "
-                               f"OCC viewer shows it" + (f" (warning: {res['warnings'][0]})" if res["warnings"] else ""))
+                       message=f"{files}, {os.path.basename(cad['cad_paths']['iges'])} and {case}.step ({what}"
+                               + (f", solid {'valid' if cad['valid'] else 'NOT valid'}" if "valid" in cad else "")
+                               + "); OCC viewer shows it"
+                               + (f" (warning: {res['warnings'][0]})" if res["warnings"] else ""))
             return out
         return run
+
+
+def hub_lines(outline, n_rings=9, n_gen=12):
+    """Lines that draw a hub from its profile (prop_hub.HubProfile.outline, (x, r), the base plane first):
+    rings at the two ends of a cylinder, at n_rings stations along the lateral part of a cone and its nose,
+    and n_gen generators along it (to the tip of a nose)."""
+    outline = np.asarray(outline, dtype=float)
+    lateral = outline[1:]                                 # without the base plane's foot on the axis
+    if len(lateral) > 1 and lateral[-1, 1] < 1e-9 and abs(lateral[-1, 0] - lateral[-2, 0]) < 1e-9:
+        lateral = lateral[:-1]                            # a flat end: no spoke
+    x, r = lateral[:, 0], lateral[:, 1]
+    t = np.linspace(0.0, 2.0 * np.pi, 121)
+    if np.ptp(r) < 1e-9 * max(1.0, r.max()):              # a cylinder: its two rims
+        xs, rs = np.array([x[0], x[-1]]), np.array([r[0], r[-1]])
+    else:
+        s = np.concatenate(([0.0], np.cumsum(np.hypot(np.diff(x), np.diff(r)))))
+        u = np.linspace(0.0, 1.0, n_rings) * s[-1]
+        xs, rs = np.interp(u, s, x), np.interp(u, s, r)
+    out = [np.column_stack((np.full_like(t, xk), rk * np.sin(t), rk * np.cos(t))) for xk, rk in zip(xs, rs)
+           if rk > 1e-9]
+    for a in np.linspace(0.0, 2.0 * np.pi, n_gen, endpoint=False):
+        out.append(np.column_stack((x, r * np.sin(a), r * np.cos(a))))
+    return out
 
 
 def _mid_chord_xi(bs):
@@ -707,13 +810,7 @@ class PropellerView:
         for k in range(1, p.blades):
             turn = rot_axis(np.array([1.0, 0.0, 0.0]), 2.0 * np.pi * k / p.blades)
             segs["others"] += [s @ turn for s in sk]
-        hr, hh = pv["hub"]
-        t = np.linspace(0.0, 2.0 * np.pi, 121)
-        for x in (-0.5 * hh, 0.5 * hh):
-            segs["hub"].append(np.column_stack((np.full_like(t, x), hr * np.sin(t), hr * np.cos(t))))
-        for a in np.linspace(0.0, 2.0 * np.pi, 12, endpoint=False):
-            segs["hub"].append(np.array([[-0.5 * hh, hr * np.sin(a), hr * np.cos(a)],
-                                         [0.5 * hh, hr * np.sin(a), hr * np.cos(a)]]))
+        segs["hub"] = hub_lines(pv["hub_outline"])
         for k, c in self.col.items():
             c.set_segments(segs[k])
         allp = np.vstack([s for v in segs.values() for s in v])
@@ -725,8 +822,11 @@ class PropellerView:
         self.box = np.maximum(hi - lo, 1e-9)
         fit_box(ax, self.fig, self.box)
         d = pv["design"]
-        msg = (f"{p.blades} blades, {len(sk)} sections each (the designed blade blue), D {d.diameter:.4g} m; hub "
-               f"radius {hr:.0f} mm, height {hh:.0f} mm; blades {pv.get('clearance_mm', float('nan')):.1f} mm apart")
+        hr, hh = pv["hub"]
+        hub = (f"hub a cone, base radius {1000 * d.hub_base:.0f} mm, top {1000 * d.hub_top:.0f} mm, {hh:.0f} mm long"
+               if d.hub_cone else f"hub radius {hr:.0f} mm, height {hh:.0f} mm")
+        msg = (f"{p.blades} blades, {len(sk)} sections each (the designed blade blue), D {d.diameter:.4g} m; {hub}; "
+               f"blades {pv.get('clearance_mm', float('nan')):.1f} mm apart")
         if pv["problems"]:
             msg += "\nproblem: " + pv["problems"][0][:100]
         self.text.set_text(msg)
