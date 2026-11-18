@@ -536,6 +536,76 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   write_case check reads the component file (the JSON set-up went on 26 Oct). Tests: hull 65 with the GUI (38
   here), wing with the GUI (41 here), tool 52 (28 here), blade 79 with the GUI, hull_modify 14, hull 12, files
   35.
+- BB2's positions in the Vehicle tab (13 Nov 2026; the user asked where the propeller and the rudders sit on the
+  BB2 hull; as x/L, the entry below): Propeller "hub starts at x/L" 1 (the hub's base on the hull's end; the
+  default), D 5 m (BB2's own; the default); Rudder "root TE at x/L" 0.89819 (BB2's TE line meets the hull 29.7733 m
+  aft of the cut, L 33.1480 m), rudders 4, first at 45 deg (an X), scale 1, TE rake ticked -0.135 deg (BB2's TE
+  leans 0.135 deg forward at the top: x = 0.002352 s + 5299.895; rake 0 pitches the rudder 0.13 deg and moves its
+  root LE 2.5 mm). Typed so (tick TE rake first: its box is disabled until then; Fin "fins" 0 and Wing "wings" 0:
+  the tool's vehicle carries one fin and a wing pair by default, BB2's aft half none), the placed stern planes lie
+  within 0.1 mm (x) and 0.03 mm (radius) of BB2's at the root, mid-span and tip, LE and TE, the root chord parallel
+  to the axis, and the blades' plane falls on BB2's generator line (576.1 mm aft of the hub's forward end, drawing
+  F5's 577). The tool does not keep the placement between sessions yet (the assembly file, step 4).
+- Vehicle tab positions as x/L (13 Nov 2026; the user: "we should enter these positions as normalized length of the
+  hull ... like hub starts at 1 (if hull aft is counted as 1), then rudder TE sit at 0.85 or smt"; his BB2 build in
+  the GUI had the hub slightly off the hull, not one solid): the positions along the hull are fractions of its
+  length, 0 the nose (a body without a nose: its front, the cut), 1 the hull's aft end, shown to 5 decimals (0.3 mm
+  on BB2's 33.148 m). Propeller "hub starts at x/L" (prop_x, 0 to 2) puts the hub's forward end there on the axis,
+  the blades at the hub's own offset scaled with the propeller (the old "plane at x - L" placed the blades' plane,
+  so the hub's start moved whenever D scaled the propeller); its default is where the hub sits flush on the hull
+  (xgeom_vehicle.hub_seat: the last x where the hull's section is as wide as the hub's forward end; 1 on BB2; on
+  SUBOFF, whose tail closes on the axis, where the tail narrows to the hub). D defaults to the design's own
+  diameter when it is no larger than the hull's depth or breadth (else half of that, as before). The gap: D had
+  defaulted to 4.8 m (half BB2's depth), which scaled the 5 m propeller by 0.96 about its plane and left the hub's
+  base 23 mm aft of the hull's end; at x/L 1 the hub now starts on the hull's end whatever D is (D 4.8 typed: one
+  valid solid, V 1808.36 m^3). The view's text says where the hub starts (on the hull's aft end, on the hull, so
+  many mm behind the hull's end or where the hull has closed on the axis: not joined). Rudder "root TE at x/L"
+  (rudder_x), the fins' and wings' "root LE at x/L" (fin_x, wing_x), 0 to 1. The assembly file's placement keys:
+  prop_x and rudder_x replace prop_dx and rudder_dx (a file with the old keys is refused), fin_x and wing_x keep
+  their names but are x/L now (they were m from the nose): for Eddie's web app. vehicle_cad: a fuse that leaves the
+  parts apart is tried again at fuzzy values of 0.01 and 0.05 mm (FUZZY_RETRY_MM; SUBOFF's default rudder TE,
+  rounded to 5 decimals, fell 0.018 mm ahead of the tail's join with the cap and the fuse gave 4 solids); parts
+  truly apart stay apart, and the message says when the larger value was used. BB2 typed as x/L (above, fins and
+  wings 0): the vehicle CAD one valid solid, V 1808.60 m^3, 63 s. Tests: hull 66 with the GUI (39 here), wing 54
+  with the GUI (41 here), tool 52 (28 here), blade 79 with the GUI, files 36, hull_modify 14, hull 12.
+- Tip patch's corners on the strip lines, the blade's layout again (17 Nov 2026; the user, after discussion with
+  his group: for meshing the rudder has to follow the propeller blade's five-patch topology more closely; his
+  sketch: the tip patch's corners on the strip lines under the tip, the strips' top edges diagonals up to the
+  tops of the LE and TE lines; strip widths computed for the best result, the corners' drop picked from trials;
+  BB2's stern plane the test case, its top kept exactly). `xcad_loft.loft_loops(loops, strip_frac=None,
+  tip_drop=1.5)`: the tip patch's four corners sit on the strip lines under the tops of the LE and TE lines by
+  `tip_drop` times their distance from those tops along the chord (a pair gives the two ends their own; 0.5 to 2
+  tried on BB2, all valid without folds, 1.5 and 2 the smoothest); the four patches along the span end on sloping
+  top edges, the rows turning onto them over a band under them; the tip patch covers the cap and the sides above
+  those edges, fitted to wraps (up the A side to the rim, over the cap, down the B side) through a mean value map,
+  the rim on two double-knot lines of the patch. `strip_frac` None (the default) makes each strip as wide as its
+  edge's rounding (the wind-tunnel rudder: 11.2 mm to each side of the LE, the TE's 0.75 mm round at the TE;
+  BB2 at 0.07: 190 mm and the 15 mm round). Folds found on the wind-tunnel rudder at the tops of both edge lines
+  and fixed (wrap stations closing in on the tops, `APEX_STEPS`; the wraps between a pinch and the loops' first
+  points scaled from the first whole wrap, `_into_pinch`; the mesh's boundary parametrized on the fitted edges,
+  `_on_edges`; no line leaving an edge at less than `EDGE_ANGLE` 15 deg); the result's `tip_angle` is the smallest
+  angle between the patch's two families of lines (0 for a fold; 14.9 deg on the rudder, 14.5 on BB2), the note
+  and the tool's status line say so (orange when it folds). Very blunt cap ends on made-up wings still fold the
+  patch, reported (parked by the user). The patch rippled along the rudder's 0.7 mm edge radius, 1 deg either
+  side of it: from the rim the cap runs up a straight wall 0.4 to 1.9 mm long, round the 0.707 mm arc and over
+  the crown, two jumps of curvature on each side, neither on a line of the patch. The user allowed a small
+  change in a small region: where most wraps jump in curvature, every wrap's cap part is averaged over
+  `CAP_BLEND` 0.5 of the cap's tightest radius (0.29 mm here), twice, at most `BLEND_SHARE` 0.08 of the wrap's
+  length; the round moves in by 0.013 mm (the cap model itself lies 0.104 mm from the CAD), the patch's normals
+  within 0.4 deg of its data over 99 % of the band (0.9 before), its curvature across the round one smooth hump;
+  BB2's dome is not touched (the note and `tip_blend` say when a cap was blended). The wind-tunnel rudder: six
+  faces, valid, 583,362.83 mm^3, the tip patch 150 x 150 poles within 0.005 mm of its data; against the STEP the
+  LE strip within 0.0008 mm, the centrals 0.0029, the TE strip 0.0043, the tip 0.104 (the cap model's own);
+  `Rudder/outputs/wind_tunnel_rudder_full.igs` and `_half.igs` written again. BB2's stern plane
+  (`bb2/bb2_sternplane_loft.py`: every loop point put back on the original surface by closest point, the rim at
+  s 6811.99, rings 0.01 to 1 of the cap's profiles; 24 min): within 0.012 to 0.019 mm of the original over the
+  exposed span, 0.036 at the TE-tip corner, the cap cuts within 0.046, the patches point by point within 0.005
+  (LE strip) to 0.040 mm (tip patch, rms 0.003); outside the hull within 1.1e-4 of the original by volume; the
+  set-up files in `bb2/outputs` written again (vehicle 1.808033e12, vehicle6 1.808732e12 mm^3, the quadrants as
+  before). `_xgeom_hull_test.py` measures its root-extrusion volumes with the Gauss-Kronrod rule (the adaptive
+  one does not settle on prism faces). The rudder set-up JSON's settings gain `tip_drop`; no component or
+  assembly file changed. Tests: tool 61 with the GUI, wing 54, files 51, hull 64, blade 77 (with the GUI),
+  modify 136.
 
 ## Next steps
 
@@ -560,4 +630,4 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   blade, hull and rudder runs are checked in use (the user, 13 Nov 2026).
 - BB2's aft half (the user, 13 Nov 2026): the hull's sections that are not round or elliptical (the casing) and the decks;
   then the assembly of bb2_hull.txt, bb2_prop_setup.txt and bb2_sternplane.txt in the Vehicle tab (placement:
-  4 rudders at 45 deg, TE rake 0, prop_dx 0.576 m).
+  above, BB2's positions in the Vehicle tab, as x/L).

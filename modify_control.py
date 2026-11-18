@@ -66,12 +66,18 @@ class ModifySettings:
                                    # distributions too curved for a polynomial of the order below
     half: bool = False             # the CAD as the half body, cut at the plane of symmetry (CFD on half the
                                    # domain; the sections are symmetric, so either side is the same)
-    strip_frac: float = 0.07       # the LE and TE wrap strips reach this fraction of the root chord along the
-                                   # arc to both sides of their edge (xcad_loft, the blade's constant width);
-                                   # the TE strip is narrowed to the TE's rounding (the 0.75 mm round: 1.7 mm
-                                   # to each side), so that a viewer or a mesher draws the round clean. A
-                                   # pair (LE, TE), e.g. (0.07, 0.07), is used as given;
-                                   # the tip patch covers the tip face alone, from the tip's edge up
+    strip_frac: object = None      # the LE and TE wrap strips (xcad_loft). None: as wide as their edges'
+                                   # rounding (the LE strip 1.5 times the arc to where the curvature has
+                                   # fallen to a quarter of its peak, the TE strip the TE's round itself: 1.3
+                                   # mm to each side of the 0.75 mm round). A fraction: both reach that
+                                   # fraction of the root chord along the arc to both sides of their edge
+                                   # (the blade's constant width), the TE strip narrowed to the TE's round.
+                                   # A pair (LE, TE), e.g. (0.07, 0.07), is used as given
+    tip_drop: float = 1.5          # the slope of the strips' top edges in the side view (the diagonals from
+                                   # the strip lines' tops up to the tops of the LE and TE): the tip patch's
+                                   # four corners sit on the strip lines, under the tip by this times their
+                                   # distance from the LE's or TE's top along the chord. A pair (LE, TE)
+                                   # gives the two ends their own
     plot: bool = True              # write <case>_check.png
 
 settings = ModifySettings( # SET PARAMETERS HERE

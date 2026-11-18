@@ -38,10 +38,19 @@ def check(name, got, want, tol):
     print(f"  {'ok ' if ok else 'FAIL'}  {name:<62s} max error {err:.3e}   (tol {tol:.0e})")
 
 
-def wing_loops(n=40, tilt=True):
+CAP_RINGS = (0.15, 0.3, 0.5, 0.7, 0.85, 1.0)               # the round cap's loops: shares of a quarter turn
+
+
+def wing_loops(n=40, tilt=True, cap="round"):
     """A tapered wing in the XCAD frame (x chordwise, y thickness, z height),
-    mm: n horizontal loops from z = 0 to 100, then a tilted loop and a cap
-    loop, each 200 points starting at the LE; and the section areas."""
+    mm: n horizontal loops from z = 0 to 100, then (tilt) a tilted loop and a
+    cap over it, each 200 points starting at the LE; and the section areas.
+    cap "round": six loops of a cap with half an ellipse as its cross
+    profile, 2 % of the chord tall at mid-chord and falling to nothing at
+    the two ends, where every loop runs into the tilted loop's LE and TE
+    points (as the extraction's cap loops do); the last is the crest line.
+    cap "lid": one thin loop above the tilted one, its LE and TE points over
+    the tilted loop's, not in them."""
     loops, areas, zs = [], [], np.linspace(0.0, 100.0, n)
     for z in zs:
         c = 150.0 - 0.4 * z
@@ -54,10 +63,20 @@ def wing_loops(n=40, tilt=True):
     if tilt:
         top = loops[-1].copy()
         top[:, 2] += 0.5 + 0.04 * (top[:, 0] - top[0, 0])                        # tilted, rising to the TE
-        cap = top.copy()
-        cap[:, 1] *= 0.3                                                          # a thin cap loop above it
-        cap[:, 2] += 1.0 + 0.01 * (cap[:, 0] - cap[0, 0])
-        loops += [top, cap]
+        loops.append(top)
+        if cap == "lid":
+            lid = top.copy()
+            lid[:, 1] *= 0.3                                                      # a thin loop above it
+            lid[:, 2] += 1.0 + 0.01 * (lid[:, 0] - lid[0, 0])
+            loops.append(lid)
+        else:
+            s = (top[:, 0] - top[0, 0]) / (top[99, 0] - top[0, 0])
+            height = 0.02 * (top[99, 0] - top[0, 0]) * np.sqrt(np.clip(4.0 * s * (1.0 - s), 0.0, None))
+            for f in CAP_RINGS:
+                ring = top.copy()
+                ring[:, 1] *= np.cos(0.5 * np.pi * f) if f < 1.0 else 0.0
+                ring[:, 2] += height * np.sin(0.5 * np.pi * f)
+                loops.append(ring)
     return loops, np.array(areas), zs
 
 
@@ -81,28 +100,107 @@ def test_loft():
     check("its volume matches the sections' (relative)", abs(res.volume / vol_ref - 1.0), 0.0, 5e-4)
     loops2, _, _ = wing_loops(tilt=True)
     res2 = XL.loft_loops(loops2)
-    check("with a tilted loop and a cap loop: valid, closed; the five patches and the root, 6 faces",
-          [res2.valid, res2.free_edges, res2.n_ruled, res2.volume > res.volume, XL.count_faces(res2.shape)],
-          [1, 0, 2, 1, 6], 0)
+    check("with a tilted loop and a round cap of 6 loops over it: valid, closed; the five patches and the "
+          "root, 6 faces", [res2.valid, res2.free_edges, res2.n_ruled, res2.volume > res.volume,
+                            XL.count_faces(res2.shape)], [1, 0, 1 + len(CAP_RINGS), 1, 6], 0)
     res2h = XL.loft_loops(loops2, half=True)
     check("its half body: valid, closed, 6 faces, half the volume",
           [res2h.valid, res2h.free_edges, XL.count_faces(res2h.shape), res2h.volume / res2.volume], [1, 0, 6, 0.5],
           1e-4)
     r_te = 0.004 * 150.0                                   # the TE's round at the root: radius 0.6 mm
     arc = r_te * (0.5 * np.pi - np.radians(10.0))          # from the TE to about where it meets the flank
-    check("one fraction: the LE strip 0.07 of the root chord, the TE strip narrowed to the TE's rounding "
-          "(1.5 times the round's arc, mm), the note says so",
-          [res2.strips[0] - 0.07 * 150.0, res2.te_round, 1.2 * arc < res2.strips[1] < 2.2 * arc,
-           "the TE's rounding" in res2.notes[0]], [0, 1, 1, 1], 1e-9)
+    check("the strips as wide as their edges' rounding: the TE strip the TE's round (its arc to the flank, mm), "
+          "the LE strip a few percent of the chord; the note gives both",
+          [res2.te_round, 0.9 * arc < res2.strips[1] < 1.3 * arc, 0.03 * 150.0 < res2.strips[0] < 0.12 * 150.0,
+           "their rounding" in res2.notes[0]], [1, 1, 1, 1], 0)
+    k2 = res2.n_smooth                                     # the rim: the tilted loop
+    top_le, top_te, cor = loops2[k2][0], loops2[k2][99], res2.corners
+    run = [0.5 * (abs(cor[a][0] - top[0]) + abs(cor[b][0] - top[0]))
+           for a, b, top in (("ur_a", "ur_b", top_le), ("ul_a", "ul_b", top_te))]
+    check("the tip patch's corners sit on the strip lines under the tip: under the tops of the LE and TE lines "
+          "by 1.5 times their distance from them along the chord (the diagonals' slope), the same on both sides",
+          [res2.drops[0] / run[0], res2.drops[1] / run[1], top_le[2] - cor["ur_a"][2] - res2.drops[0],
+           cor["ur_a"][2] - cor["ur_b"][2], cor["ul_a"][2] - cor["ul_b"][2]], [1.5, 1.5, 0, 0, 0], 1e-6)
+    flat = XL.loft_loops(loops2, tip_drop=(1.0, 0.5))
+    run = [0.5 * (abs(flat.corners[a][0] - top[0]) + abs(flat.corners[b][0] - top[0]))
+           for a, b, top in (("ur_a", "ur_b", top_le), ("ul_a", "ul_b", top_te))]
+    check("tip_drop sets the slope, a pair one for each end: valid, 6 faces",
+          [flat.valid, XL.count_faces(flat.shape), flat.drops[0] / run[0], flat.drops[1] / run[1]],
+          [1, 6, 1.0, 0.5], 1e-6)
+    check("the tip patch lies within a ten-thousandth of the chord of the tip; no more than 150 poles each way",
+          [res2.tip_error < 1.5e-4 * 150.0, max(res2.tip_poles) <= 150, min(res2.tip_poles) > 20], [1, 1, 1], 0)
+    k4 = np.r_[[0.0] * 4, [0.5], [1.0] * 4]                # a 5 x 5 cubic patch: flat and square, sheared
+    gu, gv = np.meshgrid(XL._greville(k4), XL._greville(k4))               # by 60 deg, and doubled back on
+    square = np.dstack((gu, gv, 0.0 * gu))                                 # itself along u
+    shear = np.dstack((gu + gv * np.cos(np.radians(60.0)), gv * np.sin(np.radians(60.0)), 0.0 * gu))
+    fold = np.dstack((gu * (1.0 - gu) * 4.0, gv, 0.0 * gu))
+    check("the angle between a patch's two families of lines (_lines_angle): 90 deg on a square patch, 60 on a "
+          "sheared one, 0 where the lines cross (a fold); the tip patch does not fold, and the note says so",
+          [XL._lines_angle(square, k4, k4), XL._lines_angle(shear, k4, k4), XL._lines_angle(fold, k4, k4),
+           res2.tip_angle > 2.0, flat.tip_angle > 2.0, "no fold" in res2.notes[-1]], [90, 60, 0, 1, 1, 1], 1e-4)
+    lid = XL.loft_loops(wing_loops(cap="lid")[0])
+    check("a cap loop that ends over the tops of the LE and TE lines, not in them (a blade over each end): "
+          "still a valid closed solid of 6 faces, and the result and its note say that the tip patch folds",
+          [lid.valid, lid.free_edges, XL.count_faces(lid.shape), lid.tip_angle, "folds" in lid.notes[-1]],
+          [1, 0, 6, 0, 1], 0)
+    from scipy.interpolate import CubicSpline
+    r_arc, s_pt = 0.3, 0.05                                # a wrap over a rounded cap: a wall 1 tall, a round
+    th = np.linspace(0.0, 0.5 * np.pi, int(round(0.5 * np.pi * r_arc / s_pt)) + 1)[1:]   # of radius 0.3, a
+    left = np.vstack((np.column_stack((0 * np.arange(0, 1, s_pt), -1.0 + 0 * np.arange(0, 1, s_pt), np.arange(0, 1, s_pt))),
+                      np.column_stack((0 * th, -1.0 + r_arc * (1.0 - np.cos(th)), 1.0 + r_arc * np.sin(th)))))
+    flat = np.column_stack((0 * np.arange(-1.0 + r_arc + s_pt, 1.0 - r_arc, s_pt), np.arange(-1.0 + r_arc + s_pt, 1.0 - r_arc, s_pt), 1.0 + r_arc + 0 * np.arange(-1.0 + r_arc + s_pt, 1.0 - r_arc, s_pt)))
+    right = left[::-1] * np.array([1.0, -1.0, 1.0])
+    q = np.vstack((left, flat, right))                     # flat top, the round and a wall down again
+    s = XL._loop_arc(q)
+    ends = ((1, np.array([0.0, 0.0, 1.0])), (1, np.array([0.0, 0.0, -1.0])))
+    wrap = CubicSpline(s, q, axis=0, bc_type=ends)
+    jump, top = XL._curvature_jumps(wrap, s)
+    th2 = np.linspace(np.pi, 0.0, 61)                       # a half circle: no jump, its curvature 1
+    q2 = np.column_stack((0 * th2, np.cos(th2), 1.0 + np.sin(th2)))
+    s2 = XL._loop_arc(q2)
+    dome = CubicSpline(s2, q2, axis=0, bc_type=((1, np.array([0.0, 0.0, 1.0])), (1, np.array([0.0, 0.0, -1.0]))))
+    jump2, top2 = XL._curvature_jumps(dome, s2)
+    check("_curvature_jumps: a wrap up a wall, round a 0.3 radius and over a flat top jumps (its largest "
+          "curvature 1 / 0.3, plus the cubic's overshoot at the jump, under 25 %); a half circle does not "
+          "(curvature 1)", [jump, 1.0 < top * r_arc < 1.25, jump2, top2], [1, 1, 0, 1], 0.05)
+    length = XL.CAP_BLEND / top
+    soft = XL._blended(wrap, length, ends)
+    fine = np.linspace(0.0, s[-1], 2001)
+    moved = np.linalg.norm(soft(fine) - wrap(fine), axis=1)
+    mid = np.abs(fine - 0.5 * s[-1]) < 0.3                  # the middle of the flat top, far from the round
+
+    def ramp(curve):
+        """The loops' steps the curvature takes to rise from a tenth to nine tenths of its top, up the first
+        round (the cubic through the points)."""
+        d1, d2 = curve(s, 1), curve(s, 2)
+        kap = np.linalg.norm(np.cross(d1, d2), axis=1) / np.linalg.norm(d1, axis=1) ** 3
+        kap = kap[:len(s) // 2]
+        return int(np.argmax(kap > 0.9 * kap.max()) - np.argmax(kap > 0.1 * kap.max()))
+
+    check("_blended: the ends and their directions held, the middle of the flat top left alone, the round "
+          "moved in by about its curvature x length^2 / 12 (two passes), and the curvature now climbs the "
+          "round over two or more of the loops' steps, not one",
+          [np.linalg.norm(soft(0.0) - q[0]), np.linalg.norm(soft(s[-1]) - q[-1]),
+           np.linalg.norm(soft(0.0, 1) / np.linalg.norm(soft(0.0, 1)) - ends[0][1]), moved[mid].max() < 1e-7,
+           0.6 < moved.max() / (top * length ** 2 / 12.0) < 1.4, ramp(wrap), ramp(soft) >= 2],
+          [0, 0, 0, 1, 1, 1, 1], 1e-9)
+    check("the test wing's cap and the note agree on whether it was blended; a blend moves it under 0.05 mm",
+          [("blended" in res2.notes[-1]) == (res2.tip_blend[1] > 0.0), res2.tip_blend[1] < 0.05], [1, 1], 0)
+    one = XL.loft_loops(loops2, strip_frac=0.07)
+    check("one fraction: the LE strip 0.07 of the root chord, the TE strip narrowed to the TE's round, the note "
+          "says so",
+          [one.strips[0] - 0.07 * 150.0, one.te_round, 0.9 * arc < one.strips[1] < 1.3 * arc,
+           "the TE's rounding" in one.notes[0]], [0, 1, 1, 1], 1e-9)
     wide = XL.loft_loops(loops2, strip_frac=0.12)
-    check("wider strips: still valid, 6 faces; the TE strip stays on the rounding",
-          [wide.valid, XL.count_faces(wide.shape), wide.strips[0] - 0.12 * 150.0, wide.strips[1] - res2.strips[1]],
-          [1, 6, 0, 0], 1e-3)
+    check("wider strips: still valid, 6 faces; the TE strip stays on the round",
+          [wide.valid, XL.count_faces(wide.shape), wide.strips[0] - 0.12 * 150.0, wide.strips[1] - one.strips[1]],
+          [1, 6, 0, 0], 0.05)
     pair = XL.loft_loops(loops2, strip_frac=(0.07, 0.03))
     check("a strip width each for the LE and the TE is used as given: valid, 6 faces; no step found in the "
           "horizontal loops",
           [pair.valid, XL.count_faces(pair.shape), len(res.steps), pair.strips[1] - 0.03 * 150.0, pair.te_round],
           [1, 6, 0, 0, 0], 1e-9)
+    print(f"       with that 4.5 mm TE strip round a 0.6 mm TE: {pair.notes[-1]}")
     lo = XL._SmoothLoop(loops2[5], 99)
     st = np.array([0.0, 0.3 * lo.S, lo.s_te, 0.8 * lo.S, lo.S, lo.S + 2.0])
     poly = np.column_stack([np.interp(np.mod(st, lo.S), lo.s, lo.dense[:, c]) for c in range(3)])
@@ -242,9 +340,13 @@ def test_adapter():
                 print(f"       solid: volume {lr.volume:.1f} mm^3, {lr.seconds:.1f} s, {lr.faces} faces")
                 check("XCAD: a valid closed solid and its STEP file; the rudder's 6 patches (the LE and TE "
                       "strips, the central panels, the tip, the root); no step at H for the loft to ease; "
-                      "the TE strip on the 0.75 mm round alone (1.5 to 2 mm to each side)",
+                      "the TE strip the 0.75 mm round itself (1.1 to 1.5 mm to each side); the tip patch's "
+                      "corners under the tip on the strip lines; the cap's 0.7 mm edge rounding blended over "
+                      "0.2 to 0.4 mm, which moved the cap by 0.005 to 0.03 mm",
                       [lr.valid, lr.free_edges, os.path.exists(res["step"]), lr.faces, len(lr.steps), lr.te_round,
-                       1.5 < lr.strips[1] < 2.0], [1, 0, 1, 6, 0, 1, 1], 0)
+                       1.1 < lr.strips[1] < 1.5, lr.drops[0] > lr.drops[1] > 0.0, lr.tip_angle > 5.0,
+                       0.2 < lr.tip_blend[0] < 0.4, 0.005 < lr.tip_blend[1] < 0.03],
+                      [1, 0, 1, 6, 0, 1, 1, 1, 1, 1, 1], 0)
                 hres = ad.build_xcad("th", plot=False, cad=True, half=True)
                 hlr = hres["loft"]
                 check("XCAD half body: valid, 6 faces, half the volume",
@@ -268,9 +370,10 @@ def test_adapter():
         check("every curve stays pinned to the original at H",
               max(abs(ad.design.curve(c)([0.0])[0, 1] - ad.orig.value(c, ad.design.H)[0]) for c in ad.names), 0.0,
               1e-12)
-        check("strip_frac from modify_control: one fraction, or a pair (LE, TE) kept as a pair",
-              [XR._strip_frac(0.07), *XR._strip_frac((0.07, 0.05)), np.ndim(ad.settings["strip_frac"])],
-              [0.07, 0.07, 0.05, 0], 0)
+        check("strip_frac from modify_control: None (the strips as wide as their edges' rounding, the default), "
+              "one fraction, or a pair (LE, TE) kept as a pair; tip_drop beside it",
+              [XR._strip_frac(None) is None, XR._strip_frac(0.07), *XR._strip_frac((0.07, 0.05)),
+               ad.settings["strip_frac"] is None, ad.settings["tip_drop"]], [1, 0.07, 0.07, 0.05, 1, 1.5], 0)
         thin = XR.RudderAdapter()
         thin.set("P1z.v3", 0.002)                            # a nose far thinner than the model's fit is off
         pv = thin.preview(skeleton=True)

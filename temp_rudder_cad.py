@@ -8,25 +8,25 @@ original sections above them filled in.
     python temp_rudder_cad.py modified_m.dat outputs/sections_xcad_with_cap_y0_y200_m.dat
 
 Both files are XCAD point files like sections_xcad_y0_y80_m.dat: "x y z" per
-line in metres (z the height), every section a loop starting at the LE. A
-'#k' line before each section marks it off; a file without '#' lines is split
-where the height column changes instead (each such section lies at one
-height). The sections need not share a number of points: one whose count
-differs from the original file's is resampled by cosine arc into its layout
-(the first point, the LE, kept first; the point farthest from it, the TE, at
-the middle index; the loop closed back on the LE). The original file defaults
-to outputs/sections_xcad_with_cap_y0_y200_m.dat. Its sections above the top
+line in metres (z the height), every section a loop starting at the LE. A '#k'
+line before each section marks it off; a file without '#' lines is split where
+the height column changes instead (each such section lies at one height). The
+sections need not share a number of points: one whose count differs from the
+original file's is resampled by cosine arc into its layout (the first point,
+the LE, kept first; the point farthest from it, the TE, at the middle index;
+the loop closed back on the LE). The original file defaults to
+outputs/sections_xcad_with_cap_y0_y200_m.dat. Its sections above the top
 modified section are added, everything is lofted into one solid with
-xcad_loft's five patches (user, 11 Nov 2026: the four along the span run up
-to the tip's edge, the tip patch covers the tip face alone): bicubic patches
-fitted by least squares, the LE and TE strips wrapping their edges (the TE
-strip narrowed to the TE's rounding), the central pressure and suction
-panels, the tip patch over the cap, and the flat root; six faces. Where the
-sections step from one to the next (sections written from the Bezier model
-alone under the extracted ones, as before 12 Nov 2026), the loft eases the
-step out of the sections below and above it, so the solid crosses it without
-a ripple; the step is printed. The solid is written as <modified file>.step
-(mm).
+xcad_loft's five patches (the blade's layout; user's sketch, 17 Nov 2026):
+bicubic patches fitted by least squares, the LE and TE strips wrapping their
+edges (each as wide as its edge's rounding), the central pressure and suction
+panels, the tip patch (its corners on the strip lines under the tip: it covers
+the cap and the sides above the four patches' sloping top edges), and the flat
+root; six faces. Where the sections step from one to the next (sections
+written from the Bezier model alone under the extracted ones, as before 12 Nov
+2026), the loft eases the step out of the sections below and above it, so the
+solid crosses it without a ripple; the step is printed. The solid is written
+as <modified file>.step (mm).
 
 Needs numpy, scipy, pythonocc-core and xcad_loft.py beside it.
 """

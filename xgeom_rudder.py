@@ -70,8 +70,10 @@ def _same_file(a, b):
 
 
 def _strip_frac(value):
-    """modify_control's strip_frac as xcad_loft takes it: one fraction (the TE strip then narrowed to the TE's
-    rounding) or a pair (LE, TE), used as given."""
+    """modify_control's strip_frac (or tip_drop) as xcad_loft takes it: None (the strips as wide as their
+    edges' rounding), one number or a pair (LE, TE)."""
+    if value is None:
+        return None
     return [float(v) for v in value] if np.ndim(value) else float(value)
 
 
@@ -91,7 +93,8 @@ class RudderAdapter:
                          "te_radius_mm": float(s.te_radius_mm), "gap_mm": s.gap_mm, "xcad_units": s.xcad_units,
                          "plot": bool(s.plot), "fit_orders": dict(MC.FIT_ORDERS if fit_orders is None else fit_orders),
                          "fit_free_heights": bool(s.fit_free_heights), "half": bool(getattr(s, "half", False)),
-                         "strip_frac": _strip_frac(getattr(s, "strip_frac", 0.07))}
+                         "strip_frac": _strip_frac(getattr(s, "strip_frac", None)),
+                         "tip_drop": _strip_frac(getattr(s, "tip_drop", 1.5))}
         self.title = "Rudder, modified below H"
         self.setup_file = None                                # the set-up file loaded or saved last (the tool shows it)
         self.meta = {}
@@ -442,7 +445,7 @@ class RudderAdapter:
                              f"XCAD wrote)")
         keep, settings, meta = dict(self.__dict__), dict(self.settings), copy.deepcopy(self.meta)
         try:
-            for k in ("n_sections", "te_radius_mm", "half", "strip_frac"):
+            for k in ("n_sections", "te_radius_mm", "half", "strip_frac", "tip_drop"):
                 if k in rec.get("settings", {}):
                     self.settings[k] = rec["settings"][k]
             files = rec.get("files") or {}
@@ -508,7 +511,8 @@ class RudderAdapter:
                 out["cad_error"] = "no OCCT binding (pythonocc-core or cadquery-ocp): no solid"
                 return out
             loft = XL.loft_loops(XL.read_loops(res["paths"]["xcad"], s["xcad_units"]),
-                                 strip_frac=s.get("strip_frac", 0.07), half=half)
+                                 strip_frac=s.get("strip_frac"), half=half,
+                                 tip_drop=s.get("tip_drop", XL.TIP_DROP))
             step = os.path.splitext(res["paths"]["xcad"])[0] + ".step"
             XL.write_step(loft.shape, step)
             out.update(loft=loft, step=step)
@@ -529,6 +533,7 @@ class RudderAdapter:
         def task():
             out = run()
             msg = os.path.basename(out["case"]["paths"]["xcad"])
+            folded = False
             if out["loft"] is not None:
                 lr = out["loft"]
                 msg += (f", {os.path.basename(out['step'])} ({'half body, ' if lr.half else ''}solid "
@@ -536,9 +541,14 @@ class RudderAdapter:
                 for _, jump, lo, hi, _, _ in lr.steps:     # a step left in the loops (another TE radius, say)
                     msg += (f"; the {jump:.2f} mm step between the modified and the original sections eased out "
                             f"over {lo:.0f} mm below it" + (f" and {hi:.0f} mm above" if hi else ""))
+                if lr.tip_blend[1] > 0.0:                  # the cap's edge rounding blended (xcad_loft.CAP_BLEND)
+                    msg += f"; the cap's rounding blended, the cap moved by up to {lr.tip_blend[1]:.3f} mm"
+                folded = lr.tip_angle <= 0.0               # the tip patch's lines cross (xcad_loft._lines_angle)
+                if folded:
+                    msg += "; the tip patch folds on itself somewhere: look at the tip before meshing"
             if out["cad_error"]:
                 msg += "; " + out["cad_error"]
-            out.update(message=msg, error=bool(out["cad_error"]), view=out["step"])
+            out.update(message=msg, error=bool(out["cad_error"]), warn=folded, view=out["step"])
             return out
         return task
 
