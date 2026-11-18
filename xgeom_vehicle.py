@@ -6,15 +6,21 @@ The vehicle in the XGeom design tool (xgeom_tool.py, its Vehicle tab): the hull 
 it, each drawn from its adapter's design as it stands. The frame is the hull's: x from the nose aft (m), y to
 starboard, z up.
 
-Placement (Placement, the Vehicle tab's settings):
-    prop_dx        the propeller plane (the middle of the hub, where the blades sit) on the axis, from the end of
-                   the hull: x - L (m, negative forward); default 0, the end
-    prop_d         the propeller's diameter in the vehicle (m): the blade design is scaled to it; default half the
-                   hull's depth or breadth, the larger
-    rudder_dx      where the rudder root's trailing edge sits on the hull (with rudder_rake set: where its TE
-                   line meets the hull), from its end: x - L (m, -L to 0); default the end of the tail (the start
-                   of the cap; with no cap 5 % of L ahead of the end), further forward if the blades reach there:
-                   a quarter of the propeller's diameter clear of them
+Placement (Placement, the Vehicle tab's settings). Positions along the hull are fractions of its length, x/L:
+0 the nose (a body without a nose: its front, the cut), 1 the hull's aft end (13 Nov 2026, the user: "a lot more
+intuitive, like hub starts at 1"):
+    prop_x         where the propeller's hub starts (its forward end) on the axis, x/L; the blades follow at the
+                   hub's own offset, scaled with the propeller. 1: the hub's base on the hull's aft end (BB2:
+                   the hull ends where the hub begins). Default where the hub sits flush on the hull: the last x
+                   where the hull's section is as wide as the hub's forward end (1 when the hull ends at least
+                   as wide; on a hull that closes on the axis, where the tail narrows to the hub's radius)
+    prop_d         the propeller's diameter in the vehicle (m): the blade design is scaled to it (its hub too);
+                   default the design's own diameter when it is no larger than the hull's depth or breadth (the
+                   larger), else half of that
+    rudder_x       where the rudder root's trailing edge sits on the hull (with rudder_rake set: where its TE
+                   line meets the hull), x/L (0 to 1); default the end of the tail (the start of the cap; with no
+                   cap 5 % of L ahead of the end), further forward if the blades reach there: a quarter of the
+                   propeller's diameter clear of them
     rudder_angle   the first rudder's, around the axis from the top towards starboard (deg): 0 above, 90 to
                    starboard, 180 under the stern (default)
     rudders        how many, 0 (none) to MAX_RUDDERS (12), evenly spaced around the axis (360/N deg apart); default
@@ -23,13 +29,12 @@ Placement (Placement, the Vehicle tab's settings):
     rudder_rake    None (default): each rudder pitched to the hull's slope (below); a number (deg): the rudder's
                    own angle, its TE line that far from square to the axis, positive with its top aft (0: the TE
                    square to the axis, as BB2's stern planes)
-    fin_x          where the fins' root LE sits on the hull (m from the nose); default a tenth of the way along the
-                   middle body
+    fin_x          where the fins' root LE sits on the hull, x/L; default a tenth of the way along the middle body
     fins           how many, 0 (none) to MAX_RUDDERS, evenly spaced around the axis from fin_angle (deg, as
                    rudder_angle; default 1 at 0, on top)
     fin_scale      the fin (mm) to the hull's metres (default 1)
-    wing_x         where the wings' root LE sits on the hull (m from the nose); default a quarter of the way along
-                   the middle body
+    wing_x         where the wings' root LE sits on the hull, x/L; default a quarter of the way along the middle
+                   body
     wings          2 (the pair) or 0 (none)
     wing_angle     the starboard wing's angle around the axis from the top (deg, 0 to 180; default 90, level); the
                    port wing is its mirror image (y to -y): the same dihedral, camber and pitch on both sides
@@ -88,18 +93,18 @@ MAX_RAKE = 60.0                  # a set TE rake lies within +- this (deg)
 
 @dataclass
 class Placement:
-    prop_dx: float = 0.0
+    prop_x: float = 1.0
     prop_d: float = 0.25
-    rudder_dx: float = -0.1
+    rudder_x: float = 0.95
     rudder_angle: float = 180.0
     rudders: int = 4
     rudder_scale: float = 1.0
     rudder_rake: float | None = None
-    fin_x: float = 1.0
+    fin_x: float = 0.3
     fins: int = 1
     fin_angle: float = 0.0
     fin_scale: float = 1.0
-    wing_x: float = 1.5
+    wing_x: float = 0.4
     wings: int = 2
     wing_angle: float = 90.0
     wing_scale: float = 1.0
@@ -172,6 +177,8 @@ def wing_part(ad, n=LOOPS):
     d, p = ad.design, ad.params
     problems, warnings = WM.design_checks(d, p)
     loops = list(WM.section_loops(d, p, np.linspace(0.0, 1.0, n), 31))
+    if p.cap is not None:                                          # a tip cap: a few of its loops as well
+        loops += list(WM.cap_loops(d, p, 31, 6))
     root = WM.section_loops(d, p, [0.0])[0]
     return {"design": d, "loops": loops, "root": root, "root_x": (float(root[:, 0].min()), float(root[:, 0].max())),
             "problems": problems, "warnings": warnings}
@@ -437,19 +444,64 @@ def _turn_x(angle):
     return np.array([[1.0, 0.0, 0.0], [0.0, c, s], [0.0, -s, c]])
 
 
+POS_DIGITS = 5                  # the positions' decimals (x/L): 0.3 mm on a 33 m hull
+
+
+def hub_front(b):
+    """(x, radius) of the hub's forward end in the blade's frame (m, the design's size): its base plane."""
+    outline = b.get("hub_outline")
+    if outline is None:                                           # a part with the hub's radius and height only
+        from prop_hub import HubProfile
+        outline = HubProfile(b["hub"][0], None, b["hub"][1]).outline()
+    outline = np.asarray(outline, dtype=float)
+    i = int(np.argmin(outline[:, 0]))
+    return float(outline[i, 0]), float(outline[:, 1][outline[:, 0] <= outline[i, 0] + 1e-12].max())
+
+
+def hub_seat(d, radius, n=4001):
+    """The last x (m) where the hull's section is as wide as a hub of this radius (its narrower half-axis, the
+    hub being round): the hull's end when it ends at least that wide; 0 if the hull is nowhere that wide. On a
+    grid of n, then by bisection."""
+    def width(x):
+        return np.minimum(d.radius("r", x), d.radius("rp", x))
+    x = np.linspace(0.0, d.length, int(n))
+    ok = np.nonzero(width(x) >= radius * (1.0 - 1e-12))[0]
+    if not len(ok):
+        return 0.0
+    if ok[-1] == len(x) - 1:
+        return float(d.length)
+    a, b = float(x[ok[-1]]), float(x[ok[-1] + 1])
+    for _ in range(64):
+        m = 0.5 * (a + b)
+        a, b = (m, b) if width(np.array([m]))[0] >= radius else (a, m)
+    return a
+
+
+def prop_plane(L, pl, b):
+    """The propeller plane's x (m, where the blades sit, the blade frame's 0): the hub's forward end at
+    prop_x L, the hub's own offset scaled with the propeller."""
+    return pl.prop_x * L - pl.prop_d / b["diameter"] * hub_front(b)[0]
+
+
 def default_placement(parts):
     """The placement of the docstring's defaults for these parts."""
     d = parts["hull"]["design"]
-    pl = Placement(prop_d=round(max(d.r, d.rp if d.rp is not None else d.r), 3))
-    te = -d.cap if d.cap > 0 else -0.05 * d.length
+    L = d.length
+    big = max(d.r, d.rp if d.rp is not None else d.r)
     b = parts.get("blade")
-    if b and b["sections"]:
-        front = pl.prop_dx + pl.prop_d / b["diameter"] * min(float(sec[:, 0].min()) for sec in b["sections"])
-        te = min(te, front - 0.25 * pl.prop_d)
-    pl.rudder_dx = round(te, 3)
+    own = float(b["diameter"]) if b else None
+    pl = Placement(prop_d=round(own if own and own <= 2.0 * big else big, 3))
+    te = L - d.cap if d.cap > 0 else 0.95 * L                 # the root's TE, x (m)
+    if b:
+        pl.prop_x = round(hub_seat(d, hub_front(b)[1] * pl.prop_d / b["diameter"]) / L, POS_DIGITS)
+        if b["sections"]:
+            front = prop_plane(L, pl, b) + pl.prop_d / b["diameter"] * min(float(sec[:, 0].min())
+                                                                          for sec in b["sections"])
+            te = min(te, front - 0.25 * pl.prop_d)
+    pl.rudder_x = round(te / L, POS_DIGITS)
     j = d.joins                                               # off the joins of the hull's parts (vehicle_cad)
-    pl.fin_x = round(float(j[1] + 0.1 * (j[2] - j[1])), 3)
-    pl.wing_x = round(float(j[1] + 0.25 * (j[2] - j[1])), 3)
+    pl.fin_x = round(float(j[1] + 0.1 * (j[2] - j[1])) / L, POS_DIGITS)
+    pl.wing_x = round(float(j[1] + 0.25 * (j[2] - j[1])) / L, POS_DIGITS)
     return pl
 
 
@@ -465,11 +517,11 @@ def placement_problem(pl, length):
             return f"0 to {MAX_RUDDERS} rudders or fins (0: none)"
     if get("wings") is not None and get("wings") not in (0, 2):
         return "wings: 2 (the pair) or 0 (none)"
-    if get("rudder_dx") is not None and not -length <= get("rudder_dx") <= 0.0:
-        return f"the rudder's root TE sits on the hull: x - L from {-length:.3f} to 0 m"
-    for k, what in (("fin_x", "fins'"), ("wing_x", "wings'")):
-        if get(k) is not None and not 0.0 <= get(k) <= length:
-            return f"the {what} root LE sits on the hull: x from 0 to {length:.3f} m"
+    if get("prop_x") is not None and not 0.0 <= get("prop_x") <= 2.0:
+        return "the propeller's hub starts on the hull or behind it: x/L from 0 to 2 (1: the hull's aft end)"
+    for k, what in (("rudder_x", "rudder's root TE"), ("fin_x", "fins' root LE"), ("wing_x", "wings' root LE")):
+        if get(k) is not None and not 0.0 <= get(k) <= 1.0:
+            return f"the {what} sits on the hull: x/L from 0 (the nose) to 1 (the aft end)"
     if get("rudder_rake") is not None and not -MAX_RAKE <= get("rudder_rake") <= MAX_RAKE:
         return f"the rudders' TE rake lies within +-{MAX_RAKE:g} deg of square to the axis"
     if get("wing_angle") is not None and not 0.0 < get("wing_angle") < 180.0:
@@ -522,7 +574,7 @@ def assemble(parts, pl):
     b = parts.get("blade")
     if b:
         s = pl.prop_d / b["diameter"]
-        x0 = L + pl.prop_dx
+        x0 = prop_plane(L, pl, b)                             # the hub's forward end at prop_x L
         shift = np.array([x0, 0.0, 0.0])
         for k in range(b["blades"]):
             turn = _turn_x(2.0 * np.pi * k / b["blades"])
@@ -534,9 +586,12 @@ def assemble(parts, pl):
             outline = HubProfile(b["hub"][0], None, b["hub"][1]).outline()
         segs["hub"] += [s * seg + shift for seg in hub_lines(outline, n_rings=5)]
         info.update(prop_x=x0, prop_scale=s, prop_d=pl.prop_d, design_d=b["diameter"], blades=b["blades"])
+        hx, hr = pl.prop_x * L, s * hub_front(b)[1]           # the hub's forward end and its radius
+        on = hx <= L + 1e-9 and min(float(d.radius("r", min(hx, L))[0]), float(d.radius("rp", min(hx, L))[0])) > 0.0
+        info.update(hub_x=hx, hub_r=hr, hub_gap=0.0 if on else max(hx - L, 0.0) if hx > L + 1e-9 else None)
     ru = parts.get("rudder")
     if ru and pl.rudders > 0:
-        x_te = L + pl.rudder_dx                               # the hull's x of the root's TE
+        x_te = pl.rudder_x * L                                # the hull's x of the root's TE
         loops, lines, placed = _ring(d, ru, pl.rudder_scale / 1000.0, x_te, pl.rudders, pl.rudder_angle, False,
                                      getattr(pl, "rudder_rake", None))
         segs["rudders"] += loops
@@ -545,13 +600,13 @@ def assemble(parts, pl):
         info["rudder_x_te"] = x_te
     fi = parts.get("fin")
     if fi and pl.fins > 0:
-        loops, lines, placed = _ring(d, fi, pl.fin_scale / 1000.0, pl.fin_x, pl.fins, pl.fin_angle, True)
+        loops, lines, placed = _ring(d, fi, pl.fin_scale / 1000.0, pl.fin_x * L, pl.fins, pl.fin_angle, True)
         segs["fins"] += loops
         segs["fin_roots"] += lines
         _record(info, "fin", placed)
     wi = parts.get("wing")
     if wi and pl.wings > 0:                                   # the starboard wing and its mirror image
-        loops, lines, pi = place_rudder(d, wi["loops"], pl.wing_scale / 1000.0, pl.wing_x, np.deg2rad(pl.wing_angle),
+        loops, lines, pi = place_rudder(d, wi["loops"], pl.wing_scale / 1000.0, pl.wing_x * L, np.deg2rad(pl.wing_angle),
                                         wi.get("root"), lead=True)
         mirror = np.diag([1.0, -1.0, 1.0])
         segs["wings"] += loops + [p @ mirror for p in loops]
@@ -624,9 +679,18 @@ class VehicleView:
         fit_box(ax, self.fig, self.box)
         size = f"D {2 * d.r:.3f} m" if d.axisymmetric else f"depth {2 * d.r:.3f} m, breadth {2 * d.rp:.3f} m"
         lines = [f"hull (grey): L {d.length:.3f} m, {size}"]
+        L = d.length
         if "prop_x" in info:
+            gap = info.get("hub_gap")
+            if gap is None:
+                seat = "where the hull has closed on the axis: not joined to it"
+            elif gap > 0.0:
+                seat = f"{1000 * gap:.1f} mm behind the hull's end: not joined to it"
+            else:
+                seat = "on the hull's aft end" if abs(info["hub_x"] - L) < 1e-9 else "on the hull"
             lines.append(f"propeller (blue): {info['blades']} blades, D {info['prop_d']:.3f} m (the design's "
-                         f"{info['design_d']:.3g} m x {info['prop_scale']:.3f}), plane at x {info['prop_x']:.3f} m")
+                         f"{info['design_d']:.3g} m x {info['prop_scale']:.3f}); hub from x/L {info['hub_x'] / L:.5f} "
+                         f"(x {info['hub_x']:.4f} m, {seat}), the blades' plane at x {info['prop_x']:.4f} m")
         rng = _rng
         if "rudder_x_te" in info:
             n = len(info["rudder_pitch"])
@@ -637,14 +701,16 @@ class VehicleView:
             if rake is None:
                 lines.append(f"{n} rudder{'s' if n > 1 else ''} (orange) at {where}, on the hull: root LE at x "
                              f"{rng(info['rudder_x_le'], 1, 3)} m, {rng(info['rudder_rho_le'], 1000, 1)} mm from the "
-                             f"axis; TE at x {info['rudder_x_te']:.3f} m, {rng(info['rudder_rho_te'], 1000, 1)} mm")
+                             f"axis; TE at x/L {info['rudder_x_te'] / L:.5f} (x {info['rudder_x_te']:.3f} m), "
+                             f"{rng(info['rudder_rho_te'], 1000, 1)} mm")
                 lines.append(f"pitched {rng(info['rudder_pitch'], 1, 1)} deg to the axis: the hull's slope under the "
                              f"root, also when moved (TE {rng(info['rudder_rake'], 1, 1)} deg from square to the axis)"
                              + (f"; the root dips up to {1000 * dip:.1f} mm into the hull" if dip >= 5e-5 else ""))
                 along = "inwards"
             else:
                 lines.append(f"{n} rudder{'s' if n > 1 else ''} (orange) at {where}: TE line {rake:g} deg from square "
-                             f"to the axis (top aft +), meeting the hull at x {info['rudder_x_te']:.3f} m; resting on "
+                             f"to the axis (top aft +), meeting the hull at x/L {info['rudder_x_te'] / L:.5f} (x "
+                             f"{info['rudder_x_te']:.3f} m); resting on "
                              f"the hull: root LE at x {rng(info['rudder_x_le'], 1, 3)} m, "
                              f"{rng(info['rudder_rho_le'], 1000, 1)} mm from the axis; root TE "
                              f"{rng(info['rudder_rho_te'], 1000, 1)} mm from the axis")
@@ -664,13 +730,14 @@ class VehicleView:
             n = len(info["fin_pitch"])
             where = (", ".join(f"{(pl.fin_angle + 360.0 * k / n) % 360:g}" for k in range(n)) + " deg" if n <= 4
                      else f"{pl.fin_angle % 360:g} deg and every {360.0 / n:.4g} deg from there")
-            lines.append(f"{n} fin{'s' if n > 1 else ''} (violet) at {where}: root LE at x {rng(info['fin_x_le'], 1, 3)} "
-                         f"m, TE at x {rng(info['fin_x_te'], 1, 3)} m, pitched {rng(info['fin_pitch'], 1, 1)} deg with "
+            lines.append(f"{n} fin{'s' if n > 1 else ''} (violet) at {where}: root LE at x/L {pl.fin_x:.5f} (x "
+                         f"{rng(info['fin_x_le'], 1, 3)} m), TE at x {rng(info['fin_x_te'], 1, 3)} m, pitched "
+                         f"{rng(info['fin_pitch'], 1, 1)} deg with "
                          f"the hull; root extruded {rng(info['fin_depth'], 1000, 1)} mm")
         if "wing_frames" in info:
             a = pl.wing_angle
-            lines.append(f"wings (green) at {a:g} and {360 - a:g} deg (port: the mirror image): root LE at x "
-                         f"{info['wing_x_le'][0]:.3f} m, TE at x {info['wing_x_te'][0]:.3f} m, pitched "
+            lines.append(f"wings (green) at {a:g} and {360 - a:g} deg (port: the mirror image): root LE at x/L "
+                         f"{pl.wing_x:.5f} (x {info['wing_x_le'][0]:.3f} m), TE at x {info['wing_x_te'][0]:.3f} m, pitched "
                          f"{info['wing_pitch'][0]:.1f} deg with the hull; root extruded "
                          f"{1000 * info['wing_depth'][0]:.1f} mm")
         lines.append("the component being edited is drawn thicker; drag to turn")

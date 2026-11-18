@@ -20,18 +20,29 @@ rudder   The stern plane as a planar rudder (wing_modify, kind rudder), from its
          of symmetry; the sections are symmetric to 1e-5 of the chord). The root (eta 0) where its LE line
          meets the hull, s 3061.4: the root section lies outside the hull, its LE on it, and the vehicle extends
          it to the hull along the TE line (XGeom's TE rake 0; BB2's TE is square to the axis within 0.13 deg).
-         The tip (eta 1) at the foot of the rounded cap, s 6811.5: the planar tip is flat, the 236 mm cap is
-         left off; the TE turns forward into the cap's rounding over the last 20 mm, so the tip row is the
-         section at S_LAST with the LE and TE lines carried on. Per row: chord, sweep (the LE aft of the root's),
-         rake 0, pitch 0, camber 0; the thickness over the chord fitted by least squares as t/c times the
-         section shape plus the changes dt1 .. dtk (wing_modify's Bernstein changes, zero at the LE and the
-         TE). The section shape: the mean over the rows of the thickness over its maximum, written as
+         The tip (eta 1) at the foot of the rounded cap, S_TIP 6811.5 (the side faces end at 6812); the TE
+         turns forward into the cap's rounding over the last 20 mm, so the tip row is the section at S_LAST
+         with the LE and TE lines carried on. Per row: chord, sweep (the LE aft of the root's), rake 0, pitch
+         0, camber 0; the thickness over the chord fitted by least squares as t/c times the section shape plus
+         the changes dt1 .. dtk (wing_modify's Bernstein changes, zero at the LE and the TE). The section
+         shape: the mean over the rows of the thickness over its maximum, written as
          bb2_sternplane_section.dat (Selig x y; its blunt TE's round kept; NACA 0016-like, 16.1 % at x/c 0.30);
          k the number of change points with the least error (xgeom_from_cad.pick). Each distribution in the
          form that fits best (xgeom_from_cad.wing_setup). Frame: the rudder's x (mm) aft from the root's LE,
          y the span from the root, z along (0, 1, -1) / sqrt(2).
+cap      (18 Nov 2026; the user: loading the set-up gave a flat top, not BB2's rudder.) The rounded cap above
+         the tip is fitted as a tip cap of the planar rudder (wing_modify's cap keys, tip_cap.ScaledCap): its
+         cross-sections, cut from the IGES normal to the chord at CAP_STATIONS chord fractions of the planar
+         tip section, scale with that section's half-thickness w (the cap is 0.25 w tall everywhere, a dome
+         with a flat crest), so the top is k(u) w with k a cubic Bezier along the chord and each cross-section
+         the superellipse |w|/w0 = (1 - (h/H)^q)^(1/p); six numbers, fitted by least squares on the
+         point-to-profile distances (tip_cap.fit_scaled) and written as the set-up's cap lines. The tool's
+         CAD then carries the cap (xcad_loft's tip patch over the cap loops write_case appends); the planar
+         tip's chord runs 14 mm past the cap's TE end (the TE line carried on), where the model's cap shrinks
+         to nothing with the section.
 check    bb2_aft_setup_check.png: the hull's profile against the IGES, the planform and sections rebuilt from the
-         rudder's set-up against the CAD's; the deviations printed.
+         rudder's set-up against the CAD's; bb2_cap_check.png: the cap's cross-sections, the IGES against the
+         model; the deviations printed.
 
     python bb2_aft_setup.py <quarter.iges> [out_dir]          (out_dir: default bb2/outputs)
 """
@@ -53,13 +64,17 @@ import bb2_sections as S                                   # noqa: E402
 import bb2_sternplane_loft as L                            # noqa: E402
 import hull_modify as HM                                   # noqa: E402
 import vehicle_cad as VC                                   # noqa: E402
+import tip_cap as TC                                       # noqa: E402
 import wing_modify as WM                                   # noqa: E402
 import xgeom_from_cad as FC                                # noqa: E402
 
 N_TAIL = 201                 # stations along the tail
 N_ROWS = 21                  # rows of the rudder's table, evenly along its span
 N_X = 201                    # chord fractions where the thickness is fitted (cosine spacing)
+S_TIP = 6811.5               # the planar tip: the foot of the rounded cap (the side faces end at 6812)
 S_LAST = 6790.0              # the last section before the TE turns into the cap's rounding
+CAP_STATIONS = 48            # chord fractions (cosine-spaced) where the cap's cross-sections are cut and fitted
+CAP_PLOT = (0.02, 0.1, 0.3, 0.6, 0.9, 0.98)     # the ones drawn in bb2_cap_check.png
 LINE_S = np.arange(3100.0, 6701.0, 200.0)    # sections that give the LE and TE lines
 CHECK_S = (3100.0, 4000.0, 5000.0, 6000.0, 6700.0)
 MAX_K = 8                    # change points tried: 0 .. MAX_K
@@ -155,7 +170,7 @@ def stern_plane(plane, xi, ri, out):
     """(WingParams of the stern plane as a planar rudder, its frame and the misfits)."""
     xf = L.cosine(N_X)
     le, te, miss = lines(plane, xf)
-    s0, s1 = root_s(le, xi, ri), L.S_CAP
+    s0, s1 = root_s(le, xi, ri), S_TIP
     span = s1 - s0
     eta = np.linspace(0.0, 1.0, N_ROWS)
     secs = [section(plane, s, xf) for s in s0 + eta[:-1] * span] + [section(plane, S_LAST, xf)]
@@ -178,6 +193,89 @@ def stern_plane(plane, xi, ri, out):
     frame = {"s0": s0, "s1": s1, "x_le0": float(x_le[0]), "le": le, "te": te, "line_miss": miss, "camber": camber,
              "k": k, "errs": errs, "tc_mean": tc_mean}
     return params, frame
+
+
+def cap_station(plane, x_iges, s_tip):
+    """The cap's cross-section at x (IGES): the cut normal to x above s_tip as (|w|, h above s_tip), both
+    halves; None where the cut does not reach above the tip."""
+    p3 = L.plane_cut(plane, (x_iges, 0.0, 0.0), (1.0, 0.0, 0.0), 400)
+    if p3 is None:
+        return None
+    q = np.column_stack((p3 @ L.E_THICK, p3 @ L.E_SPAN))
+    if np.linalg.norm(q[0] - q[-1]) < 1.0e-6:
+        q = q[:-1]
+    if q[:, 1].max() <= s_tip + 0.05:
+        return None
+    n, top = len(q), int(np.argmax(q[:, 1]))
+    pts = []
+    for step in (1, -1):                                   # from the crest down each side to the foot
+        i = top
+        for _ in range(n):
+            j = (i + step) % n
+            if q[j, 1] < s_tip:
+                f = (q[i, 1] - s_tip) / (q[i, 1] - q[j, 1])
+                pts.append(q[i] + f * (q[j] - q[i]))
+                break
+            pts.append(q[j])
+            i = j
+    pts = np.array(pts)
+    return np.abs(pts[:, 0]), pts[:, 1] - s_tip
+
+
+def cap_fit(plane, design, params, frame):
+    """The cap over the planar tip section fitted as a tip_cap.ScaledCap: (the cap, tip_cap's report per
+    station, the stations as CapStation)."""
+    base = WM.cap_base(design, params)
+    us = L.cosine(CAP_STATIONS + 2)[1:-1]
+    stations = []
+    for u in us:
+        x_cap = u * base.chord
+        st = cap_station(plane, frame["x_le0"] - (base.pivot[0] + x_cap), frame["s1"])
+        if st is not None and len(st[0]) >= 8:
+            stations.append(TC.CapStation(x_cap, st[0], st[1]))
+    cap, report = TC.fit_scaled(stations, base)
+    return cap, report, stations, base
+
+
+def plot_cap(path, cap, base, stations, report):
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+    fig = Figure(figsize=(15, 7))
+    FigureCanvasAgg(fig)
+    axs = fig.subplots(2, 4)
+    for ax, u in zip(axs.flat[:6], CAP_PLOT):
+        k = int(np.argmin([abs(st.x / base.chord - u) for st in stations]))
+        st, rp = stations[k], report[k]
+        prof = TC.profile(st.x, cap, base, 400)
+        ax.plot(st.s, st.h, ".", color="#52514e", ms=3, label="IGES")
+        ax.plot(prof[:, 0], prof[:, 1], "-", color="#2a78d6", lw=1.4, label="cap model")
+        ax.set_aspect("equal")
+        ax.grid(True, color="#e4e3df")
+        ax.set_xlabel("|w| (mm)")
+        ax.set_ylabel("height above the tip (mm)")
+        ax.set_title(f"u {st.x / base.chord:.3f}: half-thickness {rp['w']:.1f} mm, top {rp['top_cad']:.1f} mm\n"
+                     f"(model {rp['top_model']:.1f}); the IGES within {rp['max_dev']:.2f} mm", fontsize=8, loc="left")
+        if u == CAP_PLOT[0]:
+            ax.legend(fontsize=7)
+    ax = axs.flat[6]
+    us = np.array([r["u"] for r in report])
+    ax.plot(us, [r["top_cad"] for r in report], ".", color="#52514e", ms=4, label="IGES")
+    ax.plot(us, [r["top_model"] for r in report], "-", color="#2a78d6", lw=1.4, label="model")
+    ax.set_xlabel("u, chord fraction from the LE")
+    ax.set_ylabel("the cap's height (mm)")
+    ax.grid(True, color="#e4e3df")
+    ax.legend(fontsize=7)
+    ax = axs.flat[7]
+    ax.plot(us, [r["max_dev"] for r in report], "-", color="#e34948", lw=1.2, label="largest")
+    ax.plot(us, [r["rms_dev"] for r in report], "-", color="#2a78d6", lw=1.2, label="rms")
+    ax.set_xlabel("u")
+    ax.set_ylabel("IGES points off the model (mm)")
+    ax.grid(True, color="#e4e3df")
+    ax.legend(fontsize=7)
+    fig.suptitle(f"BB2's stern plane: the tip cap as {WM.cap_describe(cap)}", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(path, dpi=110)
+    return path
 
 
 def to_iges(loops, frame):
@@ -232,8 +330,8 @@ def plot_check(path, hull_design, hull_frame, design, params, frame, plane):
     for xx, yy in ((x_le, s), (x_le - v["chord"], s)):
         ax1.plot(xx, yy, "-", color="#e34948", lw=1.4)
     ax1.plot([], [], "-", color="#e34948", label="bb2_sternplane.txt: LE and TE in the 45 deg plane (s)")
-    for sc in (L.S_CAP, frame["s0"]):
-        lp = L.flat_loop(plane, sc - 0.5 if sc == L.S_CAP else sc)
+    for sc in (S_TIP, frame["s0"]):
+        lp = L.flat_loop(plane, sc)
         ax1.plot([lp[:, 0].max(), lp[:, 0].min()], [sc, sc], ":", color="#9a9994", lw=1.0)
     ax1.set_xlabel("x (mm, the IGES frame: towards the bow)")
     ax1.set_ylabel("r, s (mm)")
@@ -304,7 +402,7 @@ def main():
     rsetup, forms = FC.wing_setup(wp, os.path.join(out, "bb2_sternplane.txt"), "rudder", "bb2_sternplane",
                                   [f"BB2's stern plane from {os.path.basename(SOURCE)} by bb2_aft_setup.py: sections "
                                    f"normal to its span s = (y + z)/sqrt(2) from s {fr['s0']:.3f} (its LE on the hull) "
-                                   f"to {fr['s1']:.1f} (the foot of its rounded cap, left off: the tip flat)",
+                                   f"to {fr['s1']:.1f} (the foot of its rounded cap)",
                                    f"frame: x = {fr['x_le0']:.4f} - x_rudder (mm), s = {fr['s0']:.3f} + y_rudder, w = "
                                    f"z_rudder along (0, 1, -1)/sqrt(2); the TE square to the axis (XGeom's TE rake 0)"])
     ld = WM.load_component(rsetup)
@@ -313,9 +411,25 @@ def main():
                                   + f" ({100 * f[1]:.2f} %)" for c, f in forms.items()))
     print(f"  rebuilt against the CAD: planform (LE and TE) within {plan:.3f} mm; sections within "
           + ", ".join(f"{d:.2f} mm at s {s:.0f}" for s, d in dev.items()))
+    cap, rep, stations, base = cap_fit(plane, ld.design, ld.params, fr)
+    worst = max(rep, key=lambda r: r["max_dev"])
+    rms = float(np.sqrt(np.mean([r["rms_dev"] ** 2 for r in rep])))
+    ld.params.cap = cap
+    WM.write_component(rsetup, ld.params, ld.design, ld.space, ld.settings, "bb2_sternplane",
+                       list(ld.notes) + [f"tip cap: tip_cap.ScaledCap fitted to the IGES cap over the planar tip section at "
+                                         f"{len(rep)} chord stations (point-to-profile, within {worst['max_dev']:.2f} mm, "
+                                         f"rms {rms:.2f}); the cap loops end where the planar section closes"],
+                       "rudder")
+    ld2 = WM.load_component(rsetup)
+    back = np.array(list(ld2.params.cap.as_dict().values()), dtype=float)
+    assert np.allclose(back, list(cap.as_dict().values()), rtol=1e-8, atol=1e-10), "the cap keys do not read back"
+    print(f"  tip cap: {WM.cap_describe(cap)}; the IGES cap within {worst['max_dev']:.2f} mm of it (at u "
+          f"{worst['u']:.3f}), rms {rms:.2f} mm, over {len(rep)} cross-sections (u {rep[0]['u']:.3f} to {rep[-1]['u']:.3f}; "
+          f"the cap's height {min(r['top_cad'] for r in rep):.1f} to {max(r['top_cad'] for r in rep):.1f} mm)")
     print(f"  {rsetup}\n  {os.path.join(out, 'bb2_sternplane_section.dat')}")
     png = plot_check(os.path.join(out, "bb2_aft_setup_check.png"), hd, hf, ld.design, ld.params, fr, plane)
-    print(f"  {png}  ({time.time() - t0:.0f} s)")
+    png2 = plot_cap(os.path.join(out, "bb2_cap_check.png"), cap, base, stations, rep)
+    print(f"  {png}\n  {png2}  ({time.time() - t0:.0f} s)")
 
 
 if __name__ == "__main__":

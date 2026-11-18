@@ -367,10 +367,11 @@ def test_vehicle():
     parts = {"hull": {"design": hull, "lines": [], "problems": []}, "fin": XV.wing_part(FakeAdapter(FIN)),
              "wing": XV.wing_part(FakeAdapter(WING))}
     pl = XV.default_placement(parts)
-    j = hull.joins
-    check("defaults: one fin on top a tenth along the middle body, the wings level a quarter along it",
+    j, L = hull.joins, hull.length
+    check("defaults: one fin on top a tenth along the middle body, the wings level a quarter along it (x/L)",
           [pl.fins, pl.fin_angle, pl.fin_x, pl.wings, pl.wing_angle, pl.wing_x],
-          [1, 0, round(j[1] + 0.1 * (j[2] - j[1]), 3), 2, 90, round(j[1] + 0.25 * (j[2] - j[1]), 3)], 1e-12)
+          [1, 0, round((j[1] + 0.1 * (j[2] - j[1])) / L, 5), 2, 90, round((j[1] + 0.25 * (j[2] - j[1])) / L, 5)],
+          1e-12)
     pl.fins, pl.fin_angle, pl.wing_angle = 3, 30.0, 60.0
     segs, info = XV.assemble(parts, pl)
     chord = (parts["fin"]["root_x"][1] - parts["fin"]["root_x"][0]) / 1000.0
@@ -380,30 +381,29 @@ def test_vehicle():
         x_le, x_te = info["fin_x_le"][k], info["fin_x_te"][k]
         r_le = XV.surface_distance(hull, np.array([x_le]), phi)[0]
         r_te = XV.surface_distance(hull, np.array([x_te]), phi)[0]
-        out += [np.hypot(a[0][1], a[0][2]) - r_le, x_le - pl.fin_x, np.hypot(x_te - x_le, r_te - r_le) - chord,
+        out += [np.hypot(a[0][1], a[0][2]) - r_le, x_le - pl.fin_x * L, np.hypot(x_te - x_le, r_te - r_le) - chord,
                 np.arctan2(a[0][1], a[0][2]) % (2 * np.pi) - phi]
     check("3 fins from 30 deg: each root LE on the hull at fin x in its own half-plane, the TE a root chord aft "
           "along the hull", out, 0.0, 1e-9)
     n = len(segs["wings"]) // 2
     a, ec, eh, et = info["wing_frames"][0]
     phi = np.radians(60.0)
-    r_le = XV.surface_distance(hull, np.array([pl.wing_x]), phi)[0]
+    r_le = XV.surface_distance(hull, np.array([pl.wing_x * L]), phi)[0]
     check("the starboard wing at 60 deg on the hull (z up: et above the horizontal), the port one its mirror "
           "image", [np.hypot(a[1], a[2]) - r_le, a[1] > 0, et[2] > 0, eh @ [0, np.sin(phi), np.cos(phi)],
                     max(np.abs(p * [1, -1, 1] - q).max() for p, q in zip(segs["wings"][:n], segs["wings"][n:])),
                     len(segs["wing_roots"]) == 34],
           [0, 1, 1, 1, 0, 1], 1e-9)
-    pl_t = XV.Placement(**{**pl.__dict__, "fin_x": float(j[3] - 0.4), "fins": 1, "fin_angle": 0.0})
+    pl_t = XV.Placement(**{**pl.__dict__, "fin_x": float(j[3] - 0.4) / L, "fins": 1, "fin_angle": 0.0})
     segs_t, info_t = XV.assemble(parts, pl_t)
     x_le, x_te = info_t["fin_x_le"][0], info_t["fin_x_te"][0]
     r = XV.surface_distance(hull, np.array([x_le, x_te]), 0.0)
     check("a fin on the tail: pitched to the hull's slope under its root (the TE on the hull, a chord aft)",
           [info_t["fin_pitch"][0] - np.degrees(np.arctan2(r[0] - r[1], x_te - x_le)), info_t["fin_pitch"][0] > 5],
           [0, 1], 1e-9)
-    L = hull.length
     probs = [XV.placement_problem({"wing_angle": a_}, L) for a_ in (0.0, 180.0, 200.0)]
     probs += [XV.placement_problem({"wings": 1}, L), XV.placement_problem({"fins": 13}, L),
-              XV.placement_problem({"fin_x": L + 0.1}, L), XV.placement_problem({"wing_scale": 0.0}, L)]
+              XV.placement_problem({"fin_x": 1.1}, L), XV.placement_problem({"wing_scale": 0.0}, L)]
     none = XV.Placement(**{**pl.__dict__, "fins": 0, "wings": 0})
     segs0, info0 = XV.assemble(parts, none)
     check("refused: wings at 0, 180 or 200 deg, 1 wing, 13 fins, a fin off the hull, scale 0; 0 fins and 0 wings: "
@@ -578,6 +578,87 @@ def test_gui(tmp):
         os.chdir(cwd)
 
 
+def test_cap(tmp):
+    print("\nthe tip cap of a planar surface (wing_modify's cap keys, tip_cap.py, the loft's tip patch)")
+    import tip_cap as TC
+    import xgeom_files as XF
+    import xgeom_vehicle as XV
+    import xgeom_wing as XW
+    ld = WM.load_component(os.path.join(HERE, "fin.txt"))
+    p, d = ld.params, ld.design
+    cap = TC.ScaledCap(0.25, 0.27, -0.005, -0.02, 2.44, 2.32)                # BB2's stern plane's, about
+    p.cap = cap
+    path = WM.write_component(os.path.join(tmp, "capped.txt"), p, d, ld.space, {"sections": 21, "cap_loops": 12},
+                              "capped", ["a fin with a scaled tip cap"], "rudder")
+    comp = XF.read_component(path)
+    back = WM.load_component(path)
+    keys = XF.CAP_KEYS["scaled"]
+    check("the cap keys written and read back: cap scaled and its six numbers; the cap_loops setting",
+          [comp.geometry.get("cap") == "scaled", all(k in comp.geometry for k in keys),
+           max(abs(a - b) for a, b in zip(back.params.cap.as_dict().values(), cap.as_dict().values())),
+           back.settings.get("cap_loops")], [1, 1, 0, 12], 1e-9)
+    rad = TC.CapParams(0.6, 3.0, -0.1, 0.1, 60.0, 0.7, 3.3)
+    p.cap = rad
+    path_r = WM.write_component(os.path.join(tmp, "capped_r.txt"), p, d, ld.space, {"sections": 21}, "capped_r", [], "fin")
+    back_r = WM.load_component(path_r).params.cap
+    flat = WM.cap_from_geometry({"cap": "radius", "cap_h_le_mm": "1", "cap_h_te_mm": "2"})
+    check("the radius family (the wind-tunnel rudder's) round trips too; no crown radius: a flat face",
+          [isinstance(back_r, TC.CapParams), max(abs(a - b) for a, b in zip(back_r.as_dict().values(), rad.as_dict().values())
+                                                 if a is not None), flat.crown_radius == TC.INF, flat.edge_radius], [1, 0, 1, 0], 1e-9)
+    bad = [{"cap_k_le": "0.25"},                                              # keys without a cap line
+           {"cap": "scaled", "cap_k_le": "0.25"},                             # k_te missing
+           {"cap": "scaled", "cap_k_le": "0.25", "cap_k_te": "0.25", "cap_h_le_mm": "1"},   # the other family's key
+           {"cap": "scaled", "cap_k_le": "0.25", "cap_k_te": "x"},            # not a number
+           {"cap": "scaled", "cap_k_le": "0.25", "cap_k_te": "0.25", "cap_p": "1"},         # p above 1
+           {"cap": "round"}]                                                  # no such family
+    check("bad cap lines refused: keys without 'cap', a missing k, a key of the other family, a word for a number, "
+          "p not above 1, an unknown family; 'cap none' is a flat tip",
+          [refused(WM.cap_from_geometry, g) for g in bad] + [WM.cap_from_geometry({"cap": "none"}) is None], [1] * 7, 0)
+    p.cap = cap
+    base = WM.cap_base(d, p)
+    tip = WM.section_loops(d, p, [1.0])[0]
+    cl = WM.cap_loops(d, p, WM.POINTS, 5)
+    lv = WM.cap_levels(5)
+    check("cap_base: the tip section's LE, TE and sides as the loops have them; cap_loops: 5 loops of the sections' "
+          "point count, each through the tip's LE and TE, rising to CAP_TOP of the cap's height, the levels closer "
+          "near the crest",
+          [np.abs(base.to_3d(0.0, 0.0, 0.0) - tip[0]).max(), np.abs(base.to_3d(base.chord, 0.0, 0.0) - tip[WM.POINTS - 1]).max(),
+           np.abs(base.to_3d(base.x_up, base.y_up, 0.0) - tip[:WM.POINTS]).max(), cl.shape[0], cl.shape[1],
+           np.abs(cl[:, 0] - tip[0]).max(), np.abs(cl[:, WM.POINTS - 1] - tip[WM.POINTS - 1]).max(),
+           (cl[-1, :, 1] - d.span).max() / float(TC.cap_top(base.x_up, cap, base).max()), lv[-1], (np.diff(lv) > 0).all(),
+           np.diff(lv)[-1] < np.diff(lv)[0]],
+          [0, 0, 0, 5, 2 * WM.POINTS - 1, 0, 0, WM.CAP_TOP, WM.CAP_TOP, 1, 1], 1e-9)
+    out = WM.write_case(tmp, "cap1", d, p, ld.space, cad=False, settings={"sections": 21, "cap_loops": 12}, plot=False)
+    loops = XL.read_loops(out["paths"]["xcad_m.dat"], "m")
+    check("write_case: 21 sections then 12 cap loops in the XCAD file (the setting), the cap in the design record "
+          "and the sections table's note",
+          [out["cap_loops"], len(loops), np.ptp(loops[20][:, 2]), np.ptp(loops[21][:, 2]) > 0.0,
+           json.load(open(out["paths"]["design.json"]))["globals"]["cap"]["cap"] == "scaled",
+           "tip cap" in open(out["paths"]["sections.dat"]).read()], [12, 33, 0, 1, 1, 1], 1e-9)
+    ad = XW.PlanarRudderAdapter(params=path)
+    pv = ad.preview(skeleton=True)
+    part = XV.rudder_part(ad)
+    check("the adapter: the cap in its 3D view and info line, its CASE settings; the vehicle's part has the cap loops too",
+          [pv["cap"] is not None and len(pv["cap"]) == 12, "tip cap" in ad.sections_info(), ad._case_settings()["cap_loops"],
+           len(part["loops"]) - XV.LOOPS], [1, 1, 12, 6], 0)
+    if not XL.occ_available():
+        print("       the loft skipped: no OCCT binding")
+        return
+    out = WM.write_case(tmp, "cap2", d, p, ld.space, cad=True, settings={"sections": 21, "cap_loops": 40}, plot=False)
+    lr = out["loft"]
+    check("the loft of the capped fin: one valid closed solid of 6 faces (the tip patch over the cap, no flat top), "
+          "the tip patch within 0.05 mm of the cap loops (a 220 mm chord), its lines at 3 deg or more (no fold), its "
+          "volume above the sections' (the cap)",
+          [lr.valid, lr.free_edges, XL.count_faces(lr.shape), lr.tip_error < 0.05, lr.tip_angle > 3.0,
+           lr.volume > out["volume_mm3"]], [1, 0, 6, 1, 1, 1], 0)
+    p.cap = rad
+    out_r = WM.write_case(tmp, "cap3", d, p, ld.space, cad=True, settings={"sections": 21, "cap_loops": 40}, plot=False)
+    lr_r = out_r["loft"]
+    check("the same with a radius cap: valid, closed, 6 faces, no fold", [lr_r.valid, lr_r.free_edges, XL.count_faces(lr_r.shape),
+                                                                           lr_r.tip_angle > 3.0], [1, 0, 6, 1], 0)
+    p.cap = None
+
+
 def main():
     print("wing and fin: self-check")
     cwd = os.getcwd()
@@ -590,6 +671,7 @@ def main():
             test_case(tmp)
             test_adapter(tmp)
             test_planar_rudder(tmp)
+            test_cap(tmp)
             test_vehicle()
             test_vehicle_cad(tmp)
             if "--gui" in sys.argv:

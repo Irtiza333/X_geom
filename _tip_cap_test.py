@@ -7,7 +7,9 @@ the loops meet the tip section where they should, and a fit to a cap built from
 known parameters gives those parameters back.
 
 Needs only numpy and scipy (and rot_axis.py / skew_symmetric_matrix.py are not
-needed here): the tip section is an analytic NACA 0016.
+needed here): the tip section is an analytic NACA 0016. The thickness-scaled
+family (ScaledCap, BB2's stern plane) is checked the same way: its sections,
+its loops, and a fit that gives the parameters back.
 
     python _tip_cap_test.py
 """
@@ -118,12 +120,54 @@ def test_fit_recovers_parameters():
     check("worst point deviation after the fit", max(r["max_dev"] for r in rep), 0.0, 1e-3)
 
 
+SCALED = T.ScaledCap(k_le=0.25, k_te=0.27, b1=0.01, b2=-0.02, p=2.5, q=2.2)
+
+
+def test_scaled():
+    print("\nthe thickness-scaled family (ScaledCap)")
+    base = naca_base()
+    x = np.array([0.5, 10.0, 40.0, 100.0, 136.0])
+    w, H = base.half_thickness(x), T.cap_top(x, SCALED, base)
+    check("the top is k(u) times the local half-thickness", H / w, SCALED.ratio(x / base.chord), 1e-12)
+    ell = T.ScaledCap(0.3, 0.3)                                 # p = q = 2: a quarter ellipse
+    pr = T.profile(40.0, ell, base, n=400)
+    w0, H0 = float(base.half_thickness(40.0)), float(T.cap_top(40.0, ell, base))
+    check("p = q = 2: the cross-section is the quarter ellipse (s/w)^2 + (h/H)^2 = 1",
+          (pr[:, 0] / w0) ** 2 + (pr[:, 1] / H0) ** 2, 1.0, 1e-12)
+    check("it starts on the wall base and ends on the crest", [pr[0, 0], pr[0, 1], pr[-1, 0], pr[-1, 1]],
+          [w0, 0.0, 0.0, H0], 1e-9)
+    pr = T.profile(40.0, SCALED, base, n=400)
+    check("s never grows going up, h never falls", [max(np.diff(pr[:, 0]).max(), 0.0), min(np.diff(pr[:, 1]).min(), 0.0)],
+          [0.0, 0.0], 1e-12)
+    n = len(base.x_up) * 2 - 1
+    L = T.loops(SCALED, base, [0.0, 0.5, 1.0])
+    le, te = base.to_3d(0.0, 0.0, 0.0), base.to_3d(base.chord, 0.0, 0.0)
+    check("loops: the section's point count, pinched to the LE and the TE (H = 0 with w there)",
+          [len(l) for l in L] + [np.abs(l[0] - le).max() for l in L] + [np.abs(l[len(base.x_up) - 1] - te).max() for l in L],
+          [n] * 3 + [0.0] * 6, 1e-9)
+    tip = np.vstack([base.to_3d(base.x_up, base.y_up, 0.0), base.to_3d(base.x_lo[::-1], base.y_lo[::-1], 0.0)[1:]])
+    check("v=0 is the tip section itself; v=1 closes onto the crest (upper = lower)",
+          [np.abs(L[0] - tip).max(), np.abs(L[2][:len(base.x_up)] - L[2][len(base.x_up) - 1:][::-1]).max()], [0.0, 0.0], 1e-9)
+    stations = []
+    for u in np.r_[np.linspace(0.01, 0.99, 28)]:
+        xs = u * base.chord
+        pr = T.profile(xs, SCALED, base, n=300)
+        stations.append(T.CapStation(xs, pr[:, 0], pr[:, 1]))
+    p, rep = T.fit_scaled(stations, base)
+    check("fit_scaled gives the parameters back (k_le, k_te, b1, b2, p, q)",
+          [p.k_le, p.k_te, p.b1, p.b2, p.p, p.q], [SCALED.k_le, SCALED.k_te, SCALED.b1, SCALED.b2, SCALED.p, SCALED.q], 2e-3)
+    check("worst point deviation after the fit", max(r["max_dev"] for r in rep), 0.0, 1e-4)
+    d = T._polyline_distance(np.array([0.5, 2.0]), np.array([0.5, 0.0]), np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]))
+    check("_polyline_distance measures to the segments, not the vertices", d, [0.5, 1.0], 1e-12)
+
+
 def main():
     print("tip cap model self-check")
     test_cross_section()
     test_special_cases()
     test_loops()
     test_fit_recovers_parameters()
+    test_scaled()
     print()
     if _FAILED:
         print(f"{len(_FAILED)} check(s) FAILED: " + ", ".join(_FAILED))

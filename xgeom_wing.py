@@ -36,6 +36,8 @@ import numpy as np
 import wing_modify as WM
 from xgeom_common import BLUE, GREY, GRID, INK2, RED, SECTION_COLORS, Row, fit_box, keep_fitted
 
+GREEN = "#1f8a70"                                  # the tip cap's loops in the 3D view
+
 MAX_ORDER = 12
 VIEW_FRACTIONS = (0.0, 0.25, 0.5, 0.75, 1.0)     # sections in the Design tab's views, fractions of the span
 FREE = ("chord", "pitch")                         # the curves whose variables start free
@@ -58,7 +60,8 @@ class WingAdapter:
 
     def __init__(self, params=None):
         r = ROLES[self.role]
-        self.settings = {"sections": WM.SECTIONS, "points": WM.POINTS, "plot": True, "free": FREE, "half": False}
+        self.settings = {"sections": WM.SECTIONS, "points": WM.POINTS, "plot": True, "free": FREE, "half": False,
+                         "cap_loops": WM.CAP_LOOPS}
         self.out_dir = r["out_dir"]
         if not (params or r["params"]):
             raise ValueError(f"a planar {r['name'].lower()} starts from its component file (kind {self.role})")
@@ -337,8 +340,10 @@ class WingAdapter:
 
     def sections_info(self):
         n, m, k = self.settings["sections"], self.settings["points"], self.design.changes
+        tip = ("the tip is flat" if self.params.cap is None else
+               f"then {self.settings['cap_loops']} loops over the tip cap ({WM.cap_describe(self.params.cap)})")
         return (f"{n} sections {self.design.span / (n - 1):.1f} mm apart along the span, {2 * m - 1} points each "
-                f"({m} per side, closer together at the LE and the TE); the tip is flat for now. Change points: "
+                f"({m} per side, closer together at the LE and the TE); {tip}. Change points: "
                 f"{k} Bezier points along the chord that change the thickness (dt) and the camber line (dc), "
                 f"each with its curve over the span")
 
@@ -387,6 +392,7 @@ class WingAdapter:
         if skeleton:
             try:
                 out["skeleton"] = WM.section_loops(d, p, self.stations(), self.settings["points"])
+                out["cap"] = WM.cap_loops(d, p, self.settings["points"], self.settings["cap_loops"]) if p.cap else None
             except Exception as exc:
                 out["skeleton"] = None
                 problems.append(f"no sections: {type(exc).__name__}: {exc}")
@@ -406,7 +412,7 @@ class WingAdapter:
         return WM.WingSpace(self.params, self.design, bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()},
                             fixed=fixed)
 
-    CASE_KEYS = ("sections", "points", "half")
+    CASE_KEYS = ("sections", "points", "half", "cap_loops")
 
     def _case_settings(self):
         return {k: self.settings[k] for k in self.CASE_KEYS}
@@ -705,7 +711,8 @@ class WingSkeletonView:
         self.ax = ax = fig.add_subplot(111, projection="3d")
         fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
         self.col = {k: Line3DCollection([np.zeros((2, 3))], colors=c, linewidths=w)
-                    for k, c, w in (("sections", BLUE, 0.8), ("root", RED, 2.0), ("tip", INK2, 1.6))}
+                    for k, c, w in (("sections", BLUE, 0.8), ("root", RED, 2.0), ("tip", INK2, 1.6),
+                                    ("cap", GREEN, 0.7))}
         for c in self.col.values():
             ax.add_collection3d(c)
         ax.set_xlabel("x (mm)")
@@ -726,10 +733,12 @@ class WingSkeletonView:
             self.text.set_text("no sections: " + (pv["problems"][0] if pv["problems"] else ""))
             return
         q = sk[:, :, [0, 2, 1]]
-        segs = {"sections": list(q[1:-1]), "root": [q[0]], "tip": [q[-1]]}
+        cap = pv.get("cap")
+        segs = {"sections": list(q[1:-1]), "root": [q[0]], "tip": [q[-1]],
+                "cap": list(cap[:, :, [0, 2, 1]]) if cap is not None and len(cap) else [np.zeros((2, 3))]}
         for k, c in self.col.items():
             c.set_segments(segs[k])
-        p = q.reshape(-1, 3)
+        p = np.vstack([q.reshape(-1, 3)] + ([cap.reshape(-1, 3)[:, [0, 2, 1]]] if cap is not None and len(cap) else []))
         lo, hi = p.min(axis=0), p.max(axis=0)
         ax = self.ax
         ax.set_xlim(lo[0], hi[0])
@@ -739,7 +748,9 @@ class WingSkeletonView:
         fit_box(ax, self.fig, self.box)
         d = pv["design"]
         msg = (f"{len(sk)} sections, {sk.shape[1]} points each (the XCAD file); span {d.span:.1f} mm; the root (red) "
-               f"and the flat tip (dark) are closed by planar faces in the loft")
+               + (f"is closed by a planar face in the loft;\nthe tip (dark) carries {len(cap)} cap loops (green): "
+                  f"{WM.cap_describe(self.a.params.cap)}" if cap is not None and len(cap) else
+                  "and the flat tip (dark) are closed by planar faces in the loft"))
         if pv["problems"]:
             msg += "\nproblem: " + pv["problems"][0][:100]
         self.text.set_text(msg)

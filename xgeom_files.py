@@ -49,8 +49,9 @@ Assembly file:
     # hull           bb2_hull.txt                the component files, relative to the assembly file
     # blade          bb2_blade.txt
     # rudder         bb2_sternplane.txt
-    # ---- placement                              the Vehicle tab's settings (xgeom_vehicle.Placement)
-    # prop_dx        0
+    # ---- placement                              the Vehicle tab's settings (xgeom_vehicle.Placement):
+    # prop_x         1                            positions as x/L (0 the nose, 1 the aft end): here the
+    # rudder_x       0.89819                      hub's start and the rudders' root TE (BB2's aft half)
     # ...
     # ---- optimization run
     # samples        30                           round-0 designs
@@ -80,13 +81,16 @@ COMPONENT = "# XGeom component"
 ASSEMBLY = "# XGeom assembly"
 PLANAR = ("rudder", "fin", "wing")
 KINDS = ("blade",) + PLANAR + ("hull",)
-_PLANAR_GEOMETRY = ("span_mm", "section", "ref_xc", "camber_xc")
+CAP_KEYS = {"scaled": ("cap_k_le", "cap_k_te", "cap_b1", "cap_b2", "cap_p", "cap_q"),
+            "radius": ("cap_h_le_mm", "cap_h_te_mm", "cap_b1_mm", "cap_b2_mm", "cap_crown_radius_mm",
+                       "cap_edge_radius_mm", "cap_te_radius_mm")}      # a planar surface's tip cap (tip_cap.py)
+_PLANAR_GEOMETRY = ("span_mm", "section", "ref_xc", "camber_xc", "cap") + CAP_KEYS["scaled"] + CAP_KEYS["radius"]
 GEOMETRY = {"blade": ("diameter_m", "blades", "root_r", "hub_height_m", "hub_base_m", "hub_top_m", "hub_x_m",
                       "section", "section_tables"),
             **{k: _PLANAR_GEOMETRY for k in PLANAR},
             "hull": ("nose_m", "middle_m", "tail_m", "cap_m", "axisymmetric")}
 SETTINGS = {"blade": ("sections", "tip_band", "tip_sections", "clearance_mm", "hub", "part"),
-            **{k: ("sections", "change_points", "half") for k in PLANAR},
+            **{k: ("sections", "change_points", "half", "cap_loops") for k in PLANAR},
             "hull": ("half",)}
 ALIASES = {"blade": {"section_table": "section", "airfoil": "section"},          # old files' keys, read as these
            **{k: {"airfoil": "section"} for k in PLANAR}, "hull": {}}
@@ -105,7 +109,7 @@ DECIMALS = {"blade": 8, **{k: 8 for k in PLANAR}, "hull": 9}  # the table's
 TITLES = {"blade": "distributions over r/R", **{k: "distributions over eta = y/span" for k in PLANAR},
           "hull": "stations"}
 ASSEMBLY_COMPONENTS = ("hull", "blade", "rudder", "fin", "wing")
-PLACEMENT_KEYS = ("prop_dx", "prop_d", "rudder_dx", "rudder_angle", "rudders", "rudder_scale", "rudder_rake",
+PLACEMENT_KEYS = ("prop_x", "prop_d", "rudder_x", "rudder_angle", "rudders", "rudder_scale", "rudder_rake",
                   "fin_x", "fins", "fin_angle", "fin_scale", "wing_x", "wings", "wing_angle", "wing_scale", "view")
 RUN_KEYS = ("samples", "batch", "seed", "cad_timeout_s")
 KEY_WIDTH = 14
@@ -635,8 +639,8 @@ def assembly_text(asm):
     out.append("# ---- components (files relative to this one)")
     out += [_key(k, asm.components[k]) for k in ASSEMBLY_COMPONENTS if k in asm.components]
     if asm.placement:
-        out.append("# ---- placement (the Vehicle tab; x in m from the nose, angles in deg from the top towards "
-                   "starboard)")
+        out.append("# ---- placement (the Vehicle tab; positions x/L, 0 the nose, 1 the aft end; angles in deg from "
+                   "the top towards starboard)")
         out += [_key(k, asm.placement[k]) for k in PLACEMENT_KEYS if k in asm.placement]
     if asm.run:
         out.append("# ---- optimization run")

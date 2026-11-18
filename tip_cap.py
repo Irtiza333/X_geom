@@ -37,6 +37,21 @@ to zero at both ends with a vertical tangent.
 Special cases: edge_radius = 0 and an infinite crown radius is a square tip; a finite
 edge radius on a flat face is a flat tip with rounded edges; edge_radius equal to
 the local half-thickness is a fully rounded tip.
+
+A second family (`ScaledCap`, 18 Nov 2026) for caps whose cross-sections scale
+with the local half-thickness instead of carrying radii in mm (BB2's stern plane,
+the DRDC closures of propeller blades): the top is H(u) = k(u) w(u), k along the
+chord the same cubic Bezier law as the face above (k_le, k_te, b1, b2, all
+dimensionless), and each cross-section is the superellipse
+
+    |z - m| / w = (1 - (h / H)^q)^(1/p),      0 <= h <= H,
+
+a flat crest and a vertical tangent at the wall base; p = q = 2 is a quarter
+ellipse, the DRDC closure sqrt(1 - v^3) is p = 3, q = 2. H falls to 0 with w at the
+LE and at a closed TE, so the loops pinch to the tip section's ends by
+themselves; over a blunt TE (w > 0 there) the cap stays open at that end. The
+same functions (cap_top, points, loops, grid, profile) take either family;
+fit_scaled fits this one.
 """
 
 from __future__ import annotations
@@ -76,6 +91,27 @@ class CapParams:
         if not np.isfinite(d["crown_radius"]):
             d["crown_radius"] = None            # JSON has no infinity: None = flat
         return d
+
+
+@dataclass
+class ScaledCap:
+    """A cap whose cross-sections scale with the tip section's half-thickness w: the top H = k(u) w, k the
+    Bezier law k_le (1-u) + k_te u + 3u(1-u) [b1 (1-u) + b2 u] along the chord, each cross-section the
+    superellipse |z - m| / w = (1 - (h / H)^q)^(1/p). All dimensionless."""
+    k_le: float                 # H / w at the LE end
+    k_te: float                 # H / w at the TE end
+    b1: float = 0.0             # the bow of k along the chord (0: a straight law)
+    b2: float = 0.0
+    p: float = 2.0              # the superellipse's exponents: across (p) and up (q); 2, 2 a quarter ellipse
+    q: float = 2.0
+
+    def ratio(self, u):
+        u = np.asarray(u, dtype=float)
+        return (self.k_le * (1.0 - u) + self.k_te * u
+                + 3.0 * u * (1.0 - u) * (self.b1 * (1.0 - u) + self.b2 * u))
+
+    def as_dict(self) -> dict:
+        return asdict(self)
 
 
 # --------------------------------------------------------------------------- #
@@ -148,11 +184,13 @@ def _closure(d, length):
     return np.sqrt(np.clip(1.0 - (1.0 - t) ** 2, 0.0, 1.0))
 
 
-def cap_top(x, p: CapParams, base: CapBase):
-    """Height of the top of the cap above the tip section, H(x)."""
+def cap_top(x, p, base: CapBase):
+    """Height of the top of the cap above the tip section, H(x) (either family)."""
     x = np.asarray(x, float)
     u = x / base.chord
     w = base.half_thickness(x)
+    if isinstance(p, ScaledCap):
+        return np.maximum(p.ratio(u), 0.0) * np.maximum(w, 0.0)
     crown = 0.0 if not np.isfinite(p.crown_radius) else w * w / (2.0 * p.crown_radius)
     top = p.face(u) + crown
     return (np.maximum(top, 0.0) * _closure(x, p.edge_radius)
@@ -263,8 +301,27 @@ def _offset(sec: _Section, h):
     return s
 
 
-def profile(x: float, p: CapParams, base: CapBase, n: int = 400):
-    """One side of the cross-section at x as (s, h), wall base to crest."""
+def _scaled_offset(p: ScaledCap, w, H, h):
+    """The ScaledCap's distance from the mid-line at the height h (0 <= h <= H): w (1 - (h/H)^q)^(1/p)."""
+    w, H, h = np.broadcast_arrays(np.asarray(w, float), np.asarray(H, float), np.asarray(h, float))
+    v = np.clip(np.divide(h, H, out=np.zeros(h.shape), where=H > 0.0), 0.0, 1.0)
+    return w * np.clip(1.0 - v ** p.q, 0.0, None) ** (1.0 / p.p)
+
+
+def _scaled_profile(x: float, p: ScaledCap, base: CapBase, n: int = 400):
+    """One side of the ScaledCap's cross-section at x as (s, h): dense at the wall base (its vertical
+    tangent) and at the crest."""
+    w, H = float(base.half_thickness(x)), float(cap_top(x, p, base))
+    if H <= 0.0 or w <= 0.0:
+        return np.array([[max(w, 0.0), 0.0]])
+    v = np.unique(np.r_[np.sin(np.linspace(0.0, 0.5 * np.pi, n)) ** 2, np.linspace(0.0, 0.1, n // 2) ** 2])
+    return np.column_stack([_scaled_offset(p, w, H, v * H), v * H])
+
+
+def profile(x: float, p, base: CapBase, n: int = 400):
+    """One side of the cross-section at x as (s, h), wall base to crest (either family)."""
+    if isinstance(p, ScaledCap):
+        return _scaled_profile(x, p, base, n)
     sec = _section(base.half_thickness(x), float(cap_top(x, p, base)), p.edge_radius,
                    p.crown_radius)
     if sec.H <= 0.0:
@@ -277,11 +334,11 @@ def profile(x: float, p: CapParams, base: CapBase, n: int = 400):
     return np.column_stack([_offset(sec, h), h])
 
 
-def points(x, v, side: int, p: CapParams, base: CapBase):
+def points(x, v, side: int, p, base: CapBase):
     """
     Cap points at chord stations x (array) and height fractions v (scalar or
-    array broadcast with x), side +1 (upper, +z) or -1 (lower), as 3D points.
-    v = 0 is the wall base (the tip section itself), v = 1 the crest.
+    array broadcast with x), side +1 (upper, +z) or -1 (lower), as 3D points
+    (either family). v = 0 is the wall base (the tip section itself), v = 1 the crest.
     """
     x = np.atleast_1d(np.asarray(x, float))
     v = np.broadcast_to(np.asarray(v, float), x.shape)
@@ -289,10 +346,13 @@ def points(x, v, side: int, p: CapParams, base: CapBase):
     w = base.half_thickness(x)
     z = np.empty_like(x)
     h = v * H
-    for i in range(len(x)):
-        sec = _section(w[i], H[i], p.edge_radius, p.crown_radius)
-        s = float(_offset(sec, h[i])) if H[i] > 0.0 else w[i]
-        z[i] = base.mid(x[i]) + side * s
+    if isinstance(p, ScaledCap):
+        z[:] = base.mid(x) + side * _scaled_offset(p, w, H, h)
+    else:
+        for i in range(len(x)):
+            sec = _section(w[i], H[i], p.edge_radius, p.crown_radius)
+            s = float(_offset(sec, h[i])) if H[i] > 0.0 else w[i]
+            z[i] = base.mid(x[i]) + side * s
     # at the two ends the cap has no height: land exactly on the tip section
     edge = H <= 0.0
     if np.any(edge):
@@ -300,7 +360,7 @@ def points(x, v, side: int, p: CapParams, base: CapBase):
     return base.to_3d(x, z, h)
 
 
-def loops(p: CapParams, base: CapBase, levels, x_up=None, x_lo=None):
+def loops(p, base: CapBase, levels, x_up=None, x_lo=None):
     """
     Closed loops over the cap for a section-based rebuild (the XCAD file), one per
     height fraction in `levels`, each in the tip section's own point order: start at
@@ -319,7 +379,7 @@ def loops(p: CapParams, base: CapBase, levels, x_up=None, x_lo=None):
     return out
 
 
-def grid(p: CapParams, base: CapBase, nx: int = 81, nv: int = 21):
+def grid(p, base: CapBase, nx: int = 81, nv: int = 21):
     """
     The cap as a structured point grid, (nx, 2 nv - 1, 3): rows along the chord
     (cosine-spaced, LE end to TE end), columns from the +z wall base over the crest
@@ -344,11 +404,67 @@ class CapStation:
     h: np.ndarray       # height above the tip section
 
 
-def _deviation(st: CapStation, p: CapParams, base: CapBase) -> np.ndarray:
-    """Distance from each measured point to the model cross-section at its station."""
+def _polyline_distance(s, h, prof):
+    """Distance from the points (s, h) to the polyline prof ((n, 2)): to its segments, not its vertices."""
+    q = np.column_stack((np.asarray(s, float), np.asarray(h, float)))
+    if len(prof) < 2:
+        return np.linalg.norm(q - prof[0], axis=1)
+    a, d = prof[:-1], np.diff(prof, axis=0)
+    dd = np.einsum("jk,jk->j", d, d)
+    t = np.clip(np.einsum("ijk,jk->ij", q[:, None, :] - a[None], d) / np.where(dd > 0.0, dd, 1.0), 0.0, 1.0)
+    near = a[None] + t[..., None] * d[None]
+    return np.linalg.norm(q[:, None, :] - near, axis=2).min(axis=1)
+
+
+def _deviation(st: CapStation, p, base: CapBase) -> np.ndarray:
+    """Distance from each measured point to the model cross-section at its station (either family; the
+    ScaledCap's from its dense profile polyline)."""
+    if isinstance(p, ScaledCap):
+        return _polyline_distance(st.s, st.h, _scaled_profile(st.x, p, base, 600))
     sec = _section(base.half_thickness(st.x), float(cap_top(st.x, p, base)),
                    p.edge_radius, p.crown_radius)
     return _distance(sec, st.s, st.h)
+
+
+def fit_scaled(stations, base: CapBase, init: ScaledCap | None = None):
+    """
+    Least-squares fit of a ScaledCap to measured cross-sections: k_le, k_te, b1, b2, p and q at once, on
+    the point-to-profile distances of every station whose tip section has a thickness there (the closure
+    covers both ends, so there is no core region). Returns (params, report) as fit does.
+    """
+    stations = [st for st in stations if len(st.h) and base.half_thickness(st.x) > 0.0]
+    if len(stations) < 4:
+        raise ValueError("need at least four cap stations")
+    C = base.chord
+    us = np.array([st.x / C for st in stations])
+    ratio = np.array([st.h.max() / base.half_thickness(st.x) for st in stations])
+    lin = np.polyfit(us, ratio, 1)
+    p0 = init or ScaledCap(float(np.polyval(lin, 0.0)), float(np.polyval(lin, 1.0)))
+
+    def sub(st, n=240):
+        k = np.linspace(0, len(st.h) - 1, min(n, len(st.h))).astype(int)
+        return CapStation(st.x, st.s[k], st.h[k])
+    small = [sub(st) for st in stations]
+
+    def unpack(q):
+        return ScaledCap(*[float(v) for v in q])
+
+    def res(q):
+        p = unpack(q)
+        return np.concatenate([_deviation(st, p, base) for st in small])
+
+    q0 = [p0.k_le, p0.k_te, p0.b1, p0.b2, p0.p, p0.q]
+    lo, hi = [0.0, 0.0, -5.0, -5.0, 1.01, 1.01], [5.0, 5.0, 5.0, 5.0, 8.0, 8.0]
+    r = least_squares(res, np.clip(q0, lo, hi), bounds=(lo, hi), x_scale="jac")
+    p = unpack(r.x)
+    report = []
+    for st in stations:
+        d = _deviation(st, p, base)
+        report.append({"x": float(st.x), "u": float(st.x / C), "w": float(base.half_thickness(st.x)),
+                       "top_cad": float(st.h.max()), "top_model": float(cap_top(st.x, p, base)),
+                       "max_dev": float(d.max()), "rms_dev": float(np.sqrt(np.mean(d * d))),
+                       "n_points": int(len(d)), "core": True})
+    return p, report
 
 
 def fit(stations, base: CapBase, x_core=(0.02, 0.95), init: CapParams | None = None):

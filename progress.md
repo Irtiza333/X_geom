@@ -606,6 +606,27 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   one does not settle on prism faces). The rudder set-up JSON's settings gain `tip_drop`; no component or
   assembly file changed. Tests: tool 61 with the GUI, wing 54, files 51, hull 64, blade 77 (with the GUI),
   modify 136.
+- Tip cap for the planar surfaces (18 Nov 2026; the user: "everytime I load in bb2_sternplane.txt it creates a
+  flat top instead of creating the actual bb2 rudder"; his choice: fit a cap model and carry it in the set-up).
+  The planar rudder had no cap: the set-up written on 13 Nov left the rounded cap off, and a stack of horizontal
+  sections is closed flat. BB2's cap is not tip_cap's wind-tunnel family (a wall, an edge radius in mm, a crown):
+  every cross-section is a dome 0.25 times the local half-thickness tall with a flat crest, so `tip_cap.py` has
+  a second family, `ScaledCap` (the top k(u) w(u), k a cubic Bezier along the chord; each cross-section the
+  superellipse |w|/w0 = (1 - (h/H)^q)^(1/p); dimensionless; pinched by itself at the LE and a closed TE) with
+  `fit_scaled`. The planar component files (`wing_modify.py`, `xgeom_files.py`) take `cap scaled` (cap_k_le,
+  cap_k_te, cap_b1, cap_b2, cap_p, cap_q) or `cap radius` (the wind-tunnel family's seven numbers in mm) and
+  the setting `cap_loops` (40); `write_case` appends the cap loops to the XCAD file and xcad_loft's tip patch
+  covers them; the 3D sections tab draws them, the Vehicle tab's rudders carry them; the cap's numbers are held.
+  `bb2/bb2_aft_setup.py` fits BB2's cap from 48 cuts of the IGES over the planar tip section (its tip at its
+  own `S_TIP` 6811.5 now): k 0.2511 to 0.2699, bow -0.0047, -0.0193, p 2.44, q 2.32, the IGES cap within 1.9 mm
+  (rms 0.40), and writes it into `bb2/outputs/bb2_sternplane.txt` (`bb2_cap_check.png`; the hull's files
+  unchanged, the set-up's other numbers moved by 1e-5 from the better cuts). The rudder built from the set-up:
+  one valid solid of six faces, the tip patch within 0.06 mm of the cap loops, no fold, 9 s; against the IGES
+  the cap within 1.27 mm (rms 0.31), the sides within 1.50 as before. The lofted stern plane of the set-up
+  files stays the exact one. `claude/xgeom-file-formats.md` has the keys (for Eddie: optional keys and one
+  optional setting of the rudder, fin and wing files; old files read as before). Tests: tip_cap (the scaled
+  family), wing 62 with the GUI (the cap keys, the loops, the loft with both families), files 51, hull 64,
+  tool 61.
 
 ## Next steps
 

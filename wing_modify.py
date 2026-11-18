@@ -4,8 +4,8 @@ wing_modify.py
 A wing or a fin from a parameter file, and its design space: the span, and each spanwise distribution as a
 Bezier curve over the span fraction eta, fitted to the file, whose control points are the design variables.
 The sections are a named airfoil (airfoils.py) scaled to t/c and f/c, with Bezier changes of its thickness and
-camber line; lofted through the sections of the XCAD file (xcad_loft.py) they give the solid, its tip flat for
-now.
+camber line; lofted through the sections of the XCAD file (xcad_loft.py) they give the solid, its tip flat
+unless the component file gives it a tip cap (below).
 
 Parameter file (.dat; '#' header, np.loadtxt reads the table):
 
@@ -42,6 +42,15 @@ chord_mm t/c f/c sweep_mm rake_mm (then dt1 .. dtk dc1 .. dck), with the setting
 each curve's form ('table' as the file has it, 'bezier1 <points>', 'bezier2') and every variable's value,
 bounds and free flag. load_component reads one exactly (or an old parameter file, fitted as below);
 write_component writes one (the design tool's Save set-up, write_case's <case>.txt).
+
+Tip cap (18 Nov 2026, for BB2's stern plane): the geometry key 'cap' names a cap of tip_cap.py over the tip
+section, 'scaled' (ScaledCap: cap_k_le, cap_k_te, cap_b1, cap_b2, cap_p, cap_q; the cap's height a share of
+the local half-thickness, its cross-sections superellipses) or 'radius' (CapParams: cap_h_le_mm, cap_h_te_mm,
+cap_b1_mm, cap_b2_mm, cap_crown_radius_mm, cap_edge_radius_mm, cap_te_radius_mm; the wind-tunnel rudder's
+family, with a wall, an edge radius and a crown). write_case then appends 'cap_loops' (a setting, default
+CAP_LOOPS) closed loops over the cap to the XCAD file, pinched to the tip section's LE and TE, at the heights
+CAP_TOP (1 - (1 - k/n)^2) of the cap (the extraction's spacing), and xcad_loft's tip patch covers them; without
+the key the tip is flat. The cap's parameters are held (not design variables yet).
 
 Frame (mm; the rudder's working frame): the origin at the root's LE, x chordwise aft, y along the span (0 at
 the root, the span at the tip), z across the section, positive on the side the camber bulges to (a wing's
@@ -88,6 +97,7 @@ import numpy as np
 from scipy.interpolate import CubicSpline, PchipInterpolator
 
 import blade_modify as BM
+import tip_cap as TC
 import xgeom_files as XF
 from blade_modify import BladeCurve, FileCurve, TwoSegmentCurve, curve_at, fit_form
 from replica_funcs import bernstein
@@ -116,6 +126,8 @@ CHANGE_ORDER = 2                  # a change's curve: 3 control points
 CHANGE_BOUNDS = (-0.02, 0.02)     # a change's values (fractions of the chord) unless the file goes further
 SECTIONS = 41                     # sections in the XCAD file, evenly from the root to the tip
 POINTS = 61                       # points per side of a section, LE to TE (cosine spacing)
+CAP_LOOPS = 40                    # loops over a tip cap in the XCAD file (setting cap_loops)
+CAP_TOP = 0.995                   # the last cap loop's share of the cap's height (the extraction's --cap-top)
 ROW_TOL = 1e-8
 N_FIT = 41                        # evenly spaced eta (with the rows) where the curves are fitted to the file
 
@@ -154,6 +166,7 @@ class WingParams:
     camber_xc: float = CAMBER_XC
     kind: str = "wing"            # "wing" or "fin": the file's first line
     path: str = ""                # the file it was read from ("" when made here)
+    cap: object = None            # the tip cap: tip_cap.ScaledCap or CapParams, None for a flat tip
 
     @property
     def names(self):
@@ -368,6 +381,123 @@ def section_stations(n=SECTIONS):
     if n < 3:
         raise ValueError("at least 3 sections")
     return np.linspace(0.0, 1.0, n)
+
+
+# --------------------------------------------------------------------------
+# The tip cap
+# --------------------------------------------------------------------------
+
+CAP_DEFAULTS = {"scaled": {"cap_b1": 0.0, "cap_b2": 0.0, "cap_p": 2.0, "cap_q": 2.0},
+                "radius": {"cap_b1_mm": 0.0, "cap_b2_mm": 0.0, "cap_crown_radius_mm": None, "cap_edge_radius_mm": 0.0,
+                           "cap_te_radius_mm": 0.0}}
+
+
+def cap_from_geometry(g, path=""):
+    """The tip cap of a component file's geometry (XF.CAP_KEYS): None without a 'cap' key; a ScaledCap for
+    'cap scaled' (cap_k_le and cap_k_te required, the rest CAP_DEFAULTS); CapParams for 'cap radius' (cap_h_le_mm
+    and cap_h_te_mm required; no crown radius: a flat face). Cap keys without 'cap', or of the other family, are
+    an error."""
+    kind = g.get("cap")
+    used = [k for fam in XF.CAP_KEYS for k in XF.CAP_KEYS[fam] if k in g]
+    if kind is None:
+        if used:
+            raise ValueError(f"{path}: {', '.join(used)} without a 'cap' line (cap scaled or cap radius)")
+        return None
+    kind = kind.strip().lower()
+    if kind in ("none", "flat", "no"):
+        return None
+    if kind not in XF.CAP_KEYS:
+        raise ValueError(f"{path}: cap {kind}: scaled or radius (or none)")
+    other = [k for fam in XF.CAP_KEYS if fam != kind for k in XF.CAP_KEYS[fam] if k in g]
+    if other:
+        raise ValueError(f"{path}: {', '.join(other)} are not keys of a {kind} cap")
+    vals = {}
+    for k in XF.CAP_KEYS[kind]:
+        if k in g:
+            txt = g[k].strip()
+            try:
+                vals[k] = None if txt.lower() in ("none", "inf", "flat") else float(txt)
+            except ValueError:
+                raise ValueError(f"{path}: {k} {txt}: not a number") from None
+        elif k in CAP_DEFAULTS[kind]:
+            vals[k] = CAP_DEFAULTS[kind][k]
+        else:
+            raise ValueError(f"{path}: a {kind} cap needs {k}")
+    if kind == "scaled":
+        if any(vals[k] is None for k in vals):
+            raise ValueError(f"{path}: a scaled cap's keys are numbers")
+        if min(vals["cap_p"], vals["cap_q"]) <= 1.0:
+            raise ValueError(f"{path}: cap_p and cap_q must be above 1 (2, 2: a quarter ellipse)")
+        return TC.ScaledCap(vals["cap_k_le"], vals["cap_k_te"], vals["cap_b1"], vals["cap_b2"], vals["cap_p"],
+                            vals["cap_q"])
+    if any(vals[k] is None for k in vals if k != "cap_crown_radius_mm"):
+        raise ValueError(f"{path}: a radius cap's keys are numbers (cap_crown_radius_mm may be none: a flat face)")
+    crown = vals["cap_crown_radius_mm"]
+    return TC.CapParams(vals["cap_h_le_mm"], vals["cap_h_te_mm"], vals["cap_b1_mm"], vals["cap_b2_mm"],
+                        TC.INF if crown is None or not np.isfinite(crown) else crown, vals["cap_edge_radius_mm"],
+                        vals["cap_te_radius_mm"])
+
+
+def cap_geometry(cap):
+    """The component file's geometry lines of a cap (cap_from_geometry reads them back); {} for None."""
+    if cap is None:
+        return {}
+    if isinstance(cap, TC.ScaledCap):
+        return {"cap": "scaled", "cap_k_le": XF.num(cap.k_le), "cap_k_te": XF.num(cap.k_te), "cap_b1": XF.num(cap.b1),
+                "cap_b2": XF.num(cap.b2), "cap_p": XF.num(cap.p), "cap_q": XF.num(cap.q)}
+    return {"cap": "radius", "cap_h_le_mm": XF.num(cap.h_le), "cap_h_te_mm": XF.num(cap.h_te),
+            "cap_b1_mm": XF.num(cap.b1), "cap_b2_mm": XF.num(cap.b2),
+            "cap_crown_radius_mm": "none" if not np.isfinite(cap.crown_radius) else XF.num(cap.crown_radius),
+            "cap_edge_radius_mm": XF.num(cap.edge_radius), "cap_te_radius_mm": XF.num(cap.te_radius)}
+
+
+def cap_describe(cap):
+    """One line on a cap, for reports."""
+    if cap is None:
+        return "flat tip"
+    if isinstance(cap, TC.ScaledCap):
+        return (f"scaled cap: height {cap.k_le:.4g} (LE) to {cap.k_te:.4g} (TE) of the half-thickness"
+                + (f", bow {cap.b1:.3g}, {cap.b2:.3g}" if cap.b1 or cap.b2 else "") + f"; superellipse p {cap.p:.3g}, "
+                f"q {cap.q:.3g}")
+    crown = "flat" if not np.isfinite(cap.crown_radius) else f"crown radius {cap.crown_radius:.4g} mm"
+    return (f"radius cap: face {cap.h_le:.4g} (LE) to {cap.h_te:.4g} mm (TE)"
+            + (f", bow {cap.b1:.3g}, {cap.b2:.3g} mm" if cap.b1 or cap.b2 else "") + f", {crown}, edge radius "
+            f"{cap.edge_radius:.4g} mm, TE corner radius {cap.te_radius:.4g} mm")
+
+
+def cap_base(design, params, m=POINTS):
+    """The design's tip section (eta 1) as tip_cap's CapBase: its two sides in the section's own frame (x along
+    the chord from the LE, mm; z across) and the frame in 3D (the wing's frame: the LE, the chord direction
+    and the thickness direction turned by the pitch, the normal +y, away from the root)."""
+    x = chord_points(m)
+    v = design.values(np.array([1.0]))
+    T, C = section_shape(v, params, x, design.changes)
+    c, th = float(v["chord"][0]), float(np.deg2rad(v["pitch"][0]))
+    ref = params.ref_xc
+    le = np.array([float(v["sweep"][0]) + c * ref * (1.0 - np.cos(th)), design.span, float(v["rake"][0]) + c * ref * np.sin(th)])
+    chord_dir = np.array([np.cos(th), 0.0, -np.sin(th)])
+    thick_dir = np.array([np.sin(th), 0.0, np.cos(th)])
+    return TC.CapBase(c * x, c * (C[0] + 0.5 * T[0]), c * x, c * (C[0] - 0.5 * T[0]), le, chord_dir,
+                      np.array([0.0, 1.0, 0.0]), thick_dir)
+
+
+def cap_levels(n=CAP_LOOPS, top=CAP_TOP):
+    """The cap loops' shares of the cap's height: top (1 - (1 - k/n)^2), k = 1 .. n, closer near the crest."""
+    n = int(n)
+    if n < 1:
+        raise ValueError("at least one cap loop")
+    k = np.arange(1, n + 1, dtype=float)
+    return top * (1.0 - (1.0 - k / n) ** 2)
+
+
+def cap_loops(design, params, m=POINTS, n=CAP_LOOPS, top=CAP_TOP):
+    """The loops over the design's tip cap (params.cap; [] for a flat tip): (n, 2m - 1, 3), mm, the wing's
+    frame, in the sections' point order (the LE, the +z side to the TE, back along the -z side, the LE again)
+    at the tip section's chordwise stations, so each meets the tip section at its LE and TE."""
+    if params.cap is None:
+        return []
+    base = cap_base(design, params, m)
+    return np.array(TC.loops(params.cap, base, cap_levels(n, top)))
 
 
 # --------------------------------------------------------------------------
@@ -727,7 +857,7 @@ def load_wing_space(path):
 # The component file (xgeom_files.py)
 # --------------------------------------------------------------------------
 
-SETTING_TYPES = {"sections": int, "change_points": int, "half": bool}
+SETTING_TYPES = {"sections": int, "change_points": int, "half": bool, "cap_loops": int}
 
 
 def _component_params(comp):
@@ -761,7 +891,7 @@ def _component_params(comp):
     values.update({c: comp.column(c) for c in change_names(k)})
     for c in PINNED:
         values[c] = values[c] - values[c][0]
-    params = WingParams(span, airfoil, eta, values, k, ref, cxc, comp.kind, path)
+    params = WingParams(span, airfoil, eta, values, k, ref, cxc, comp.kind, path, cap_from_geometry(g, path))
     try:
         base_shape(params.airfoil, params.camber_xc)       # the airfoil exists and has a thickness
     except ValueError as exc:
@@ -895,6 +1025,7 @@ def write_component(path, params, design, space, settings=None, name=None, notes
     g["ref_xc"] = XF.num(params.ref_xc)
     if base_shape(params.airfoil, params.camber_xc)[2]["symmetric"]:
         g["camber_xc"] = XF.num(params.camber_xc)
+    g.update(cap_geometry(params.cap))
     comp.settings = XF.settings_text({**(settings or {}), "change_points": design.changes}, SETTING_TYPES)
     order = list(XF.CURVE_COLUMNS[kind]) + list(change_names(design.changes))     # the table's order
     for c in order:
@@ -953,7 +1084,7 @@ def design_params(design, params, n=41):
     if not any(np.any(np.abs(design.curves[c].v) > 0.0) for c in change_names(k)):
         k = 0
     return WingParams(float(design.span), params.airfoil, eta, {c: vals[c] for c in CURVES + change_names(k)}, k,
-                      params.ref_xc, params.camber_xc, params.kind)
+                      params.ref_xc, params.camber_xc, params.kind, cap=params.cap)
 
 
 def write_xcad(path, loops, units="m"):
@@ -990,7 +1121,8 @@ def design_record(design, params, space=None, problems=(), settings=None, warnin
     rec = {"created": datetime.datetime.now().isoformat(timespec="seconds"), "params_file": params.path,
            "kind": params.kind,
            "globals": {"span_mm": design.span, "airfoil": params.airfoil, "ref_xc": params.ref_xc,
-                       "camber_xc": params.camber_xc, "changes": design.changes},
+                       "camber_xc": params.camber_xc, "changes": design.changes,
+                       "cap": None if params.cap is None else dict(cap_geometry(params.cap))},
            "curves": {c: {"segments": cu.segments, "variables": {k: cu.get(k) for k in cu.keys()},
                           "control_points": design.ctrl(c).tolist(), "weights": cu.weights().tolist(),
                           "max_diff_from_file": rep[c][0]} for c, cu in design.curves.items()},
@@ -1016,15 +1148,21 @@ def write_case(out_dir, case, design, params, space=None, cad=True, settings=Non
     held = space or WingSpace(params, design, fixed=WingSpace(params, design).values(design))
     paths["component"] = write_component(os.path.join(out_dir, f"{case}.txt"), params, design, held, st, case,
                                          [note], geometry)
-    write_xcad(paths["xcad_m.dat"], section_loops(design, params, eta, st.get("points", POINTS)))
-    write_sections(paths["sections.dat"], design, params, eta, notes=(note,))
+    m = st.get("points", POINTS)
+    loops = list(section_loops(design, params, eta, m))
+    n_cap = int(st.get("cap_loops", CAP_LOOPS)) if params.cap is not None else 0
+    if n_cap:
+        loops += list(cap_loops(design, params, m, n_cap))
+    write_xcad(paths["xcad_m.dat"], loops)
+    write_sections(paths["sections.dat"], design, params, eta,
+                   notes=(note,) + ((f"then {n_cap} loops over the tip cap ({cap_describe(params.cap)})",) if n_cap else ()))
     with open(paths["design.json"], "w") as fh:
         json.dump(design_record(design, params, space, problems, st, warnings), fh, indent=1)
     if plot:
         paths["check"] = plot_case(os.path.join(out_dir, f"{case}_check.png"), case, design, params)
     ee = np.linspace(0.0, 1.0, 201)
     m = section_metrics(design, params, ee)
-    out = {"paths": paths, "problems": problems, "warnings": warnings, "sections": len(eta),
+    out = {"paths": paths, "problems": problems, "warnings": warnings, "sections": len(eta), "cap_loops": n_cap,
            "area_mm2": float(_integrate(design.at("chord", ee), ee) * design.span),
            "volume_mm3": float(_integrate(m["area"], ee) * design.span)}
     if cad:
@@ -1036,9 +1174,10 @@ def write_case(out_dir, case, design, params, space=None, cad=True, settings=Non
 
 
 def write_cad(out_dir, case, xcad_path, half=False):
-    """The solid lofted through the XCAD file's sections (xcad_loft.loft_loops: the root and the flat tip
-    closed by planar faces), mm, the XCAD frame, as <case>.step. half=True: the half body cut at the plane of
-    symmetry (refused with a message when the sections are not symmetric: a cambered wing has no half)."""
+    """The solid lofted through the XCAD file's sections (xcad_loft.loft_loops: the root closed by a planar
+    face, the tip flat and planar too, or the tip patch over the cap loops when the file has them), mm, the
+    XCAD frame, as <case>.step. half=True: the half body cut at the plane of symmetry (refused with a message
+    when the sections are not symmetric: a cambered wing has no half)."""
     import time
     import xcad_loft as XL
     t0 = time.time()
