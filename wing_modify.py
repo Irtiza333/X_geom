@@ -52,6 +52,13 @@ CAP_LOOPS) closed loops over the cap to the XCAD file, pinched to the tip sectio
 CAP_TOP (1 - (1 - k/n)^2) of the cap (the extraction's spacing), and xcad_loft's tip patch covers them; without
 the key the tip is flat. The cap's parameters are held (not design variables yet).
 
+Tilted tip (18 Nov 2026, for the wind-tunnel rudder): the geometry key 'tip_tilt_deg' (0 to TILT_MAX, default 0)
+tilts the tip section about the thickness axis through its LE, the TE end raised: the tip section is then the cut
+of the body, carried on past the tip along each distribution's tangent there, by the plane through the tip's LE
+that contains the thickness axis and rises towards the TE at the tilt, out to where that plane meets the TE line
+(tilted_tip). The horizontal sections then run from the root to half a step under the tip's LE (the extraction's
+layout: section_stations(n, tilted=True)), the tilted section follows, and a cap sits on it.
+
 Frame (mm; the rudder's working frame): the origin at the root's LE, x chordwise aft, y along the span (0 at
 the root, the span at the tip), z across the section, positive on the side the camber bulges to (a wing's
 upper side). The XCAD file has X = x, Y = -z, Z = y (rudder_modify.XCAD_FRAME), in m.
@@ -126,6 +133,7 @@ CHANGE_ORDER = 2                  # a change's curve: 3 control points
 CHANGE_BOUNDS = (-0.02, 0.02)     # a change's values (fractions of the chord) unless the file goes further
 SECTIONS = 41                     # sections in the XCAD file, evenly from the root to the tip
 POINTS = 61                       # points per side of a section, LE to TE (cosine spacing)
+TILT_MAX = 45.0                   # deg: the largest tip tilt (tip_tilt_deg) taken
 CAP_LOOPS = 40                    # loops over a tip cap in the XCAD file (setting cap_loops)
 CAP_TOP = 0.995                   # the last cap loop's share of the cap's height (the extraction's --cap-top)
 ROW_TOL = 1e-8
@@ -167,6 +175,7 @@ class WingParams:
     kind: str = "wing"            # "wing" or "fin": the file's first line
     path: str = ""                # the file it was read from ("" when made here)
     cap: object = None            # the tip cap: tip_cap.ScaledCap or CapParams, None for a flat tip
+    tip_tilt: float = 0.0         # the tip section's tilt about the thickness axis through its LE, deg (0: flat)
 
     @property
     def names(self):
@@ -375,12 +384,89 @@ def _integrate(y, x):
     return fn(y, x, axis=-1)
 
 
-def section_stations(n=SECTIONS):
-    """The n span fractions of the XCAD file's sections, evenly from the root (0) to the tip (1)."""
+def section_stations(n=SECTIONS, tilted=False):
+    """The n span fractions of the XCAD file's horizontal sections, evenly from the root (0) to the tip (1); for
+    a tilted tip (tilted=True) to half a step under the tip's LE, k / (n - 1/2), as the extraction lays its
+    stack under a tilted tip section, which follows them."""
     n = int(n)
     if n < 3:
         raise ValueError("at least 3 sections")
+    if tilted:
+        return np.arange(n) / (n - 0.5)
     return np.linspace(0.0, 1.0, n)
+
+
+def values_beyond(design, eta, h=1.0e-4):
+    """design.values at eta, carried on past the tip (eta > 1) along each curve's tangent there: the body
+    continued straight above its tip, as a ruled loft runs on."""
+    eta = np.atleast_1d(np.asarray(eta, dtype=float))
+    v = design.values(np.minimum(eta, 1.0))
+    over = eta > 1.0
+    if over.any():
+        v1, v0 = design.values([1.0]), design.values([1.0 - h])
+        for c in v:
+            v[c] = np.where(over, v1[c][0] + (eta - 1.0) * (v1[c][0] - v0[c][0]) / h, v[c])
+    return v
+
+
+def _sides_at(v, params, eta, span, k, xs):
+    """The sections' two sides at the chord fractions xs, as loops_of places them: (X, Z) each (stations, len
+    xs), the +z side first."""
+    T, C = section_shape(v, params, xs, k)
+    c, th = v["chord"][:, None], np.deg2rad(v["pitch"])[:, None]
+    ref = params.ref_xc
+    out = []
+    for sign in (1.0, -1.0):
+        dx, dz = c * (xs[None, :] - ref), c * (C + sign * 0.5 * T)
+        out.append((v["sweep"][:, None] + c * ref + dx * np.cos(th) + dz * np.sin(th),
+                    v["rake"][:, None] - dx * np.sin(th) + dz * np.cos(th)))
+    return out
+
+
+def tilted_tip(design, params, m=POINTS, dense=2001):
+    """The tilted tip section (params.tip_tilt > 0): the cut of the body, carried on past its tip (values_beyond),
+    by the plane through the tip section's LE that contains the thickness axis (z) and rises towards the TE at the
+    tilt, from the LE out to where that plane meets the TE line. Returns (the loop (2m - 1, 3) in the sections'
+    layout, its points at m chord fractions of the tilted chord (cosine spacing) each at its own height on the
+    plane; the LE point; the tilted chord's length, mm). Raises a ValueError when the plane does not reach the
+    TE line within four tip chords."""
+    from scipy.optimize import brentq
+    k, span = design.changes, design.span
+    tan = np.tan(np.radians(params.tip_tilt))
+    le = loops_of(design.values([1.0]), params, np.array([1.0]), span, k, m)[0][0]
+    xd = chord_points(dense)
+
+    def te_x(x):
+        eta = np.array([(le[1] + (x - le[0]) * tan) / span])
+        (X, _), _ = _sides_at(values_beyond(design, eta), params, eta, span, k, np.array([1.0]))
+        return float(X[0, 0])
+    c1 = float(design.values([1.0])["chord"][0])
+    f = lambda x: x - te_x(x)
+    hi = le[0] + 0.25 * c1
+    while f(hi) < 0.0 and hi < le[0] + 4.0 * c1:
+        hi += 0.25 * c1
+    if f(hi) < 0.0 or f(le[0] + 1.0e-6 * c1) > 0.0:
+        raise ValueError(f"the tip tilted {params.tip_tilt:g} deg does not meet the TE line")
+    x_te = brentq(f, le[0] + 1.0e-6 * c1, hi, xtol=1.0e-12 * c1)
+    x = le[0] + chord_points(m) * (x_te - le[0])
+    y = le[1] + (x - le[0]) * tan
+    eta = y / span
+    v = values_beyond(design, eta)
+    sides = _sides_at(v, params, eta, span, k, xd)
+    rows = np.arange(len(x))
+    z = np.empty((2, len(x)))
+    for s, (X, _) in enumerate(sides):
+        xs = np.array([np.interp(x[j], X[j], xd) for j in rows])          # the chord fraction at x, then
+        for _ in range(3):                                               # Newton on the section itself
+            Xa = _sides_at(v, params, eta, span, k, xs)[s][0][rows, rows]
+            Xb = _sides_at(v, params, eta, span, k, np.minimum(xs + 1.0e-7, 1.0))[s][0][rows, rows]
+            step = (x - Xa) * 1.0e-7 / np.where(np.abs(Xb - Xa) > 0.0, Xb - Xa, 1.0)
+            xs = np.clip(xs + np.where(np.abs(Xb - Xa) > 0.0, step, 0.0), 0.0, 1.0)
+        z[s] = _sides_at(v, params, eta, span, k, xs)[s][1][rows, rows]
+    z[:, 0] = le[2]
+    up, lo = np.column_stack((x, y, z[0])), np.column_stack((x, y, z[1]))
+    lo[-1] = up[-1] = 0.5 * (up[-1] + lo[-1])
+    return np.vstack((up, lo[::-1][1:])), le, float((x_te - le[0]) / np.cos(np.radians(params.tip_tilt)))
 
 
 # --------------------------------------------------------------------------
@@ -468,7 +554,17 @@ def cap_describe(cap):
 def cap_base(design, params, m=POINTS):
     """The design's tip section (eta 1) as tip_cap's CapBase: its two sides in the section's own frame (x along
     the chord from the LE, mm; z across) and the frame in 3D (the wing's frame: the LE, the chord direction
-    and the thickness direction turned by the pitch, the normal +y, away from the root)."""
+    and the thickness direction turned by the pitch, the normal +y, away from the root). With a tilted tip:
+    the tilted section (tilted_tip), its chord rising at the tilt, the thickness axis z, the normal the
+    plane's, away from the root."""
+    if params.tip_tilt > 0.0:
+        loop, le, _ = tilted_tip(design, params, m)
+        a = np.radians(params.tip_tilt)
+        t_dir, n_dir, k_dir = np.array([np.cos(a), np.sin(a), 0.0]), np.array([-np.sin(a), np.cos(a), 0.0]), \
+            np.array([0.0, 0.0, 1.0])
+        up, lo = loop[:m], loop[m - 1:][::-1]
+        return TC.CapBase((up - le) @ t_dir, (up - le) @ k_dir, (lo - le) @ t_dir, (lo - le) @ k_dir, le, t_dir,
+                          n_dir, k_dir)
     x = chord_points(m)
     v = design.values(np.array([1.0]))
     T, C = section_shape(v, params, x, design.changes)
@@ -498,6 +594,15 @@ def cap_loops(design, params, m=POINTS, n=CAP_LOOPS, top=CAP_TOP):
         return []
     base = cap_base(design, params, m)
     return np.array(TC.loops(params.cap, base, cap_levels(n, top)))
+
+
+def tip_loops(design, params, m=POINTS, n=CAP_LOOPS, top=CAP_TOP):
+    """What follows the horizontal sections in the XCAD file: the tilted tip section (a tilted tip), then the
+    loops over the cap (a cap); [] for a flat tip without a cap."""
+    out = [tilted_tip(design, params, m)[0]] if params.tip_tilt > 0.0 else []
+    if params.cap is not None and n:
+        out += list(cap_loops(design, params, m, n, top))
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -891,7 +996,13 @@ def _component_params(comp):
     values.update({c: comp.column(c) for c in change_names(k)})
     for c in PINNED:
         values[c] = values[c] - values[c][0]
-    params = WingParams(span, airfoil, eta, values, k, ref, cxc, comp.kind, path, cap_from_geometry(g, path))
+    try:
+        tilt = float(g.get("tip_tilt_deg", 0.0))
+    except ValueError:
+        raise ValueError(f"{path}: tip_tilt_deg {g['tip_tilt_deg']}: not a number") from None
+    if not 0.0 <= tilt < TILT_MAX:
+        raise ValueError(f"{path}: tip_tilt_deg {tilt:g}: from 0 (a flat tip) up to {TILT_MAX:g} deg")
+    params = WingParams(span, airfoil, eta, values, k, ref, cxc, comp.kind, path, cap_from_geometry(g, path), tilt)
     try:
         base_shape(params.airfoil, params.camber_xc)       # the airfoil exists and has a thickness
     except ValueError as exc:
@@ -1025,6 +1136,8 @@ def write_component(path, params, design, space, settings=None, name=None, notes
     g["ref_xc"] = XF.num(params.ref_xc)
     if base_shape(params.airfoil, params.camber_xc)[2]["symmetric"]:
         g["camber_xc"] = XF.num(params.camber_xc)
+    if params.tip_tilt > 0.0:
+        g["tip_tilt_deg"] = XF.num(params.tip_tilt)
     g.update(cap_geometry(params.cap))
     comp.settings = XF.settings_text({**(settings or {}), "change_points": design.changes}, SETTING_TYPES)
     order = list(XF.CURVE_COLUMNS[kind]) + list(change_names(design.changes))     # the table's order
@@ -1067,6 +1180,14 @@ def design_checks(design, params, n=SECTIONS):
         i = int(np.argmax(bad))
         out.append(f"the section's sides cross (thickness not positive) at eta {es[i]:.3f}"
                    + (f" to {es[bad][-1]:.3f}" if bad.sum() > 1 else "") + f", x/c {x[np.argmax(T[i] <= 0.0)]:.2f}")
+    if params.tip_tilt > 0.0 and not out:
+        try:
+            loop = tilted_tip(design, params)[0]
+            up, lo = loop[:POINTS], loop[POINTS - 1:][::-1]
+            if np.any(up[1:-1, 2] - lo[1:-1, 2] <= 0.0):
+                out.append("the tilted tip section's sides cross (thickness not positive)")
+        except ValueError as exc:
+            out.append(str(exc))
     return out, []
 
 
@@ -1084,7 +1205,7 @@ def design_params(design, params, n=41):
     if not any(np.any(np.abs(design.curves[c].v) > 0.0) for c in change_names(k)):
         k = 0
     return WingParams(float(design.span), params.airfoil, eta, {c: vals[c] for c in CURVES + change_names(k)}, k,
-                      params.ref_xc, params.camber_xc, params.kind, cap=params.cap)
+                      params.ref_xc, params.camber_xc, params.kind, cap=params.cap, tip_tilt=params.tip_tilt)
 
 
 def write_xcad(path, loops, units="m"):
@@ -1122,7 +1243,8 @@ def design_record(design, params, space=None, problems=(), settings=None, warnin
            "kind": params.kind,
            "globals": {"span_mm": design.span, "airfoil": params.airfoil, "ref_xc": params.ref_xc,
                        "camber_xc": params.camber_xc, "changes": design.changes,
-                       "cap": None if params.cap is None else dict(cap_geometry(params.cap))},
+                       "cap": None if params.cap is None else dict(cap_geometry(params.cap)),
+                       "tip_tilt_deg": params.tip_tilt},
            "curves": {c: {"segments": cu.segments, "variables": {k: cu.get(k) for k in cu.keys()},
                           "control_points": design.ctrl(c).tolist(), "weights": cu.weights().tolist(),
                           "max_diff_from_file": rep[c][0]} for c, cu in design.curves.items()},
@@ -1141,7 +1263,7 @@ def write_case(out_dir, case, design, params, space=None, cad=True, settings=Non
     planform area (mm^2) and volume (mm^3, from the sections' areas)."""
     os.makedirs(out_dir, exist_ok=True)
     st = dict(settings or {})
-    eta = section_stations(st.get("sections", SECTIONS))
+    eta = section_stations(st.get("sections", SECTIONS), params.tip_tilt > 0.0)
     problems, warnings = design_checks(design, params)
     paths = {k: os.path.join(out_dir, f"{case}_{k}") for k in ("xcad_m.dat", "sections.dat", "design.json")}
     note = f"design {case} from {os.path.basename(params.path) or 'memory'}, {datetime.date.today().isoformat()}"
@@ -1151,11 +1273,12 @@ def write_case(out_dir, case, design, params, space=None, cad=True, settings=Non
     m = st.get("points", POINTS)
     loops = list(section_loops(design, params, eta, m))
     n_cap = int(st.get("cap_loops", CAP_LOOPS)) if params.cap is not None else 0
-    if n_cap:
-        loops += list(cap_loops(design, params, m, n_cap))
+    if not problems:
+        loops += tip_loops(design, params, m, n_cap)
     write_xcad(paths["xcad_m.dat"], loops)
+    tip = (f"then the tip section tilted {params.tip_tilt:g} deg about its LE",) if params.tip_tilt > 0.0 else ()
     write_sections(paths["sections.dat"], design, params, eta,
-                   notes=(note,) + ((f"then {n_cap} loops over the tip cap ({cap_describe(params.cap)})",) if n_cap else ()))
+                   notes=(note,) + tip + ((f"then {n_cap} loops over the tip cap ({cap_describe(params.cap)})",) if n_cap else ()))
     with open(paths["design.json"], "w") as fh:
         json.dump(design_record(design, params, space, problems, st, warnings), fh, indent=1)
     if plot:

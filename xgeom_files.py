@@ -84,7 +84,8 @@ KINDS = ("blade",) + PLANAR + ("hull",)
 CAP_KEYS = {"scaled": ("cap_k_le", "cap_k_te", "cap_b1", "cap_b2", "cap_p", "cap_q"),
             "radius": ("cap_h_le_mm", "cap_h_te_mm", "cap_b1_mm", "cap_b2_mm", "cap_crown_radius_mm",
                        "cap_edge_radius_mm", "cap_te_radius_mm")}      # a planar surface's tip cap (tip_cap.py)
-_PLANAR_GEOMETRY = ("span_mm", "section", "ref_xc", "camber_xc", "cap") + CAP_KEYS["scaled"] + CAP_KEYS["radius"]
+_PLANAR_GEOMETRY = (("span_mm", "section", "ref_xc", "camber_xc", "tip_tilt_deg", "cap") + CAP_KEYS["scaled"]
+                    + CAP_KEYS["radius"])
 GEOMETRY = {"blade": ("diameter_m", "blades", "root_r", "hub_height_m", "hub_base_m", "hub_top_m", "hub_x_m",
                       "section", "section_tables"),
             **{k: _PLANAR_GEOMETRY for k in PLANAR},

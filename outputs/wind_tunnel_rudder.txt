@@ -1,0 +1,69 @@
+# XGeom component
+# kind          rudder
+# name          wind_tunnel_rudder
+# note          wind_tunnel_rudder: a planar rudder from Rudder_geom_extraction's outputs (outputs/, Wind_Tunnel_Rudder.stp) by xgeom_from_cad.planar_rudder_setup: 21 rows to the top of the LE at y 200 mm, the LE and TE lines straight (within 5.7e-10 mm of the extracted rows), the section the rows' mean thickness shape with 0 change points (within 0.137 % of the chord), the camber 0 (at most 1.5e-05 of the chord)
+# note          the tip section tilted 3.57663 deg about the top of the LE (the extraction's tilt), the cap the extraction's fitted radius cap over it
+# note          the set-up: each distribution in the form that fits the table best (xgeom_from_cad.py); the variables of chord, pitch free
+# ---- geometry
+# span_mm       200
+# section       wind_tunnel_rudder_section.dat
+# ref_xc        0.25
+# camber_xc     0.4
+# tip_tilt_deg  3.576625634
+# cap           radius
+# cap_h_le_mm   0.6167316397
+# cap_h_te_mm   2.993929655
+# cap_b1_mm     -0.1284679305
+# cap_b2_mm     0.1294433053
+# cap_crown_radius_mm 59.19781274
+# cap_edge_radius_mm 0.7070071951
+# cap_te_radius_mm 3.294869027
+# ---- settings
+# sections      41
+# change_points 0
+# half          N
+# ---- curves (table | bezier1 <points> | bezier2) and variables (value, low, high, free Y or held N)
+# var    span                         200                99               300  N
+# curve  pitch         bezier1 2
+# var    pitch.v0                       0                -2                 2  Y
+# var    pitch.v1                       0                -2                 2  Y
+# curve  chord         bezier1 2
+# var    chord.v0           180.287613169               116               202  Y
+# var    chord.v1           137.896468911               116               202  Y
+# curve  thickness     bezier1 4
+# var    thickness.d1      0.615070065003              0.01              0.99  N
+# var    thickness.d2       0.84204604718              0.01              0.99  N
+# var    thickness.v0      0.161337699415             0.141             0.183  N
+# var    thickness.v1      0.161985484849             0.141             0.183  N
+# var    thickness.v2      0.162622619147             0.141             0.183  N
+# var    thickness.v3      0.162714588291             0.141             0.183  N
+# curve  camber        bezier1 2
+# var    camber.v0                      0             -0.02              0.02  N
+# var    camber.v1                      0             -0.02              0.02  N
+# curve  sweep         bezier1 2
+# var    sweep.v1                      14               -20                35  N
+# curve  rake          bezier1 2
+# var    rake.v1                        0               -20                20  N
+# ---- distributions over eta = y/span
+#        eta   pitch_deg      chord_mm         t/c         f/c     sweep_mm     rake_mm
+  0.00000000  0.00000000  180.28761317  0.16133770  0.00000000   0.00000000  0.00000000
+  0.05012532  0.00000000  178.16274350  0.16139115  0.00000000   0.70175448  0.00000000
+  0.10025063  0.00000000  176.03787425  0.16144595  0.00000000   1.40350882  0.00000000
+  0.15037594  0.00000000  173.91300500  0.16150212  0.00000000   2.10526316  0.00000000
+  0.20050126  0.00000000  171.78813533  0.16155972  0.00000000   2.80701764  0.00000000
+  0.25062657  0.00000000  169.66326609  0.16161878  0.00000000   3.50877198  0.00000000
+  0.30075188  0.00000000  167.53839684  0.16167935  0.00000000   4.21052632  0.00000000
+  0.35087720  0.00000000  165.41352717  0.16174148  0.00000000   4.91228080  0.00000000
+  0.40100251  0.00000000  163.28865792  0.16180522  0.00000000   5.61403514  0.00000000
+  0.45112782  0.00000000  161.16378867  0.16187063  0.00000000   6.31578948  0.00000000
+  0.50125314  0.00000000  159.03891900  0.16193778  0.00000000   7.01754396  0.00000000
+  0.55137845  0.00000000  156.91404975  0.16200674  0.00000000   7.71929830  0.00000000
+  0.60150376  0.00000000  154.78918051  0.16207759  0.00000000   8.42105264  0.00000000
+  0.65162908  0.00000000  152.66431084  0.16215042  0.00000000   9.12280712  0.00000000
+  0.70175439  0.00000000  150.53944159  0.16222532  0.00000000   9.82456146  0.00000000
+  0.75187970  0.00000000  148.41457234  0.16230240  0.00000000  10.52631580  0.00000000
+  0.80200502  0.00000000  146.28970267  0.16238178  0.00000000  11.22807028  0.00000000
+  0.85213033  0.00000000  144.16483342  0.16246356  0.00000000  11.92982462  0.00000000
+  0.90225564  0.00000000  142.03996418  0.16254776  0.00000000  12.63157896  0.00000000
+  0.95238095  0.00000000  139.91509493  0.16263406  0.00000000  13.33333330  0.00000000
+  1.00000000  0.00000000  137.89646891  0.16271459  0.00000000  14.00000000  0.00000000

@@ -49,6 +49,9 @@ points or of segments in the tool, which refits the curve and shows the error
     best_wing_forms, wing_setup                           the same for a planar rudder, fin or wing's table
                                                           (wing_modify.WingParams; bb2/bb2_aft_setup.py
                                                           extracts BB2's stern plane into one)
+    planar_rudder_setup(folder, setup_path)               a planar rudder's set-up from Rudder_geom_extraction's
+                                                          outputs (the wind-tunnel rudder: its tilted tip and
+                                                          its cap; 18 Nov 2026)
 
 Command line (the file a STEP or IGES; for the blade an extracted <case>.txt, for
 the hull a <case>_params.dat: the set-up only; written next to the file):
@@ -56,6 +59,8 @@ the hull a <case>_params.dat: the set-up only; written next to the file):
     python xgeom_from_cad.py rudder Wind_Tunnel_Rudder.stp
     python xgeom_from_cad.py blade bb2/outputs/bb2_prop.txt
     python xgeom_from_cad.py hull bb2/outputs/bb2_hull_params.dat --case bb2_hull
+    python xgeom_from_cad.py rudder_planar outputs --case wind_tunnel_rudder   (an extraction folder: the
+                                                                             planar set-up, no OCC needed)
 """
 
 from __future__ import annotations
@@ -73,7 +78,10 @@ MAX_POINTS = 8          # a 1-segment Bezier (blade): up to this many control po
 MAX_ORDER = 8           # the hull's CST curves: orders 3 to this
 MAX_LAW_ORDER = 6       # the rudder's laws (the original shape's fits): orders 2 to this
 FIT_TIE = 1.0e-3        # of the range: a form must beat the best cheaper one by this to earn its points
-KINDS = ("blade", "hull", "rudder")
+KINDS = ("blade", "hull", "rudder", "rudder_planar")
+PLANAR_ROWS = 21        # rows of a planar rudder's table from an extraction: evenly along the span
+PLANAR_X = 201          # chord fractions (cosine spacing) where its thickness is fitted
+MAX_CHANGES = 8         # its change points tried: 0 .. this
 
 
 def case_name(cad_path):
@@ -362,6 +370,111 @@ def rudder_from_cad(cad_path, out_dir, case=None, progress=print, num_sec=None):
             "seconds": time.time() - t0}
 
 
+def _cosine(n):
+    return 0.5 * (1.0 - np.cos(np.pi * np.linspace(0.0, 1.0, int(n))))
+
+
+def _shape_over_chord(sec, xf):
+    """(thickness, camber line) over the chord at the chord fractions xf of a stack section (its Selig points in
+    mm, x from its LE)."""
+    xy = np.asarray(sec.xy, dtype=float)
+    i = int(np.argmin(xy[:, 0]))
+    a, b = xy[:i + 1][::-1], xy[i:]                       # each from the LE to the TE
+    c = float(sec.chord)
+    za = np.interp(xf * c, a[:, 0], a[:, 1])
+    zb = np.interp(xf * c, b[:, 0], b[:, 1])
+    zu, zl = (za, zb) if za.mean() > zb.mean() else (zb, za)
+    return (zu - zl) / c, 0.5 * (zu + zl) / c
+
+
+def planar_rudder_setup(folder, setup_path, name=None, notes=(), rows=PLANAR_ROWS):
+    """A planar rudder's set-up (kind rudder, wing_modify's model) from Rudder_geom_extraction's outputs in
+    folder: corner_points.dat (the LE and TE lines, straight lines fitted to the horizontal rows),
+    sections_stack_*_raw_mm.dat (the sections' shapes) and parameters.json (the tip's tilt and the cap's
+    parameters). The span is the top of the LE (the tilted tip section's pivot); rows of the table at `rows`
+    heights along it (the stack sections nearest to even fractions, the last at the top of the LE with the top
+    section's shape), each with the chord and the sweep from the lines, rake and pitch 0, the thickness over
+    the chord fitted as t/c times the rows' mean thickness shape (written as <setup>_section.dat beside the
+    set-up) plus k Bernstein changes (the k of 0 .. MAX_CHANGES with the least error, pick), the camber 0 when
+    the sections are symmetric to 1e-4 of the chord. tip_tilt_deg is the extraction's tilt, the cap its fitted
+    radius cap. Each distribution in the form that fits best (wing_setup). Returns (setup path, report lines,
+    the forms)."""
+    import json
+    import rudder_modify as RM
+    import tip_cap as TC
+    import wing_modify as WM
+    stack = RM.read_stack(rudder_files_partial(folder, "sections_stack_*_raw_mm.dat"))
+    flat = [s for s in stack if s.tilt_deg == 0.0]
+    with open(os.path.join(folder, "parameters.json")) as fh:
+        par = json.load(fh)
+    layout = par.get("stack_layout", {})
+    tilt = float(layout.get("tilt_deg", 0.0)) if layout.get("tip") else 0.0
+    span = float(layout["le_top"][1]) if tilt > 0.0 else float(flat[-1].y)
+    cp = np.loadtxt(os.path.join(folder, "corner_points.dat"))
+    hz = cp[np.abs(cp[:, 1] - cp[:, 4]) < 1.0e-9]
+    le, te = np.polyfit(hz[:, 1], hz[:, 0], 1), np.polyfit(hz[:, 1], hz[:, 3], 1)
+    miss = max(np.abs(np.polyval(le, hz[:, 1]) - hz[:, 0]).max(), np.abs(np.polyval(te, hz[:, 1]) - hz[:, 3]).max())
+    ys = np.array([s.y for s in flat])
+    pick_i = np.unique([int(np.argmin(np.abs(ys - y))) for y in np.linspace(0.0, span, int(rows))[:-1]])
+    secs = [flat[i] for i in pick_i] + [flat[-1]]
+    y_rows = np.r_[ys[pick_i], span]
+    eta = y_rows / span
+    xf = _cosine(PLANAR_X)
+    shapes = [_shape_over_chord(s, xf) for s in secs]
+    T = np.array([q[0] for q in shapes])
+    camber = float(np.abs(np.array([q[1] for q in shapes])).max())
+    tn = (T / T.max(axis=1)[:, None]).mean(axis=0)
+    tc_mean = float(T.max(axis=1).mean())
+    base = os.path.splitext(setup_path)[0]
+    sec_path = base + "_section.dat"
+    yv = 0.5 * tc_mean * tn
+    xy = np.vstack((np.column_stack((xf[::-1], yv[::-1])), np.column_stack((xf[1:], -yv[1:]))))
+    with open(sec_path, "w", newline="\n") as fh:
+        fh.write(f"{os.path.basename(base)}_section (the mean thickness shape of the rows, xgeom_from_cad."
+                 f"planar_rudder_setup)\n")
+        fh.write("\n".join(f"{a:.8f} {b:.8f}" for a, b in xy) + "\n")
+    T0 = WM.base_shape(sec_path)[0](xf)
+    fits = {}
+    for k in range(MAX_CHANGES + 1):
+        A = np.column_stack((T0, WM.change_basis(xf, k)))
+        coef = np.linalg.lstsq(A, T.T, rcond=None)[0]
+        fits[k] = (coef, float(np.abs(A @ coef - T.T).max()))
+    k, _ = pick([(k, k, fits[k][1]) for k in fits])
+    coef = fits[k][0]
+    x_le = np.polyval(le, y_rows)
+    values = {"chord": np.polyval(te, y_rows) - x_le, "sweep": x_le - x_le[0], "rake": np.zeros(len(eta)),
+              "pitch": np.zeros(len(eta)), "thickness": coef[0], "camber": np.zeros(len(eta))}
+    for i in range(k):
+        values[f"dt{i + 1}"] = coef[i + 1]
+        values[f"dc{i + 1}"] = np.zeros(len(eta))
+    cap = None
+    if tilt > 0.0 and "tip_cap" in par:
+        q = dict(par["tip_cap"]["params"])
+        q["crown_radius"] = TC.INF if q.get("crown_radius") is None else float(q["crown_radius"])
+        cap = TC.CapParams(**q)
+    params = WM.WingParams(span, sec_path, eta, values, k, WM.REF_XC, WM.CAMBER_XC, "rudder", "", cap, tilt)
+    name = name or os.path.splitext(os.path.basename(setup_path))[0]
+    src = par.get("source", par.get("cad_file", "the extraction"))
+    notes = list(notes) + [
+        f"{name}: a planar rudder from Rudder_geom_extraction's outputs ({os.path.basename(os.path.abspath(folder))}"
+        f"/, {src}) by xgeom_from_cad.planar_rudder_setup: {len(eta)} rows to the top of the LE at y {span:.6g} mm, "
+        f"the LE and TE lines straight (within {miss:.2g} mm of the extracted rows), the section the rows' mean "
+        f"thickness shape with {k} change points (within {100 * fits[k][1]:.3f} % of the chord), the camber 0 "
+        f"(at most {camber:.1e} of the chord)"]
+    if tilt > 0.0:
+        notes.append(f"the tip section tilted {tilt:.6g} deg about the top of the LE (the extraction's tilt), "
+                     + ("the cap the extraction's fitted radius cap over it" if cap is not None else "no cap"))
+    setup, forms = wing_setup(params, setup_path, "rudder", name, notes)
+    report = [f"{len(eta)} rows, span {span:.4f} mm (the top of the LE), chord {values['chord'][0]:.4f} to "
+              f"{values['chord'][-1]:.4f} mm, the lines within {miss:.2g} mm of the extracted rows",
+              f"t/c {values['thickness'].min():.5f} to {values['thickness'].max():.5f}; change points {k} (the "
+              f"thickness within " + ", ".join(f"k {kk} {100 * fits[kk][1]:.3f} %" for kk in fits) + " of the chord)",
+              f"tip tilted {tilt:.6g} deg; cap: " + ("none" if cap is None else WM.cap_describe(cap))]
+    report += [f"{c}: " + ("2 segments" if f[0][0] == 2 else f"{f[0][1] + 1} points") + f" ({100 * f[1]:.2f} %)"
+               for c, f in forms.items()]
+    return setup, report, forms
+
+
 def rudder_files_partial(folder, pattern):
     hits = sorted(glob.glob(os.path.join(folder, pattern)))
     if not hits:
@@ -393,6 +506,14 @@ def main(argv=None):
     out = os.path.abspath(a.out or os.path.dirname(a.file))
     os.makedirs(out, exist_ok=True)
     os.chdir(HERE)                                   # the adapters' files are relative to this folder
+    if a.kind == "rudder_planar":
+        if not os.path.isdir(a.file):
+            ap.error("rudder_planar takes an extraction folder (Rudder_geom_extraction's outputs)")
+        case = a.case or "wind_tunnel_rudder"
+        setup, lines, _ = planar_rudder_setup(a.file, os.path.join(out if a.out else a.file, f"{case}.txt"), case)
+        print(setup)
+        print("\n".join(lines))
+        return
     table = a.file.lower().endswith((".txt", ".dat"))
     if table and a.kind == "rudder":
         ap.error("the rudder's set-up needs its CAD (the extraction writes the files it is fitted to)")

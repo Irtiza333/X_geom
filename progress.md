@@ -627,6 +627,18 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   optional setting of the rudder, fin and wing files; old files read as before). Tests: tip_cap (the scaled
   family), wing 62 with the GUI (the cap keys, the loops, the loft with both families), files 51, hull 64,
   tool 61.
+- The wind-tunnel rudder as a planar set-up (18 Nov 2026; the user: "Can we also build the wind tunnel rudder from
+  set up text file?"; his choices: the tilt as a key, the TE round scaled with the chord for now). The planar
+  files take `tip_tilt_deg` (`wing_modify.py`: the horizontal sections to half a step under the tip's LE, then the
+  tip section tilted about its LE, the cut of the body carried on past the tip by the tilted plane out to the TE
+  line, `tilted_tip`; the cap sits on it). `python xgeom_from_cad.py rudder_planar outputs` (numpy only) fits the
+  extraction's default run into `outputs/wind_tunnel_rudder.txt` (with `wind_tunnel_rudder_section.dat`): 21 rows
+  to the LE top at 200 mm, straight LE and TE lines, the rows' mean section shape, t/c 0.16134 to 0.16271, the
+  tilt 3.576626 deg and the extraction's radius cap. Built from it in the tool (CAD rudder, 11 s): the tilted
+  tip's TE top and chord as extracted, six faces, valid, no fold, 583,299 mm^3 (the extraction-based loft
+  583,363); against the STEP the LE strip within 0.022 mm, the central panels and the TE strip within 0.085 (the
+  scaled TE round: about 0.85 mm at the root, 0.65 at the tip, against 0.75), the tip region 0.107 (the cap
+  model's own 0.104). Tests: wing 69 with the GUI, files 51, tool 61, hull 64.
 
 ## Next steps
 

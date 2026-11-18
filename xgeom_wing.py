@@ -331,7 +331,7 @@ class WingAdapter:
 
     # ---------------------------------------------------------------- sections
     def stations(self):
-        return WM.section_stations(self.settings["sections"])
+        return WM.section_stations(self.settings["sections"], self.params.tip_tilt > 0.0)
 
     def set_sections(self, n):
         """n sections in the XCAD file, evenly from the root to the tip (3 or more)."""
@@ -340,8 +340,11 @@ class WingAdapter:
 
     def sections_info(self):
         n, m, k = self.settings["sections"], self.settings["points"], self.design.changes
-        tip = ("the tip is flat" if self.params.cap is None else
-               f"then {self.settings['cap_loops']} loops over the tip cap ({WM.cap_describe(self.params.cap)})")
+        tilt = self.params.tip_tilt
+        tip = ((f"then the tip section tilted {tilt:g} deg about its LE (the horizontal sections end half a step "
+                f"under the tip's LE)" if tilt > 0.0 else "the tip flat")
+               + ("" if self.params.cap is None else
+                  f", then {self.settings['cap_loops']} loops over the tip cap ({WM.cap_describe(self.params.cap)})"))
         return (f"{n} sections {self.design.span / (n - 1):.1f} mm apart along the span, {2 * m - 1} points each "
                 f"({m} per side, closer together at the LE and the TE); {tip}. Change points: "
                 f"{k} Bezier points along the chord that change the thickness (dt) and the camber line (dc), "
@@ -392,6 +395,7 @@ class WingAdapter:
         if skeleton:
             try:
                 out["skeleton"] = WM.section_loops(d, p, self.stations(), self.settings["points"])
+                out["tilted"] = WM.tilted_tip(d, p, self.settings["points"])[0] if p.tip_tilt > 0.0 else None
                 out["cap"] = WM.cap_loops(d, p, self.settings["points"], self.settings["cap_loops"]) if p.cap else None
             except Exception as exc:
                 out["skeleton"] = None
@@ -733,12 +737,13 @@ class WingSkeletonView:
             self.text.set_text("no sections: " + (pv["problems"][0] if pv["problems"] else ""))
             return
         q = sk[:, :, [0, 2, 1]]
-        cap = pv.get("cap")
-        segs = {"sections": list(q[1:-1]), "root": [q[0]], "tip": [q[-1]],
+        cap, tilted = pv.get("cap"), pv.get("tilted")
+        tip = [tilted[:, [0, 2, 1]]] if tilted is not None else [q[-1]]
+        segs = {"sections": list(q[1:-1]) + ([q[-1]] if tilted is not None else []), "root": [q[0]], "tip": tip,
                 "cap": list(cap[:, :, [0, 2, 1]]) if cap is not None and len(cap) else [np.zeros((2, 3))]}
         for k, c in self.col.items():
             c.set_segments(segs[k])
-        p = np.vstack([q.reshape(-1, 3)] + ([cap.reshape(-1, 3)[:, [0, 2, 1]]] if cap is not None and len(cap) else []))
+        p = np.vstack([q.reshape(-1, 3), tip[0]] + ([cap.reshape(-1, 3)[:, [0, 2, 1]]] if cap is not None and len(cap) else []))
         lo, hi = p.min(axis=0), p.max(axis=0)
         ax = self.ax
         ax.set_xlim(lo[0], hi[0])
@@ -747,10 +752,11 @@ class WingSkeletonView:
         self.box = np.maximum(hi - lo, 1e-9)
         fit_box(ax, self.fig, self.box)
         d = pv["design"]
+        tip_name = f"the tip section tilted {self.a.params.tip_tilt:g} deg (dark)" if tilted is not None else "the tip (dark)"
         msg = (f"{len(sk)} sections, {sk.shape[1]} points each (the XCAD file); span {d.span:.1f} mm; the root (red) "
-               + (f"is closed by a planar face in the loft;\nthe tip (dark) carries {len(cap)} cap loops (green): "
+               + (f"is closed by a planar face in the loft;\n{tip_name} carries {len(cap)} cap loops (green): "
                   f"{WM.cap_describe(self.a.params.cap)}" if cap is not None and len(cap) else
-                  "and the flat tip (dark) are closed by planar faces in the loft"))
+                  f"and {tip_name} are closed by planar faces in the loft"))
         if pv["problems"]:
             msg += "\nproblem: " + pv["problems"][0][:100]
         self.text.set_text(msg)

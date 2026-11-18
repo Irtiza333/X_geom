@@ -177,8 +177,8 @@ def wing_part(ad, n=LOOPS):
     d, p = ad.design, ad.params
     problems, warnings = WM.design_checks(d, p)
     loops = list(WM.section_loops(d, p, np.linspace(0.0, 1.0, n), 31))
-    if p.cap is not None:                                          # a tip cap: a few of its loops as well
-        loops += list(WM.cap_loops(d, p, 31, 6))
+    if p.cap is not None or p.tip_tilt > 0.0:                      # a tilted tip and a cap: a few of their loops
+        loops += WM.tip_loops(d, p, 31, 6)
     root = WM.section_loops(d, p, [0.0])[0]
     return {"design": d, "loops": loops, "root": root, "root_x": (float(root[:, 0].min()), float(root[:, 0].max())),
             "problems": problems, "warnings": warnings}

@@ -74,7 +74,7 @@ Keys and columns:
 | kind | geometry | settings | columns |
 |---|---|---|---|
 | blade | diameter_m, blades, root_r, hub_height_m, hub_base_m, hub_top_m, hub_x_m, section, section_tables | sections, tip_band, tip_sections, clearance_mm, hub, part | r/R P/D c/D t/c f/c skew_deg rake/D |
-| rudder, fin, wing | span_mm, section, ref_xc, camber_xc, cap and its keys (below) | sections, change_points, half, cap_loops | eta pitch_deg chord_mm t/c f/c sweep_mm rake_mm [dt1 .. dtk dc1 .. dck] |
+| rudder, fin, wing | span_mm, section, ref_xc, camber_xc, tip_tilt_deg, cap and its keys (below) | sections, change_points, half, cap_loops | eta pitch_deg chord_mm t/c f/c sweep_mm rake_mm [dt1 .. dtk dc1 .. dck] |
 | hull | nose_m, middle_m, tail_m, cap_m, axisymmetric | | x_m r_m [rp_m] |
 
 Rules:
@@ -120,6 +120,13 @@ Rules:
   (default 40) is how many closed loops over the cap the XCAD file gets after the sections, at the heights
   0.995 (1 - (1 - k/n)^2) of the cap; the loft's tip patch covers them (xcad_loft.py). BB2's
   `bb2/outputs/bb2_sternplane.txt` carries `cap scaled` fitted to the IGES (bb2_aft_setup.py; `claude/bb2.md`).
+- `tip_tilt_deg` (rudder, fin, wing; 18 Nov 2026, for the wind-tunnel rudder): the tip section tilted about the
+  thickness axis through its LE, the TE end raised, by 0 (a flat tip; the default) up to 45 deg. The horizontal
+  sections then run from the root to half a step under the tip's LE (k / (n - 1/2) of the span, the
+  extraction's layout), and the tip section is the cut of the body, carried on past the tip along each
+  distribution's tangent there, by the plane through the tip's LE that contains the thickness axis, out to
+  where that plane meets the TE line (wing_modify.tilted_tip); a cap sits on that section. The span is then the
+  height of the tip's LE. Held (no var line yet).
 - Component and assembly files are written with LF line endings on every platform (write_component,
   write_assembly), so the same design gives byte-identical files on any machine, and a rewrite of a loaded
   file gives the same bytes (round-trip tested with filecmp in `_xgeom_files_test.py`).
@@ -188,6 +195,11 @@ new.txt`. Examples in X_geom (the tool's defaults): `msc_blade.txt`, `wing.txt`,
 - `python xgeom_from_cad.py blade|hull|rudder <file> [--out DIR] [--case NAME]`: the same without the window;
   for the blade an extracted `<case>.txt` and for the hull a `<case>_params.dat` give the set-up alone (no
   OCC needed). For a planar table (a WingParams) `best_wing_forms` and `wing_setup` do the same.
+- `python xgeom_from_cad.py rudder_planar <extraction folder> [--case NAME]` (18 Nov 2026; no OCC needed): a
+  planar rudder's set-up from Rudder_geom_extraction's outputs (`planar_rudder_setup`): 21 rows to the top of
+  the LE, the LE and TE lines straight, the section the rows' mean thickness shape
+  (`<case>_section.dat`) with the change points that fit best, the tilt and the radius cap of parameters.json.
+  The wind-tunnel rudder's is `outputs/wind_tunnel_rudder.txt`.
 - The Rudder slot has two models: the modified-below-H one (rudder-h, its JSON set-ups and From CAD) and, since
   13 Nov 2026, the planar rudder (a component file of kind rudder). `--file` with a planar rudder's file, or
   Load ... of one in the rudder-h Set-up box, puts the rudder on the planar model; Load ... of a
@@ -201,7 +213,8 @@ new.txt`. Examples in X_geom (the tool's defaults): `msc_blade.txt`, `wing.txt`,
 
 1. File layer and the mapping per kind, round-trip tests; the example files converted. Done 26 Oct 2026.
 2. GUI load and save. Done 26 Oct 2026.
-3. The planar rudder; the wind-tunnel rudder fitted into a file.
+3. The planar rudder; the wind-tunnel rudder fitted into a file. Done 13 Nov (BB2's stern plane) and 18 Nov 2026
+   (the wind-tunnel rudder, `outputs/wind_tunnel_rudder.txt`, with its tilted tip and cap).
 4. The assembly: file, Vehicle tab, SUBOFF and BB2 examples.
 5. Initial_sampling.py and the infill read the assembly.
 
@@ -226,5 +239,7 @@ positions as x/L, the propeller placed by where its hub starts: the assembly's p
 `rudder_x`, `fin_x`, `wing_x` follow (Assembly file, above).
 
 18 Nov 2026: the planar surfaces' tip cap (`cap` and its keys, the `cap_loops` setting; above), so that BB2's
-stern plane set-up builds with its rounded cap instead of a flat top. For the web app: new optional geometry
-keys of the rudder, fin and wing files and one optional setting; files without them read as before.
+stern plane set-up builds with its rounded cap instead of a flat top. Later the same day `tip_tilt_deg` and the
+wind-tunnel rudder as a planar set-up (`outputs/wind_tunnel_rudder.txt`, from the extraction's outputs by
+`xgeom_from_cad.py rudder_planar`). For the web app: new optional geometry keys of the rudder, fin and wing
+files and one optional setting; files without them read as before.

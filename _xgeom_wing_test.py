@@ -659,6 +659,91 @@ def test_cap(tmp):
     p.cap = None
 
 
+def test_tilt(tmp):
+    print("\nthe tilted tip (tip_tilt_deg) and a planar rudder from an extraction folder")
+    import tip_cap as TC
+    import xgeom_files as XF
+    ld = WM.load_component(os.path.join(HERE, "fin.txt"))         # straight taper: chord 300 to 220, sweep 0 to 50
+    p, d = ld.params, ld.design
+    p.tip_tilt, n = 4.0, WM.POINTS
+    loop, le, ct = WM.tilted_tip(d, p)
+    tan = np.tan(np.radians(4.0))
+    # the TE line x = 300 - 30 y / 220 (sweep 50 y / 220 plus the chord 300 - 80 y / 220), the plane y = 220 + (x - 50) tan
+    x_te = (300.0 - 30.0 * 220.0 / 220.0 + 30.0 * 50.0 * tan / 220.0) / (1.0 + 30.0 * tan / 220.0)
+    eta = loop[:n, 1] / d.span
+    v = WM.values_beyond(d, eta)
+    xl = (loop[:n, 0] - v["sweep"]) / v["chord"]
+    T, _ = WM.section_shape(v, p, xl, d.changes)
+    zt = 0.5 * v["chord"] * np.diag(T)
+    check("tilted_tip on a straight taper: the LE at the tip's LE, the TE on the TE line where the plane meets it, "
+          "every point on the plane, its half-thickness the body's (the distributions carried on past the tip)",
+          [np.abs(le - [50.0, 220.0, 0.0]).max(), loop[n - 1, 0] - x_te, np.abs(loop[:, 1] - 220.0 - (loop[:, 0] - 50.0) * tan).max(),
+           np.abs(loop[:n, 2] - zt).max(), np.abs(loop[n - 1:, 2][::-1] + zt).max(), ct - (x_te - 50.0) / np.cos(np.radians(4.0))],
+          [0, 0, 0, 0, 0, 0], 1e-6)
+    st = WM.section_stations(9, tilted=True)
+    check("tilted: the horizontal sections from the root to half a step under the tip's LE (k / (n - 1/2))",
+          [st[0], st[-1], np.ptp(np.diff(st))], [0.0, 1.0 - 0.5 / 8.5, 0.0], 1e-12)
+    p.cap = TC.CapParams(0.6, 3.0, -0.1, 0.1, 60.0, 0.7, 3.3)
+    path = WM.write_component(os.path.join(tmp, "tilted.txt"), p, d, ld.space, {"sections": 21, "cap_loops": 10},
+                              "tilted", [], "rudder")
+    back = WM.load_component(path)
+    base = WM.cap_base(d, p)
+    cl = WM.cap_loops(d, p, n, 3)
+    check("the key written and read back; cap_base on the tilted section (its frame turned by the tilt); the cap "
+          "loops pinched to the tilted section's LE and TE",
+          [back.params.tip_tilt, XF.read_component(path).geometry["tip_tilt_deg"] == "4",
+           np.abs(base.n - [-np.sin(np.radians(4.0)), np.cos(np.radians(4.0)), 0.0]).max(), np.abs(base.pivot - le).max(),
+           np.abs(cl[:, 0] - loop[0]).max(), np.abs(cl[:, n - 1] - loop[n - 1]).max()], [4.0, 1, 0, 0, 0, 0], 1e-9)
+    bad = [{"tip_tilt_deg": "-1"}, {"tip_tilt_deg": "50"}, {"tip_tilt_deg": "a"}]
+    comp = XF.read_component(path)
+    refusals = []
+    for g in bad:
+        c2 = XF.read_component(path)
+        c2.geometry.update(g)
+        q = XF.write_component(os.path.join(tmp, "bad_tilt.txt"), c2)
+        refusals.append(refused(WM.load_component, q))
+    check("a tilt below 0, at or above TILT_MAX, or not a number is refused", refusals, [1, 1, 1], 0)
+    out = WM.write_case(tmp, "tilt1", d, p, ld.space, cad=False, settings={"sections": 21, "cap_loops": 10}, plot=False)
+    loops = XL.read_loops(out["paths"]["xcad_m.dat"], "m")
+    check("write_case: 21 horizontal sections, the tilted section, 10 cap loops", [len(loops), np.ptp(loops[20][:, 2]) < 1e-9,
+                                                                                   np.ptp(loops[21][:, 2]) > 1.0], [32, 1, 1], 0)
+    p.cap, p.tip_tilt = None, 0.0
+    folder = os.path.join(HERE, "outputs")
+    need = ("corner_points.dat", "parameters.json")
+    if all(os.path.exists(os.path.join(folder, f)) for f in need) and any(
+            f.startswith("sections_stack_y0_y200") for f in os.listdir(folder)):
+        import rudder_modify as RM
+        import xgeom_from_cad as FC
+        setup, report, forms = FC.planar_rudder_setup(folder, os.path.join(tmp, "wt_planar.txt"), "wt_planar")
+        lw = WM.load_component(setup)
+        loop_w, le_w, ct_w = WM.tilted_tip(lw.design, lw.params)
+        stack = RM.read_stack(FC.rudder_files_partial(folder, "sections_stack_*_raw_mm.dat"))
+        flat = [s for s in stack if s.tilt_deg == 0.0]
+        worst = 0.0
+        for s in flat[::20]:
+            e = s.y / lw.design.span
+            sec = WM.section_loops(lw.design, lw.params, [e], 101)[0]
+            q = np.column_stack((s.xy[:, 0] + s.x_le, s.xy[:, 1]))
+            worst = max(worst, float(RM._to_polyline(q, sec[:, [0, 2]]).max()))
+        check("the wind-tunnel rudder from its extraction folder: kind rudder, the tilt and the radius cap of "
+              "parameters.json, the tilted tip's TE top at (150.684, 208.543) and chord 136.950 as extracted, "
+              "every 20th extracted section within 0.15 mm of the set-up's (the scaled TE round)",
+              [lw.kind == "rudder", abs(lw.params.tip_tilt - 3.576626) < 1e-5, isinstance(lw.params.cap, TC.CapParams),
+               abs(loop_w[n - 1, 0] - 150.683680) < 1e-4, abs(loop_w[n - 1, 1] - 208.543428) < 1e-4, abs(ct_w - 136.950424) < 1e-4,
+               worst < 0.15], [1] * 7, 0)
+        print(f"       extracted sections from the set-up's: {worst:.4f} mm at most")
+    else:
+        print("       the wind-tunnel rudder's part skipped: no extraction outputs in outputs/")
+    if not XL.occ_available():
+        print("       the loft skipped: no OCCT binding")
+        return
+    p.tip_tilt, p.cap = 4.0, TC.CapParams(0.6, 3.0, -0.1, 0.1, 60.0, 0.7, 3.3)
+    lr = WM.write_case(tmp, "tilt2", d, p, ld.space, cad=True, settings={"sections": 21, "cap_loops": 40}, plot=False)["loft"]
+    check("the loft of the tilted, capped fin: one valid closed solid of 6 faces, no fold",
+          [lr.valid, lr.free_edges, XL.count_faces(lr.shape), lr.tip_angle > 3.0], [1, 0, 6, 1], 0)
+    p.tip_tilt, p.cap = 0.0, None
+
+
 def main():
     print("wing and fin: self-check")
     cwd = os.getcwd()
@@ -672,6 +757,7 @@ def main():
             test_adapter(tmp)
             test_planar_rudder(tmp)
             test_cap(tmp)
+            test_tilt(tmp)
             test_vehicle()
             test_vehicle_cad(tmp)
             if "--gui" in sys.argv:
