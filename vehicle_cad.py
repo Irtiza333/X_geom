@@ -15,10 +15,12 @@ y to starboard, z up).
                thickness along et (rudder_trsf)
     fin, wing  the same from their own STEP solids (wing_modify.write_cad, the same XCAD frame with the span as
                the height); the port wing is the starboard one mirrored in the plane y = 0 (mirrored)
-    propeller  the blade's five DRDC faces (the propeller's STEP: blade_modify.write_cad, X_CAD_new) sewn and
-               closed at the root by the piece of the hub cylinder inside the root ring (blade_solid); Z copies
-               around the axis fused with the hub cylinder (the hub radius and height: propeller_solid); scaled to
-               the vehicle's D and moved to the propeller plane
+    propeller  the part the blade's panel writes (its 'CAD writes': the whole propeller, half of it or one
+               blade on its 1/Z of the hub), the solid of the blade's own build (blade_modify.write_cad, solids
+               for the vehicle); scaled to the vehicle's D and moved to the propeller plane. A STEP of the
+               blade's five DRDC faces only (an older set-up): the faces sewn and closed at the root by the piece
+               of the hub cylinder inside the root ring (blade_solid), Z copies around the axis fused with the hub
+               cylinder (propeller_solid), the whole propeller
 Each rudder, fin and wing stands ROOT_LIFT_MM off the hull on its root extrusion (lifted along the extrusion,
 the extrusion that much longer, its inner end where the Vehicle tab has it): where the root lies on the
 hull (along the whole chord on the middle body) the hull would otherwise touch the edge between the root
@@ -57,6 +59,9 @@ import numpy as np
 import xcad_loft as XL
 
 FUZZY_MM = 1.0e-3                  # the fuse's fuzzy value: the sewing tolerance of the blade and the rudder
+FUZZY_RETRY_MM = (1.0e-2, 5.0e-2)  # a fuse that leaves parts apart is tried again with these (13 Nov 2026): a
+                                   # rudder's root TE within a few hundredths of a mm of a hull's patch join (SUBOFF's
+                                   # tail and cap) left the boolean undecided at FUZZY_MM; parts truly apart stay so
 SEW_MM = 1.0e-3
 ROOT_LIFT_MM = 0.2                 # each appendage this far off the hull on its root extrusion (the docstring)
 
@@ -342,9 +347,17 @@ def build_vehicle(out_dir, case, placed):
         raise RuntimeError(f"{paths['parts']} holds {len(parts)} solids, not {len(names)}")
     shape = fuse(parts) if len(parts) > 1 else parts[0]
     n, valid, vol = solid_report(shape)
+    fuzzy = FUZZY_MM
+    for f in FUZZY_RETRY_MM if len(parts) > 1 else ():
+        if n == 1 and valid:
+            break
+        again = fuse(parts, f)
+        n2, valid2, vol2 = solid_report(again)
+        if valid2 and (n2 < n or not valid):
+            shape, n, valid, vol, fuzzy = again, n2, valid2, vol2, f
     paths["vehicle"] = XL.write_step(shape, os.path.join(out_dir, f"{case}_vehicle.step"))
     return {"paths": paths, "shape": shape, "solids": n, "valid": valid, "volume": vol, "parts": names,
-            "seconds": time.time() - t0}
+            "seconds": time.time() - t0, "fuzzy_mm": fuzzy}
 
 
 ORDER = ("hull", "rudder", "fin", "wing", "blade")  # the components' builds, the quick ones first
@@ -353,12 +366,21 @@ APPENDAGES = {"rudder": ("rudder_angle", "rudder_scale"), "fin": ("fin_angle", "
               "wing": ("wing_angle", "wing_scale")}
 
 
-def vehicle_setup(case, steps, parts, info, placement):
+def part_text(pr):
+    """The propeller part a set-up's record names, in words (its 'part' and 'part_blades'; none: the whole)."""
+    z, part = int(pr["blades"]), str(pr.get("part", "whole"))
+    k = int(pr.get("part_blades", z))
+    return {"whole": f"the whole propeller ({z} blades)", "half": f"half of it ({k} of the {z} blades)",
+            "sector": f"one blade on 1/{z} of the hub"}.get(part, part)
+
+
+def vehicle_setup(case, steps, parts, info, placement, cad_parts=None):
     """What the vehicle's CAD needs, in numbers (JSON): the case, the components' STEP files (steps, by kind),
     the placement, and as xgeom_vehicle.assemble has them the rudders', fins' and wings' frames, root
     extrusions (depth, and slope: dx/dz in the part's frame, 0 down its height) and root LE in their own frame
     (the wing: the starboard one, 'mirror' for its port copy), and the propeller's plane, scale, blades and hub
-    (mm in its own frame)."""
+    (mm in its own frame) and the part its STEP holds (cad_parts['blade'], the blade's build: 'part' whole,
+    half or sector and 'part_blades' its number of blades; without it the whole propeller)."""
     out = {"case": case, "written": time.strftime("%d %b %Y %H:%M"),
            "units": "mm, the hull's frame (x aft from the nose, y to starboard, z up)",
            "steps": {NAMES[k]: os.path.abspath(v) for k, v in steps.items()},
@@ -385,7 +407,9 @@ def vehicle_setup(case, steps, parts, info, placement):
         out["propeller"] = {"x": float(info["prop_x"]), "d": float(info["prop_d"]),
                             "scale": float(info["prop_scale"]), "blades": int(b["blades"]),
                             "hub_radius_mm": 1000.0 * float(b["hub"][0]), "hub_height_mm": 1000.0 * float(b["hub"][1]),
-                            "hub": dict(b.get("hub_record") or {}), "part": "whole"}
+                            "hub": dict(b.get("hub_record") or {})}
+        got = (cad_parts or {}).get("blade") or {}
+        out["propeller"].update(part=str(got.get("part", "whole")), part_blades=int(got.get("blades", b["blades"])))
     return out
 
 
@@ -401,20 +425,21 @@ def build_from_setup(setup, out_dir, progress=print):
     pr = setup.get("propeller")
     if "propeller" in steps and pr:
         shape = XL.read_step(steps["propeller"])
-        if pr.get("part") == "whole" and _shapes(shape, "SOLID"):      # the component's build: the whole propeller
-            progress(f"the propeller: the whole propeller of the blade's own build ({pr['blades']} blades and the "
+        if _shapes(shape, "SOLID"):                  # the blade's own build: the part its panel writes, a solid
+            progress(f"the propeller from the blade's own build: {part_text(pr)} (the "
                      f"{pr.get('hub', {}).get('shape', 'cylinder')} hub)")
             propeller = _shapes(shape, "SOLID")[0]
-        else:
+        else:                                        # an older set-up's DRDC faces of one blade: the whole one
             progress(f"the propeller as a solid (the blade closed at its root, {pr['blades']} blades and the hub)")
             blade = blade_solid(shape, pr["hub_radius_mm"])
             propeller = propeller_solid(blade, pr["blades"], pr["hub_radius_mm"], pr["hub_height_mm"])
+            setup = dict(setup, propeller=dict(pr, part="whole", part_blades=pr["blades"]))
     progress("the parts placed")
     placed = place_parts(hull, solid["rudder"], propeller, setup, solid["fin"], solid["wing"])
     progress(f"the fuse of {len(placed)} parts")
     out = build_vehicle(out_dir, case, placed)
     rec = dict(setup, parts=out["parts"], solids=out["solids"], valid=out["valid"], volume_mm3=out["volume"],
-               fuse_seconds=out["seconds"], files=dict(out["paths"]))
+               fuse_seconds=out["seconds"], fuzzy_mm=out["fuzzy_mm"], files=dict(out["paths"]))
     rec["files"]["json"] = os.path.join(out_dir, f"{case}_vehicle.json")
     with open(rec["files"]["json"], "w") as fh:
         json.dump(rec, fh, indent=1)
@@ -428,7 +453,7 @@ def run_vehicle(out_dir, case, tasks, parts, info, placement, progress=print, se
     xgeom_vehicle.assemble had them when the build was asked for. progress(text) is told what runs. Returns a
     dict as the adapters' builds do: report, message, error, warn, view (the vehicle's STEP), and the record."""
     t0 = time.time()
-    steps = {}
+    steps, cad_parts = {}, {}
     for k in ORDER:
         if k in tasks:
             progress(f"the {NAMES[k]}'s case and CAD")
@@ -436,8 +461,10 @@ def run_vehicle(out_dir, case, tasks, parts, info, placement, progress=print, se
             if out.get("error") or not out.get("view"):
                 raise RuntimeError(f"the {NAMES[k]}: {out.get('message', 'no CAD')}")
             steps[k] = out["view"]
+            if out.get("part"):
+                cad_parts[k] = out["part"]
     os.makedirs(out_dir, exist_ok=True)
-    setup = vehicle_setup(case, steps, parts, info, placement)
+    setup = vehicle_setup(case, steps, parts, info, placement, cad_parts)
     path = os.path.join(out_dir, f"{case}_vehicle_setup.json")
     with open(path, "w") as fh:
         json.dump(setup, fh, indent=1)
@@ -463,12 +490,18 @@ def run_vehicle(out_dir, case, tasks, parts, info, placement, progress=print, se
            f"{'valid' if rec['valid'] else 'NOT valid'}, V {rec['volume_mm3'] / 1e9:.5f} m^3, mm), "
            f"{os.path.basename(files['parts'])} (the parts placed, not fused); each component's CAD in its own "
            f"folder; OCC viewer shows the vehicle")
+    pr = rec.get("propeller") or {}
+    if pr and pr.get("part", "whole") != "whole":
+        msg += f"; the propeller as the blade panel writes it: {part_text(pr)}"
     if not one:
         msg += f"; warning: {rec['solids']} separate solids (a part does not touch the hull)"
+    elif rec.get("fuzzy_mm", FUZZY_MM) > FUZZY_MM:
+        msg += f"; fused at a fuzzy value of {rec['fuzzy_mm']:g} mm (parts meeting at a near-coincidence)"
     report = [f"vehicle {case}: {', '.join(rec['parts'])} fused in {rec['fuse_seconds']:.1f} s; {rec['solids']} "
               f"solid(s), {'valid' if rec['valid'] else 'NOT valid'}, V {rec['volume_mm3'] / 1e9:.6f} m^3",
-              "  components: " + ", ".join(f"{k} {v}" for k, v in rec["steps"].items()),
-              "  written: " + ", ".join([path] + list(files.values())), f"  in {time.time() - t0:.1f} s"]
+              "  components: " + ", ".join(f"{k} {v}" for k, v in rec["steps"].items())]
+    report += [f"  the propeller: {part_text(pr)}"] if pr else []
+    report += ["  written: " + ", ".join([path] + list(files.values())), f"  in {time.time() - t0:.1f} s"]
     return {"report": report, "message": msg, "error": False, "warn": not (one and rec["valid"]),
             "view": files["vehicle"], "record": rec}
 

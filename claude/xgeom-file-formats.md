@@ -100,7 +100,9 @@ Rules:
   blade root, where the table starts; the blade runs on into the hub. Their var lines `hub_base`, `hub_top`,
   `hub_x` (held unless Y). Without them the hub is the cylinder of the root radius, centred on x = 0.
 - `part` (blade setting): what the CAD writes, `whole`, `half` (an even Z) or `sector` (one blade on 1/Z of the
-  hub, the default).
+  hub, the default). The Vehicle CAD takes the same part, as a solid (19 Nov 2026; it had always taken the
+  whole propeller); `outputs/vehicle/<case>_vehicle_setup.json` names it in its propeller record (`part`, and
+  `part_blades` the part's number of blades).
 - `nose_m 0` (hull, 13 Nov 2026): a body without a nose, an aft half; its front the flat cut at x 0, tail curves
   only, no nose var line (BB2's `bb2/outputs/bb2_hull.txt`).
 - kind `rudder` (the planar rudder, wing_modify's engine; 13 Nov 2026: BB2's stern plane,
@@ -243,3 +245,7 @@ stern plane set-up builds with its rounded cap instead of a flat top. Later the 
 wind-tunnel rudder as a planar set-up (`outputs/wind_tunnel_rudder.txt`, from the extraction's outputs by
 `xgeom_from_cad.py rudder_planar`). For the web app: new optional geometry keys of the rudder, fin and wing
 files and one optional setting; files without them read as before.
+
+19 Nov 2026: the Vehicle CAD follows the blade's `part` (above). For the web app: in the vehicle set-up JSON the
+propeller record's `part` now names the part (it was always `whole`) and `part_blades` is new; the component
+files are unchanged.

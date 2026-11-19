@@ -572,14 +572,15 @@ class BladeAdapter:
         """A function that writes the case as the design is now (blade_modify.
         write_case: the component file, the XCAD points, the design, the check
         plot) and then the CAD (<case>.iges, <case>.step: the part of the
-        settings, or part). half is ignored (a blade has no half body); the
-        vehicle passes it to every component, and part 'whole' (half=False).
-        The state is copied here, so it can run off the GUI thread."""
+        settings, or part). A blade has no half body: the Vehicle CAD passes
+        half=False to every component, and the blade then writes the part of
+        its settings as solids (the vehicle fuses them; one blade on 1/Z of a
+        cylinder hub too, not the DRDC surfaces). The state is copied here, so
+        it can run off the GUI thread."""
         design, params, space, st = self.design.copy(), self.params, self.free_space(), self._case_settings()
         if part is not None:
             st["part"] = BM.cad_part({"part": part}, params.blades)[0]
-        elif half is False:
-            st["part"] = "whole"
+        cad_st = dict(st, solids=True) if half is False else st
         out_dir, plot, extra = self.out_dir, self.settings["plot"], dict(self.extra)
 
         def run():
@@ -595,8 +596,9 @@ class BladeAdapter:
             if importlib.util.find_spec("OCC") is None:
                 out.update(message=f"{files}; no CAD: needs pythonocc-core", error=True)
                 return out
-            cad = BM.write_cad(out_dir, case, design, params, st)
+            cad = BM.write_cad(out_dir, case, design, params, cad_st)
             res["paths"].update(cad["cad_paths"])
+            out["part"] = {"part": cad["part"], "blades": cad["blades"]}     # the vehicle's set-up records it
             what = PART_LABELS[cad["part"]].replace("1/Z", f"1/{params.blades}")
             out["report"].append(f"  CAD ({what}; hub {cad['hub']}): grids {cad['grid_seconds']:.1f} s, faces and "
                                  f"IGES {cad['cad_seconds']:.1f} s: {cad['cad_paths']['iges']}, "

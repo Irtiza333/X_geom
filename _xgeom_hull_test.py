@@ -601,6 +601,14 @@ def test_vehicle_cad(hull, full=False):
     check("a blade shell open at its root ring on the hub cylinder, closed by the cylinder inside the ring: one "
           "valid solid; 3 of them and the hub fused: one valid solid of their volumes (the root on the hub)",
           [n_b, ok_b, v_b > 0, n_p, ok_p, v_p / (v_hub + 3.0 * v_b) - 1.0], [1, 1, 1, 1, 1, 0], 1e-5)
+    bpart, info0 = {"blades": 6, "hub": (0.02, 0.06), "hub_record": {"shape": "cone"}}, {"prop_x": 1.0, "prop_d": 0.2,
+                                                                                         "prop_scale": 0.5}
+    s_whole = VC.vehicle_setup("t", {"blade": "b.step"}, {"blade": bpart}, info0, XV.Placement())["propeller"]
+    s_sec = VC.vehicle_setup("t", {"blade": "b.step"}, {"blade": bpart}, info0, XV.Placement(),
+                             {"blade": {"part": "sector", "blades": 1}})["propeller"]
+    check("the vehicle's set-up records the propeller part the blade's build wrote (none: the whole)",
+          [s_whole["part"] == "whole", s_whole["part_blades"], s_sec["part"] == "sector", s_sec["part_blades"],
+           VC.part_text(s_sec) == "one blade on 1/6 of the hub"], [1, 6, 1, 1, 1], 0)
     t = np.linspace(0.0, 2.0 * np.pi, 201)
     wing = XL.loft_loops([np.column_stack((50.0 - 50.0 * np.cos(t), -20.0 * np.sin(t), np.full_like(t, z)))
                           for z in (0.0, 60.0, 120.0)], n_poles=12).shape    # an elliptical wing, flat root at
@@ -670,8 +678,18 @@ def test_vehicle_cad(hull, full=False):
                                        rec["volume_mm3"] < v_hull + 4 * rudder_v * 1.2 + (full and 1e6 or 0)], [1, 1], 0)
         pl.rudder_rake = 0.0                                          # the TE square to the axis
         segs, info = XV.assemble(parts, pl)
-        tasks = {k: ads[k].build_task("r") for k in kinds}
+        if full:
+            ads["blade"].set_part("sector")             # the blade panel's 1/Z: the Vehicle CAD takes it, a solid
+        tasks = {k: ads[k].build_task("r", half=False) for k in kinds}             # as the tool's Vehicle CAD
         rec = VC.run_vehicle(os.path.join(tmp, "vehicle"), "r", tasks, parts, info, pl, said.append)["record"]
+        if full:
+            pb = VC._bbox(VC._shapes(XL.read_step(rec["files"]["parts"]), "SOLID")[-1])
+            side = max(abs(pb[0][i] + pb[1][i]) / (pb[1][i] - pb[0][i]) for i in (1, 2))
+            check("the blade panel's 1/Z (build_task(case, half=False) as the tool's Vehicle CAD): the set-up's "
+                  "propeller one blade on its 1/Z of the hub, the part placed to one side of the axis (the whole "
+                  "propeller's box is centred on it), fused with the rest",
+                  [rec["propeller"]["part"] == "sector", rec["propeller"]["part_blades"], side > 0.6,
+                   rec["solids"], rec["valid"]], [1, 1, 1, 1, 1], 0)
         print(f"       vehicle with the rudders' TE square to the axis: V {rec['volume_mm3'] / 1e9:.6f} m^3, "
               f"{rec['fuse_seconds']:.1f} s to fuse")
         check("TE rake 0: the set-up keeps the rake and the TE line's slope; one valid solid, the hull's volume and "

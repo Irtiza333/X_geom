@@ -32,15 +32,19 @@ Vehicle
                  keeps its state while another is shown.
     Vehicle tab  the hull with the propeller and the rudder mounted at its stern, the
                  fins and the pair of wings on it (xgeom_vehicle.py), as their designs
-                 stand; the component being edited is drawn thicker. Placement:
-                 propeller  plane at x - L: the middle of the hub on the axis, from
-                            the end of the hull (m, negative forward; default 0);
-                            D: its diameter in the vehicle, the design scaled to it
-                            (default half the hull's depth or breadth, the larger)
-                 rudder     root TE at x - L: where the root's trailing edge sits on
-                            the hull, from its end (m, -L to 0; default the start of
-                            the cap, a quarter of the propeller's D clear of the
-                            blades); rudders: how many, 0 (none) to 12, evenly spaced
+                 stand; the component being edited is drawn thicker. Placement
+                 (positions along the hull as x/L: 0 the nose, or the front of a
+                 body without one, 1 the hull's aft end; since 13 Nov 2026):
+                 propeller  hub starts at x/L: the hub's forward end on the axis,
+                            the blades at the hub's own offset (1: the hub's base on
+                            the hull's aft end; default where the hub sits flush on
+                            the hull); D: its diameter in the vehicle, the design and
+                            its hub scaled to it (default the design's own when it is
+                            no larger than the hull's depth or breadth, else half that)
+                 rudder     root TE at x/L: where the root's trailing edge sits on
+                            the hull (0 to 1; default the start of the cap, a quarter
+                            of the propeller's D clear of the blades); rudders: how
+                            many, 0 (none) to 12, evenly spaced
                             around the axis (default 4, a cross); first at: the first one's
                             angle around the axis from the top towards starboard (180
                             under the stern); scale (1: its own size, mm to m). Each
@@ -58,14 +62,14 @@ Vehicle
                             the TE line until it meets the hull fully (the largest gap
                             under it and 2 % of the root chord). Unticked, the box
                             shows the TE's rake that the hull's slope gives.
-                 fins       root LE at x: where the root's leading edge sits on the
-                            hull (m from the nose; default a tenth of the way along the
-                            middle body); fins: how many, 0 to 12, evenly spaced around
+                 fins       root LE at x/L: where the root's leading edge sits on the
+                            hull (default a tenth of the way along the middle body);
+                            fins: how many, 0 to 12, evenly spaced around
                             the axis (default 1); first at (default 0, on top); scale.
                             Each sits on the hull as a rudder does, its TE one root
                             chord aft of its LE along the hull, pitched to the hull's
                             slope (its own pitch on top), its root extruded inwards.
-                 wings      root LE at x as the fins' (default a quarter of the way
+                 wings      root LE at x/L as the fins' (default a quarter of the way
                             along the middle body); wings: 2 (the pair) or 0 (none);
                             at: the starboard wing's angle around the axis from the top
                             (0 to 180 deg; default 90, level); the port wing is its
@@ -295,6 +299,8 @@ PLANAR_RUDDER = ("xgeom_wing", "PlanarRudderAdapter")   # the Rudder slot's plan
 VEHICLE = ("hull", "blade", "rudder", "fin", "wing")   # the vehicle's components, in the switcher's order
 NAMES = {"hull": "Hull", "blade": "Propeller", "rudder": "Rudder", "fin": "Fin", "wing": "Wing"}
 COUNTS = ("rudders", "fins", "wings")              # the Vehicle tab's whole numbers
+POSITIONS = ("prop_x", "rudder_x", "fin_x", "wing_x")   # the Vehicle tab's positions along the hull: x/L (0 the
+                                                         # nose, 1 the aft end), 5 decimals
 INK2, RED = "#52514e", "#e34948"
 STATUS = {"ok": ("#dfeedd", "black"), "busy": ("#f6d58e", "black"), "warn": ("#f0a35e", "black"),
           "error": ("#c62f2e", "white")}                                                     # bar colours
@@ -615,18 +621,19 @@ class App:
         bar = ttk.Frame(tab)
         bar.pack(fill="x", side="top", padx=6, pady=(6, 2))
         num = dict(from_=-100.0, to=100.0, increment=0.005, width=8)
+        frac = dict(from_=0.0, to=1.0, increment=0.001, width=8)      # positions along the hull: x/L
         angle = dict(from_=-360.0, to=720.0, increment=15.0, width=6)
         scale = dict(from_=0.01, to=100.0, increment=0.05, width=6)
         count = dict(from_=0, to=XV.MAX_RUDDERS, increment=1, width=4)
-        rows = [("Propeller", (("prop_dx", "plane at x - L (m)", num),
+        rows = [("Propeller", (("prop_x", "hub starts at x/L", dict(frac, to=2.0)),
                                ("prop_d", "D (m)", dict(num, from_=0.001))), "show"),
-                ("Rudder", (("rudder_dx", "root TE at x - L (m)", num), ("rudders", "rudders", count),
+                ("Rudder", (("rudder_x", "root TE at x/L", frac), ("rudders", "rudders", count),
                             ("rudder_angle", "first at (deg)", angle), ("rudder_scale", "scale", scale)), "rake")]
         if "fin" in self.kinds:
-            rows.append(("Fin", (("fin_x", "root LE at x (m)", dict(num, from_=0.0)), ("fins", "fins", count),
+            rows.append(("Fin", (("fin_x", "root LE at x/L", frac), ("fins", "fins", count),
                                  ("fin_angle", "first at (deg)", angle), ("fin_scale", "scale", scale)), None))
         if "wing" in self.kinds:
-            rows.append(("Wing", (("wing_x", "root LE at x (m)", dict(num, from_=0.0)),
+            rows.append(("Wing", (("wing_x", "root LE at x/L", frac),
                                   ("wings", "wings", dict(count, to=2, increment=2)),
                                   ("wing_angle", "at (deg)", dict(angle, from_=1.0, to=179.0)),
                                   ("wing_scale", "scale", scale)), None))
@@ -763,7 +770,8 @@ class App:
             for part in ad.parts:
                 ttk.Radiobutton(row, text=ad.part_label(part, short=True), value=part, variable=self.vpart,
                                 command=self.on_part).pack(side="left", padx=(0, 6))
-            ttk.Label(row, text="(1/Z with a cylinder hub: the DRDC surfaces; else solids)", foreground=INK2,
+            ttk.Label(row, text="(1/Z with a cylinder hub: the DRDC surfaces, else solids; the Vehicle CAD takes "
+                                "this part, as a solid)", foreground=INK2,
                       wraplength=200, justify="left").pack(side="left")
         self.refresh_labels()
 
@@ -1000,7 +1008,7 @@ class App:
                 continue
             v = getattr(pl, k)
             sb.set(f"{v:d}" if k in COUNTS else f"{v:g}" if k.endswith("_angle") else
-                   f"{v:.2f}" if k.endswith("_scale") else f"{v:.3f}")
+                   f"{v:.2f}" if k.endswith("_scale") else f"{v:.5f}" if k in POSITIONS else f"{v:.3f}")
         self.vshow.set(pl.view)
 
     def _fill_rake(self):
@@ -1162,7 +1170,8 @@ class App:
                 return
             info = XV.assemble(parts, placement)[1]
             case = self.case.get().strip() or "gui"
-            tasks = {k: self.adapters[k].build_task(case, half=False) for k in parts}   # as they are, full bodies
+            # full bodies (fused); the blade: the part its panel's 'CAD writes' names, as a solid
+            tasks = {k: self.adapters[k].build_task(case, half=False) for k in parts}
             keys = {k: self._design_key(k) for k in parts}
             keys["vehicle"] = self._design_key("vehicle")
         except Exception as exc:

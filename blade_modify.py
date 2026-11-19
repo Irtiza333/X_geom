@@ -1625,9 +1625,10 @@ def write_cad(out_dir, case, design, params, settings=None):
     height (tip_surfaces_new, X_CAD_new; the IGES the MSc pipeline writes, untrimmed surfaces); otherwise
     solids (prop_hub.propeller_solid): the whole propeller (Z blades fused with the hub), half of it or one
     blade on its 1/Z of the hub (the periodic sector), the blade closed at its root ring (vehicle_cad.
-    blade_solid) and, with a conic hub, extended into the hub and trimmed by it; IGES in BRep mode. X_CAD
-    names its file from an integer case id (pipeline_config.cad_output_paths), so it writes into a folder of
-    its own, the file is moved out of it and the folder removed (also when X_CAD fails)."""
+    blade_solid) and, with a conic hub, extended into the hub and trimmed by it; IGES in BRep mode. The
+    settings' 'solids' (the Vehicle CAD, which fuses the parts): solids for the 1/Z sector with the cylindrical
+    hub too. X_CAD names its file from an integer case id (pipeline_config.cad_output_paths), so it writes into
+    a folder of its own, the file is moved out of it and the folder removed (also when X_CAD fails)."""
     import tempfile
     import time
     from tip_surfaces_new import TipConfig, build_drdc_grids
@@ -1636,7 +1637,7 @@ def write_cad(out_dir, case, design, params, settings=None):
     import xcad_loft as XL
     st = dict(settings or {})
     part, k = cad_part(st, params.blades)
-    solids = part != "sector" or design.hub_cone
+    solids = part != "sector" or design.hub_cone or bool(st.get("solids"))
     t0 = time.time()
     grids = build_drdc_grids(blade_surface(design, params), TipConfig(**st.get("tip_config", {})), verbose=False)
     t1 = time.time()
