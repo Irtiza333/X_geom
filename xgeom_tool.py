@@ -107,6 +107,15 @@ Left panel (rudder)
               extracted rudder's to start with): a new one stretches the whole
               rudder in height, H, its bounds and the curves' heights with it;
               saved with the set-up, not a design variable.
+    tangent at H
+              every curve's C1 on the original's tangent at H (slope matched;
+              the default), or, unticked, every C1 free: a design variable
+              starting where it is, so the curves meet the original with their
+              value only. Each curve's box has its own switch for one curve. A
+              design with any curve not tangent gets its CAD as two lofts, below
+              and above H, joined at the H section (xcad_loft.loft_split: nine
+              patches and the root), so the turn at H stays a crease instead of
+              being smoothed over and rippling.
     Section control points
               the number of control points of the section's Bezier half-
               section, P0 .. Pn (P0 = (0, 0) the LE and Pn = (1, 0) the sharp TE
@@ -116,7 +125,8 @@ Left panel (rudder)
               variable. P1 x is held at 0 by default (a round LE).
     Curve     the picked curve's control points C0 .. Cm, from H (C0, pinned to
               the original) down to the root (Cm); how many there are; whether
-              C1 sits on the original's tangent at H (slope matched).
+              C1 sits on the original's tangent at H (slope matched; see
+              tangent at H).
 Left panel (blade)
     File      the blade's component file (xgeom_files.py, claude/xgeom-file-formats.md:
               D, blades, root r/R, hub height, the section, the settings, each
@@ -858,6 +868,16 @@ class App:
         self.guard(lambda: self.ad.set_tangent(c, self.tangent.get()))
         self.after_change(structure=True)
 
+    def on_tangent_all(self):
+        """The rudder's 'tangent at H': every curve's C1 on the original's tangent, or every one free (each
+        curve's own switch sets one); a design with any curve free there gets its CAD as two lofts."""
+        on = bool(self.tangent_all.get())
+        self.guard(lambda: self.ad.set_tangent_all(on))
+        self.after_change(structure=True)
+        self._note = ("every curve tangent at H again (C1 on the original's tangent): one loft" if on else
+                      "no curve tangent at H: C1 free on each, where it was; the CAD lofts below and above H on its "
+                      "own and joins the two there")
+
     def on_points(self, _event=None):
         try:
             n = int(self.npts.get()) - 1
@@ -1513,6 +1533,22 @@ def rudder_panel(app):
     ttk.Label(row, text=f"mm, the root to the top of the cap (the extracted rudder's: {ad.span0:.1f} mm); the "
                         f"whole rudder stretches in height, H and its bounds with it", foreground=INK2,
               wraplength=430, justify="left").pack(side="left", padx=6)
+    state = ad.tangent_state()
+    row = ttk.Frame(box)
+    row.grid(row=3, column=0, columnspan=7, sticky="w", padx=2, pady=(2, 2))
+    app.tangent_all = tk.BooleanVar(value=state == "all")
+    ttk.Checkbutton(row, text="tangent at H", variable=app.tangent_all,
+                    command=app.on_tangent_all).pack(side="left", padx=(2, 4))
+    n_g1 = sum(ad.design.curves[c].join == "G1" for c in ad.names)
+    ttk.Label(row, text=("every curve leaves the original with its slope (C1 on its tangent); off: with its value "
+                         "only, C1 free, and the CAD lofts the rudder below and above H on its own and joins the "
+                         "two there (nine patches)" if state == "all" else
+                         "no curve tangent: C1 free on each; the CAD lofts the rudder below and above H on its own "
+                         "and joins the two there (nine patches)" if state == "none" else
+                         f"{n_g1} of {len(ad.names)} curves tangent (each curve's own switch below); the CAD lofts "
+                         f"the rudder below and above H on its own and joins the two there (nine patches); tick: "
+                         f"every curve tangent"),
+              foreground=INK2, wraplength=430, justify="left").pack(side="left", padx=6)
 
     box = ttk.LabelFrame(app.panel, text="Section control points (pick the curve to edit)")
     box.pack(fill="x", padx=6, pady=4)

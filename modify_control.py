@@ -94,7 +94,8 @@ FIT_ORDERS = {}
 DEGREE = 4                        # section Bezier degree: 4 = P0 .. P4 like the section fits; each extra
                                   # degree adds a control point (its x and z curves)
 # Bezier order of each spanwise curve below H ("LE", "P1x", "P1z", ...; not named: 3), and how they join
-# the original at H: "G1" value and slope (C0 on the original, C1 on its tangent), "G0" value only
+# the original at H: "G1" value and slope (C0 on the original, C1 on its tangent), "G0" value only (C1 a
+# design variable; the design tool then lofts the CAD below and above H on its own, xcad_loft.loft_split)
 ORDERS = {}
 JOIN = "G1"
 H = 80.0                          # height of the modified region, mm (h_min <= H <= h_max)

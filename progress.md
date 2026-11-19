@@ -656,6 +656,26 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   record's `part` now names the part (it was always `whole`), `part_blades` is new. Tests: hull 66 with the
   window and the vehicle CAD (the set-up's record; the 1/Z through build_task(case, half=False) in the
   vehicle), tool 61, blade 77, wing 69.
+- Not tangent at H: two lofts (19 Nov 2026; the user: make the tangency at the joint of the unmodified and the
+  modified parts a feature that can be turned off, loft the two parts separately and combine the two solids,
+  nine patches). Each curve already had its join (G1, or G0 with C1 a free variable) and a checkbox in its
+  box; his choice: a global switch too, the per-curve ones kept. `xgeom_tool.py`: "tangent at H" in the
+  rudder's Region box (`App.on_tangent_all`; `RudderAdapter.set_tangent_all`, `tangent_state`): off frees
+  every C1 where it is (the shape does not move), on puts every C1 back on the original's tangent; the label
+  says how many curves are tangent when they are mixed. The CAD: with any curve G0,
+  `xgeom_rudder.xcad_task` lofts with `xcad_loft.loft_split(loops, n_modified - 1)`: the loops up to the H
+  section and those from it on, each by loft_loops on its own, both through the H section exactly (loft_loops
+  holds its end loops) and with the whole stack's strip widths (`loft_loops(widths=)`, the rule moved to
+  `_strip_widths`), so they end on the same four curves and the seams run on across H; their faces (four
+  patches below, four and the tip patch above, the flat root; the two flat faces on the joint left out) are
+  sewn into one solid, ten faces (the half body cut from it, nine). `LoftResult.joint`; the status line says
+  "not tangent at H: lofted below and above H on their own, joined there, nine patches". Tangent designs keep
+  the one loft. Why: the wind-tunnel rudder with every curve free and C1 moved off the tangent (LE 10 mm
+  forward, P2z +0.01, P1z -0.008), one loft: its rows 0.19 mm off the patches about H and two false steps
+  eased out of the loops; two lofts: valid, the rows within 0.0001 mm, no steps, the tip patch as before,
+  13 s against 18. Limit: the joint has to stay under the tip patch's corners (about 190 mm on this rudder; H
+  185 builds, 192 is refused with the reason: lower H, or tick tangent at H). No file format changed. Tests:
+  tool 68 with the window, wing 69, hull 65, modify 136.
 
 ## Next steps
 

@@ -28,7 +28,8 @@ An adapter gives the tool:
     title, names, summary()                   what there is to edit, the line under the title
     describe(curve), order(curve), joins      a curve's text, its order, whether it has a join switch
     get / bounds / is_free / set / set_bounds / set_free        one variable
-    set_order / set_tangent / set_degree      the shape of the space (the last two rudder only)
+    set_order / set_tangent / set_degree      the shape of the space (the last two rudder only; set_tangent_all
+                                              and tangent_state for every curve at once)
     curve_rows(curve), row_info(name), n_free()   the rows of one curve (xgeom_common.Row)
     preview()                                 everything the live views draw
     views(fig) / skeleton_view(fig)           the drawings
@@ -199,12 +200,25 @@ class RudderAdapter:
         self._rebuild()
 
     def set_tangent(self, curve, on):
-        """C1 on the original's tangent at H (G1, slope matched) or free (G0)."""
+        """C1 on the original's tangent at H (G1, slope matched) or free (G0): a design variable then, starting
+        where it is. A design with any curve free there gets its CAD as two lofts (xcad_task)."""
+        self.set_tangent_all(on, (curve,))
+
+    def set_tangent_all(self, on, curves=None):
+        """Every curve's C1 (or those named) on the original's tangent at H (G1) or free (G0), as set_tangent
+        does for one. Off, a C1 keeps its value and becomes a design variable; on, it goes back onto the
+        tangent."""
         d = self.design.copy()
-        d.curves[curve].join = "G1" if on else "G0"
+        for c in (self.orig.names if curves is None else curves):
+            d.curves[c].join = "G1" if on else "G0"
         self.design = RM.pin(d, self.orig)
-        self.join[curve] = d.curves[curve].join
+        self.join = {c: d.curves[c].join for c in self.orig.names}
         self._rebuild()
+
+    def tangent_state(self):
+        """'all' (every curve's C1 on the original's tangent at H), 'none' or 'mixed'."""
+        g1 = [self.design.curves[c].join == "G1" for c in self.orig.names]
+        return "all" if all(g1) else "mixed" if any(g1) else "none"
 
     def set_degree(self, degree):
         """Add (or remove) section control points: the sections become Bezier
@@ -484,7 +498,11 @@ class RudderAdapter:
         format when it applies, the design JSON, plus
         <case>_design_space.json), then lofts
         the XCAD file into a solid (xcad_loft) and writes it as STEP next to
-        it. The state is copied here, so the function can run off the GUI
+        it: one loft through all the sections when every curve is tangent at H,
+        else two (xcad_loft.loft_split: the sections up to H and those from H
+        on, each lofted on its own and joined at the H section, so the surface
+        keeps the turn the free curves make there; nine patches and the root).
+        The state is copied here, so the function can run off the GUI
         thread while the sliders move on. It returns a dict: the case, its
         report, the loft result and the STEP path."""
         import xcad_loft as XL
@@ -493,6 +511,8 @@ class RudderAdapter:
         half = bool(s.get("half", False)) if half is None else bool(half)
         design, space, record = self.design.copy(), self.free_space(), self.space_record()
         orig, stack, out_dir, xcad0 = self.orig, self.stack, self.out_dir, self.files["xcad_original"]
+
+        split = any(c.join == "G0" for c in design.curves.values())        # not tangent at H: two lofts
 
         def run():
             t0 = time.time()
@@ -510,9 +530,16 @@ class RudderAdapter:
             if not XL.occ_available():
                 out["cad_error"] = "no OCCT binding (pythonocc-core or cadquery-ocp): no solid"
                 return out
-            loft = XL.loft_loops(XL.read_loops(res["paths"]["xcad"], s["xcad_units"]),
-                                 strip_frac=s.get("strip_frac"), half=half,
-                                 tip_drop=s.get("tip_drop", XL.TIP_DROP))
+            loops = XL.read_loops(res["paths"]["xcad"], s["xcad_units"])
+            kw = dict(strip_frac=s.get("strip_frac"), half=half, tip_drop=s.get("tip_drop", XL.TIP_DROP))
+            if split:                                                # two lofts joined at the H section
+                try:
+                    loft = XL.loft_split(loops, res["xcad"]["n_modified"] - 1, **kw)
+                except ValueError as exc:
+                    raise ValueError(f"not tangent at H, so the rudder is lofted below and above H on its own: "
+                                     f"{exc} (lower H, or tick tangent at H for one loft)") from exc
+            else:
+                loft = XL.loft_loops(loops, **kw)
             step = os.path.splitext(res["paths"]["xcad"])[0] + ".step"
             XL.write_step(loft.shape, step)
             out.update(loft=loft, step=step)
@@ -537,10 +564,13 @@ class RudderAdapter:
             if out["loft"] is not None:
                 lr = out["loft"]
                 msg += (f", {os.path.basename(out['step'])} ({'half body, ' if lr.half else ''}solid "
-                        f"{'valid' if lr.valid else 'NOT valid'}, {lr.volume / 1e3:.2f} cm^3); OCC viewer shows it")
+                        f"{'valid' if lr.valid else 'NOT valid'}, {lr.volume / 1e3:.2f} cm^3"
+                        + ("; not tangent at H: lofted below and above H on their own, joined there, nine "
+                           "patches" if lr.joint else "") + "); OCC viewer shows it")
                 for _, jump, lo, hi, _, _ in lr.steps:     # a step left in the loops (another TE radius, say)
                     msg += (f"; the {jump:.2f} mm step between the modified and the original sections eased out "
-                            f"over {lo:.0f} mm below it" + (f" and {hi:.0f} mm above" if hi else ""))
+                            f"over " + " and ".join(t for t in (f"{lo:.0f} mm below it" if lo else "",
+                                                                 f"{hi:.0f} mm above" if hi else "") if t))
                 if lr.tip_blend[1] > 0.0:                  # the cap's edge rounding blended (xcad_loft.CAP_BLEND)
                     msg += f"; the cap's rounding blended, the cap moved by up to {lr.tip_blend[1]:.3f} mm"
                 folded = lr.tip_angle <= 0.0               # the tip patch's lines cross (xcad_loft._lines_angle)

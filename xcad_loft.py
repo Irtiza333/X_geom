@@ -120,6 +120,19 @@ patch the cap alone).
   the loops as given. A step right under a tilted tip section (sections
   that step up to the top one) has no loops above it to ease into and
   stays a blend.
+- Two lofts (loft_split; 19 Nov 2026, the user: a rudder modified below H
+  whose curves leave the original there without its slope). One loft fits
+  its walls and patches over the whole height, so a turn of the surface at
+  one section (a crease along it) is smoothed over the sections about it,
+  taken for steps and rippled about. loft_split lofts the loops up to that
+  section and those from it on, each on its own, both through it exactly
+  and with the same strips (the whole stack's), so they end on the same four
+  curves there and the seams run on across it; the four patches below, the
+  four and the tip patch above and the flat root are sewn into one solid,
+  the two flat faces on the joint left out: nine patches and the root. The
+  wind-tunnel rudder with its curves free at H, C1 off the tangent: one loft
+  0.19 mm off the loops about H, with two steps it took the turn for; two
+  lofts 0.0001 mm.
 - half=True cuts the sewn full body on the plane of symmetry and keeps the
   LE-to-TE side: the same surfaces, trimmed, closed by one planar face. The
   loops must be symmetric about the plane within sym_tol.
@@ -349,6 +362,7 @@ class LoftResult:
     corners: dict = None           # the tip patch's four corners (ur_a, ur_b at the LE strip; ul_a, ul_b)
     tip_blend: tuple = (0.0, 0.0)  # (the stretch the cap's wraps were blended over, how far that moved the
                                    # cap), mm; (0, 0) when the cap has no rounding to blend (CAP_BLEND)
+    joint: int = 0                 # loft_split: the loop its two lofts meet at, counted from 1; 0: one loft
 
 
 def _thru(wires, solid, ruled, max_degree=None):
@@ -1811,8 +1825,54 @@ def _sew_solid(parts, sew_tol):
     return fx.Solid(), free
 
 
+def _symmetric(levels, thick, sym_tol):
+    """Refuse a half body when the levels (_SmoothLoop) are not symmetric about the plane of symmetry
+    (thickness 0) within sym_tol mm."""
+    sym = 0.0
+    for lo in levels:
+        mirror = lo.dense[lo.it:][::-1].copy()
+        mirror[:, thick] *= -1.0
+        sym = max(sym, float(np.abs(mirror - lo.dense[:lo.it + 1]).max()))
+    if sym > sym_tol:
+        raise ValueError(f"no half body: the loops are not symmetric about the plane of symmetry "
+                         f"(they differ by {sym:.3g} mm, the allowance is {sym_tol:g} mm)")
+
+
+def _strip_widths(levels, chord_root, fr):
+    """How far the LE strip and the TE strip reach to each side of their edge (mm), whether the TE strip is
+    the TE's round, and the words for the notes: as wide as the edges' rounding of the horizontal levels
+    (_SmoothLoop; fr None: the median of the sections that have one) or the fractions fr of the root chord.
+    A TE strip much wider than the TE's rounding is narrowed to the rounding (one fraction given): a small
+    round in the middle of a wide patch is more than a viewer's or a mesher's triangles of the patch
+    resolve."""
+    def typical(vals):
+        """The rounding of the sections: the median of those that have one."""
+        vals = np.array([v for v in vals if v > 0.0])
+        return float(np.median(vals)) if 2 * len(vals) > len(levels) else 0.0
+
+    te_round = False
+    if fr is None:
+        r_le = typical(_edge_rounding(lo, 0.0, LE_WINDOW * min(lo.s_te, lo.S - lo.s_te)) for lo in levels)
+        r_te = typical(_edge_rounding(lo, lo.s_te, 0.07 * chord_root, TE_DROP) for lo in levels)
+        w_le = LE_MARGIN * r_le if r_le > 0.0 else 0.07 * chord_root
+        w_te = TE_MARGIN * r_te if r_te > 0.0 else 0.07 * chord_root
+        te_round = r_te > 0.0
+        note = (f"the strips {w_le:.6g} mm wide about the LE and {w_te:.6g} mm about the TE (their "
+                f"rounding: {r_le:.4g} and {r_te:.4g} mm)")
+    else:
+        w_le, w_te = float(fr[0]) * chord_root, float(fr[-1]) * chord_root
+        if fr.size == 1:
+            r_te = typical(_edge_rounding(lo, lo.s_te, w_te, TE_DROP) for lo in levels)
+            if 0.0 < TE_MARGIN * r_te < ROUND_SMALL * w_te:
+                w_te, te_round = TE_MARGIN * r_te, True
+        note = (f"the strips {w_le:.6g} mm wide about the LE and the TE" if w_le == w_te else
+                f"the strips {w_le:.6g} mm wide about the LE and {w_te:.6g} mm about the TE"
+                + (" (the TE's rounding)" if te_round else ""))
+    return w_le, w_te, te_round, note
+
+
 def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3, v_poles=30,
-               strip_frac=None, half=False, sym_tol=0.2, ease="both", tip_drop=TIP_DROP):
+               strip_frac=None, half=False, sym_tol=0.2, ease="both", tip_drop=TIP_DROP, widths=None):
     """The solid through closed loops (each (n, 3), mm, the same point count,
     LE first), bottom to top, in five patches and the flat root; see the
     module docstring for how it is built.
@@ -1847,6 +1907,9 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
                 ones; _ease_flats): "both" (the loops under it and over it,
                 so that the surface tilts alike on both sides), "below" (the
                 loops under it; those above are kept as they are) or "above"
+    widths      None, or the strips' reach (LE, TE) in mm, used as given in
+                place of strip_frac's (loft_split gives its two lofts the
+                whole stack's, so they meet on the same seams)
     """
     if ease not in ("both", "below", "above"):
         raise ValueError('ease is "both", "below" or "above"')
@@ -1907,32 +1970,14 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
     smooth = levels_of(loops)
     zf = np.array([lp[0, z_axis] for lp in loops[:kr]])
 
-    # the strips: as wide as their edges' rounding needs, or the fractions given. A TE strip much wider than
-    # the TE's rounding is narrowed to the rounding (one fraction given): a small round in the middle of a
-    # wide patch is more than a viewer's or a mesher's triangles of the patch resolve
-    def typical(vals):
-        """The rounding of the sections: the median of those that have one."""
-        vals = np.array([v for v in vals if v > 0.0])
-        return float(np.median(vals)) if 2 * len(vals) > kr else 0.0
-
-    te_round = False
-    if fr is None:
-        r_le = typical(_edge_rounding(lo, 0.0, LE_WINDOW * min(lo.s_te, lo.S - lo.s_te)) for lo in smooth[:kr])
-        r_te = typical(_edge_rounding(lo, lo.s_te, 0.07 * chord_root, TE_DROP) for lo in smooth[:kr])
-        w_le = LE_MARGIN * r_le if r_le > 0.0 else 0.07 * chord_root
-        w_te = TE_MARGIN * r_te if r_te > 0.0 else 0.07 * chord_root
-        te_round = r_te > 0.0
-        widths = (f"the strips {w_le:.6g} mm wide about the LE and {w_te:.6g} mm about the TE (their "
-                  f"rounding: {r_le:.4g} and {r_te:.4g} mm)")
+    # the strips: as wide as their edges' rounding needs, or the fractions given (_strip_widths), or as
+    # loft_split gives both its lofts
+    if widths is None:
+        w_le, w_te, te_round, strips_note = _strip_widths(smooth[:kr], chord_root, fr)
     else:
-        w_le, w_te = float(fr[0]) * chord_root, float(fr[-1]) * chord_root
-        if fr.size == 1:
-            r_te = typical(_edge_rounding(lo, lo.s_te, w_te, TE_DROP) for lo in smooth[:kr])
-            if 0.0 < TE_MARGIN * r_te < ROUND_SMALL * w_te:
-                w_te, te_round = TE_MARGIN * r_te, True
-        widths = (f"the strips {w_le:.6g} mm wide about the LE and the TE" if w_le == w_te else
-                  f"the strips {w_le:.6g} mm wide about the LE and {w_te:.6g} mm about the TE"
-                  + (" (the TE's rounding)" if te_round else ""))
+        w_le, w_te = (float(v) for v in widths)
+        te_round = False
+        strips_note = f"the strips {w_le:.6g} mm wide about the LE and {w_te:.6g} mm about the TE (as given)"
     slopes = (float(td[0]), float(td[-1]))
 
     # per level the four patches' sample rows at shared split points; under a cap the rows are turned onto
@@ -1960,20 +2005,13 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
     drops = tip_info["drops"] if k < n else (0.0, 0.0)
     if k < n:
         notes.append(f"the tip patch's corners sit {drops[0]:.5g} and {drops[1]:.5g} mm under the tops of the "
-                     f"LE and TE lines, on the strip lines; {widths}; the rows turn onto the patches' top "
+                     f"LE and TE lines, on the strip lines; {strips_note}; the rows turn onto the patches' top "
                      f"edges over the top {tip_info['band']:.4g} mm under them")
     else:
-        notes.append(f"all sections horizontal: the flat top closed by a plane; {widths}")
+        notes.append(f"all sections horizontal: the flat top closed by a plane; {strips_note}")
 
-    sym = 0.0
     if half:
-        for lo in smooth:
-            mirror = lo.dense[lo.it:][::-1].copy()
-            mirror[:, thick] *= -1.0
-            sym = max(sym, float(np.abs(mirror - lo.dense[:lo.it + 1]).max()))
-        if sym > sym_tol:
-            raise ValueError(f"no half body: the loops are not symmetric about the plane of symmetry "
-                             f"(they differ by {sym:.3g} mm, the allowance is {sym_tol:g} mm)")
+        _symmetric(smooth, thick, sym_tol)
 
     # the rows' poles: each arc fitted with its ends held, so neighbouring patches share their seam poles
     fams = {nm: [] for nm in NAMES}
@@ -2064,6 +2102,114 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
                       (int(tip.shape[1]), int(tip.shape[0])) if tip is not None else (0, 0), tip_angle,
                       None if tip_info is None else {kk: np.array(vv) for kk, vv in tip_info["corners"].items()},
                       (float(tip_blend[0]), float(tip_blend[1])))
+
+
+def _box(shape):
+    """The shape's bounding box, (2, 3): the surfaces, not their control nets."""
+    Bnd_Box = _occ("Bnd", "Bnd_Box")
+    mod = importlib.import_module(f"{_PKG}.BRepBndLib")
+    b = Bnd_Box()
+    _static(getattr(mod, "brepbndlib", None) or getattr(mod, "BRepBndLib"), "AddOptimal")(shape, b, False, False)
+    return np.array(b.Get(), dtype=float).reshape(2, 3)
+
+
+def loft_split(loops, split, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3, v_poles=30,
+               strip_frac=None, half=False, sym_tol=0.2, ease="both", tip_drop=TIP_DROP):
+    """The solid through the loops as two lofts that meet at loop `split` (counted from 0; horizontal, as
+    are all the loops under it): the loops up to it and the loops from it on, each lofted as loft_loops
+    does, on its own. The surface may then turn at that loop, as the loops do: a crease along the section
+    (a rudder modified below H whose curves leave the original there without its slope). One loft through
+    all the loops smooths such a turn over the height (its walls and patches are fitted along the span),
+    takes it for steps and ripples about it.
+
+    Both lofts run through loop `split` exactly (loft_loops holds the first and the last loop) and have the
+    same strips (as wide as the whole stack's edges need, or the fractions of the root chord given), so
+    they end on the same four curves there, and the seams run on across it. The lower loft's four patches,
+    the upper loft's four and its tip patch and the flat root are sewn into one solid; the two flat faces on
+    the joint are left out: nine patches and the root, ten faces (an upper part without a cap: its flat top,
+    eleven). half: that solid cut on the plane of symmetry, as loft_loops cuts its own.
+
+    Returns one LoftResult: the solid; the notes of the two lofts (marked below and above the joint); steps
+    counted on the whole stack; the tip's numbers from the upper loft; joint = split + 1."""
+    t0 = time.time()
+    loops = [np.asarray(lp, dtype=float).copy() for lp in loops]
+    n, split = len(loops), int(split)
+    if not 0 < split < n - 1:
+        raise ValueError(f"the joint must leave loops on both sides: split {split} of {n} loops (0 .. {n - 1})")
+    if len({len(lp) for lp in loops}) != 1:
+        raise ValueError("every loop must have the same number of points")
+    thick, z_axis = (1 if height_axis == 2 else 2), height_axis
+    n_pts = len(loops[0])
+    i_te = (n_pts + 1) // 2 - 1
+    size = max(np.abs(lp).max() for lp in loops)
+    for lp in loops:                                   # the seams onto the plane of symmetry, as loft_loops
+        for i in (0, i_te, n_pts - 1):
+            if abs(lp[i, thick]) < 1.0e-3:
+                lp[i, thick] = 0.0
+    flat = [np.ptp(lp[:, z_axis]) <= flat_tol * max(1.0, size) for lp in loops]
+    if not all(flat[:split + 1]):
+        raise ValueError("the loops up to the joint must all be horizontal")
+    k = next((i for i, f in enumerate(flat) if not f), n)
+
+    # the strips of both lofts: the whole stack's, as one loft would have them
+    levels = [_SmoothLoop(lp, i_te) for lp in loops[:k]]
+    fr = None if strip_frac is None else np.atleast_1d(np.asarray(strip_frac, dtype=float))
+    if fr is not None and (fr.size not in (1, 2) or np.any(fr <= 0.0)):
+        raise ValueError("strip_frac is None (the strips as wide as the edges' rounding needs), one positive "
+                         "fraction, or a pair (LE, TE)")
+    chord_root = float(np.linalg.norm(loops[0][0] - loops[0][i_te]))
+    w_le, w_te, te_round, strips_note = _strip_widths(levels, chord_root, fr)
+    if half:
+        _symmetric(levels, thick, sym_tol)
+
+    kw = dict(n_poles=n_poles, height_axis=height_axis, flat_tol=flat_tol, sew_tol=sew_tol, v_poles=v_poles,
+              ease=ease, tip_drop=tip_drop, widths=(w_le, w_te))
+    z_j = float(loops[split][0, z_axis])
+    try:
+        upper = loft_loops(loops[split:], **kw)                     # the upper first: it is the one that can fail
+    except ValueError as exc:
+        if "do not leave room" in str(exc):                         # _tip_rows: the joint under the tip patch
+            raise ValueError(f"the joint at z {z_j:.6g} mm lies too close to the tip: the loft above it (loops "
+                             f"{split + 1} to {n}) has no room for its tip patch, whose corners sit under the "
+                             f"tops of the LE and TE lines by tip_drop times their distance from them along the "
+                             f"chord; lower the joint") from exc
+        raise ValueError(f"the loft above the joint (loops {split + 1} to {n}): {exc}") from exc
+    lower = loft_loops(loops[:split + 1], **kw)
+
+    # the faces of both but the flat ones on the joint, sewn into one solid
+    tol = max(1.0e-6 * max(1.0, size), 10.0 * flat_tol * max(1.0, size))
+    parts, dropped = [], 0
+    for res in (lower, upper):
+        for f in _faces_of(res.shape):
+            box = _box(f)
+            if abs(box[0, z_axis] - z_j) <= tol and abs(box[1, z_axis] - z_j) <= tol:
+                dropped += 1
+                continue
+            parts.append(f)
+    if dropped != 2:
+        raise RuntimeError(f"the two lofts have {dropped} flat faces on the joint, not 2")
+    solid, free = _sew_solid(parts, sew_tol)
+    if half:
+        solid = _half_cut(solid, loops, thick, loops[0][1:i_te])
+    BRepCheck_Analyzer = _occ("BRepCheck", "BRepCheck_Analyzer")
+    valid = bool(BRepCheck_Analyzer(solid).IsValid())
+    vol, area = mass_properties(solid)
+
+    notes = [f"two lofts meeting at loop {split + 1} (z {z_j:.6g} mm): the {split + 1} loops up to it and the "
+             f"{n - split} from it on, each lofted on its own, so the surface turns there as the loops do; both "
+             f"through that loop with the same strips ({strips_note}), the lower loft's four patches, the "
+             f"upper's four and its tip patch and the flat root sewn into one solid (the joint's two flat faces "
+             f"left out)"]
+    notes += ["below the joint: " + t for t in lower.notes if not t.startswith("all sections horizontal")]
+    notes += ["above the joint: " + t for t in upper.notes]
+    if half:
+        notes.append("half body: the LE-to-TE side, cut on the plane of symmetry")
+    steps = list(lower.steps) + [(at + split, *rest) for at, *rest in upper.steps]
+    return LoftResult(solid, valid, vol, area, free, max(lower.fit_error, upper.fit_error),
+                      lower.n_smooth + upper.n_smooth - 1, upper.n_ruled, time.time() - t0, notes,
+                      count_faces(solid), max(lower.v_error, upper.v_error), bool(half), steps, (w_le, w_te),
+                      te_round, upper.drops, upper.tip_error, upper.tip_poles, upper.tip_angle, upper.corners,
+                      upper.tip_blend, split + 1)
 
 
 # --------------------------------------------------------------------------

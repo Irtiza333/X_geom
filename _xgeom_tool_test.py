@@ -1,9 +1,11 @@
 """
 _xgeom_tool_test.py
 
-Self-check for the design tool: the CAD loft and Save CAD's files
-(xcad_loft.py), the rudder adapter (xgeom_rudder.py) and, with --gui, the window
-itself (xgeom_tool.py, Save CAD included).
+Self-check for the design tool: the CAD loft (xcad_loft.py: one loft, and
+two joined at a section, loft_split) and Save CAD's files, the rudder adapter
+(xgeom_rudder.py: its tangent switches, and the two lofts of a design not
+tangent at H) and, with --gui, the window itself (xgeom_tool.py, Save CAD
+included).
 
     python _xgeom_tool_test.py          loft and adapter
     python _xgeom_tool_test.py --gui    also open the tool for a moment
@@ -239,6 +241,28 @@ def test_loft():
     except ValueError:
         refused_half = 1
     check("a cambered set of loops is refused a half body", refused_half, 1, 0)
+    j = 20                                                 # the loops below loop 20 swept back: a kink there
+    kinked = [lp + np.column_stack((np.where(lp[:, 2] < zs[j], 0.3 * (zs[j] - lp[:, 2]), 0.0),
+                                    np.zeros(len(lp)), np.zeros(len(lp)))) for lp in loops2]
+    one_k, two = XL.loft_loops(kinked), XL.loft_split(kinked, j)
+    two_h = XL.loft_split(kinked, j, half=True)
+    print(f"       a kink in the LE line at loop {j + 1}: one loft {one_k.v_error:.3g} mm off the loops, two "
+          f"lofts {two.v_error:.2g} mm, {two.seconds:.1f} s")
+    check("a kink at a section (the part below swept back): two lofts joined there (loft_split) follow it, one "
+          "loft smooths it over; one valid solid, the seams' strips the whole stack's, nine patches and the root; "
+          "its half body 9 faces, half the volume",
+          [two.valid, two.free_edges, two.faces, two.joint, two.v_error < 0.002, one_k.v_error > 0.02,
+           two.strips[0] - one_k.strips[0], two.strips[1] - one_k.strips[1], abs(two.volume / one_k.volume - 1.0),
+           two_h.valid, two_h.faces, two_h.volume / two.volume],
+          [1, 0, 10, j + 1, 1, 1, 0, 0, 0, 1, 9, 0.5], 1e-4)
+    refused = []
+    for bad in ((kinked, 0), (kinked, len(kinked) - 1), (kinked, len(kinked) - 3)):
+        try:
+            XL.loft_split(*bad)
+            refused.append(0)
+        except ValueError:
+            refused.append(1)
+    check("loft_split refuses a joint at the first or the last loop, or among the cap's loops", refused, [1, 1, 1], 0)
     v, t = XL.tessellate(res2.shape, 0.5, 0.5)
     check("tessellation: triangles index the vertices", [len(t) > 500, t.min() >= 0, t.max() < len(v)], [1, 1, 1], 0)
     with tempfile.TemporaryDirectory() as tmp:
@@ -300,6 +324,21 @@ def test_adapter():
         ad.set_tangent("P2z", False)
         check("off the tangent frees the value of C1", "P2z.v1" in [r.name for r in ad.curve_rows("P2z") if r.kind == "var"],
               1, 0)
+        secs0 = RM.modified_sections(ad.design, ad.orig, 30)
+        ad.set_tangent_all(False)
+        names_off, state_off = set(ad.values), ad.tangent_state()
+        secs1 = RM.modified_sections(ad.design, ad.orig, 30)
+        ad.set_tangent("LE", True)
+        state_mixed = ad.tangent_state()
+        ad.set_tangent_all(True)
+        H0 = ad.design.H
+        on_tangent = max(abs(ad.design.curves[c].v[1] - RM._pins(ad.orig, c, ad.design.curves[c].s, H0, "G1")[1])
+                         for c in ad.names)
+        check("tangent at H for every curve (set_tangent_all): off frees every C1 where it was (the sections as "
+              "before), one curve back on makes it mixed, on puts every C1 back on the original's tangent",
+              [state_off == "none", all(f"{c}.{'dx' if c == 'LE' else 'v'}1" in names_off for c in ad.names),
+               max(np.abs(a.selig - b.selig).max() for a, b in zip(secs0, secs1)), state_mixed == "mixed",
+               ad.tangent_state() == "all", on_tangent], [1, 1, 0, 1, 1, 0], 1e-12)
         ad.set("P2z.v5", 0.085)
         ad.set_bounds("H", 40.0, 150.0)
         ad.set("H", 150.0)
@@ -351,6 +390,35 @@ def test_adapter():
                 hlr = hres["loft"]
                 check("XCAD half body: valid, 6 faces, half the volume",
                       [hlr.valid, hlr.half, hlr.faces, hlr.volume / lr.volume], [1, 1, 6, 0.5], 2e-3)
+                keep = (ad.design.copy(), dict(ad.join))
+                ad.set_tangent_all(False)                     # every curve free at H; two of them turn there
+                ad.set("P2z.v1", ad.get("P2z.v1") + 0.01)
+                ad.set("LE.dx1", ad.get("LE.dx1") - 5.0)
+                out2 = ad.build_task("tk")()
+                klr = out2["loft"]
+                print(f"       not tangent at H: two lofts, {klr.faces} faces, {klr.seconds:.1f} s, the walls within "
+                      f"{max(float(t.split('the rows within ')[1].split(' mm')[0]) for t in klr.notes if 'the rows within' in t):.2g} "
+                      f"mm of the loops' rows")
+                check("XCAD with the curves not tangent at H (C1 of the LE and of P2z moved off the tangent): two "
+                      "lofts joined at the H section (loop 50): one valid closed solid, nine patches and the root, "
+                      "no step taken out of the loops, the patches on them; the status line says so",
+                      [klr.valid, klr.free_edges, klr.faces, klr.joint, len(klr.steps), klr.v_error < 0.01,
+                       "not tangent at H" in out2["message"], out2["error"]], [1, 0, 10, 50, 0, 1, 1, 0], 0)
+                hk = ad.build_xcad("tkh", plot=False, cad=True, half=True)["loft"]
+                check("... its half body: valid, 9 faces, half the volume",
+                      [hk.valid, hk.half, hk.faces, hk.volume / klr.volume], [1, 1, 9, 0.5], 2e-3)
+                ad.set_bounds("H", 40.0, ad.settings["z_top"])
+                ad.set("H", 196.0)                            # above the tip patch's corners (about 190 mm)
+                try:
+                    ad.build_xcad("tt", plot=False, cad=True)
+                    near = ""
+                except ValueError as exc:
+                    near = str(exc)
+                check("... with H among the tip patch's rows (196 mm): refused, saying why and what to do",
+                      ["too close to the tip" in near, "tick tangent at H" in near], [1, 1], 0)
+                ad.design, ad.join = keep
+                ad._rebuild()
+                ad.set_bounds("H", 40.0, 150.0)
             before = dict(ad.values)
             ad2 = XR.RudderAdapter()
             ad2.load_space(res["case"]["paths"]["space"])
@@ -503,6 +571,22 @@ def test_gui():
         n3 = sum(len(c.get_segments()) for c in app.view3.col.values())
         check("the window follows a slider, a new section point, the 3D sections",
               [app.ad.get("H"), app.ad.degree, len(app.rows) > 3, 70 <= n3 <= 200], [60.0, 5, 1, 1], 1e-12)
+        app.tangent_all.set(False)
+        app.on_tangent_all()
+        root.update()
+        off = [app.ad.tangent_state(), app.tangent.get(), app.tangent_all.get(),
+               "P3z.v1" in [r.name for r in app.rows]]
+        app.tangent.set(True)                                      # the picked curve's own switch back on
+        app.on_tangent()
+        root.update()
+        mixed = [app.ad.tangent_state(), app.tangent_all.get()]
+        app.tangent_all.set(True)
+        app.on_tangent_all()
+        root.update()
+        check("the Region box's tangent at H: off frees every curve's C1 (the picked curve's switch and rows show "
+              "it), that curve's own switch back on leaves the box unticked (mixed), on ties every curve again",
+              [off == ["none", False, False, True], mixed == ["mixed", False], app.ad.tangent_state() == "all",
+               app.tangent.get(), app.tangent_all.get()], [1, 1, 1, 1, 1], 0)
         span0 = app.ad.span
         app.span_box.set("300")
         app.on_span()

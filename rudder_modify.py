@@ -20,7 +20,9 @@ Curves    The x of the LE and every coordinate of the inner section control
           points (P1x, P1z, P2x, P2z, ...) follow their own spanwise Bezier
           curve, the value against the height. Each curve is stored top first:
           C0 at H pinned to the original's value there, C1 on the original's
-          tangent (join "G1") or free (join "G0"), the inner points free in
+          tangent (join "G1") or free (join "G0": the curve meets the original
+          with its value only, and the design tool lofts its CAD below and
+          above H on its own, xcad_loft.loft_split), the inner points free in
           height and value, the last one at the root (its value free). Each
           curve has its own number of control points.
 Degree    The original sections are quartics (the PSO section fits of the
