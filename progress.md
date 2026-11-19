@@ -639,6 +639,23 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   583,363); against the STEP the LE strip within 0.022 mm, the central panels and the TE strip within 0.085 (the
   scaled TE round: about 0.85 mm at the root, 0.65 at the tip, against 0.75), the tip region 0.107 (the cap
   model's own 0.104). Tests: wing 69 with the GUI, files 51, tool 61, hull 64.
+- The Vehicle CAD takes the blade panel's part (19 Nov 2026; the user: "although I choose 1/6 blade strip in
+  the vehicle CAD the whole propeller showed up"). The Vehicle CAD builds every component with
+  `build_task(case, half=False)` (full bodies), and for the blade that had set the part to `whole` whatever
+  "CAD writes" said (and wrote `part whole` into the blade's case file). Now the blade keeps its settings' part
+  and passes `solids` to `blade_modify.write_cad` only (one blade on 1/Z of a cylinder hub comes as a solid
+  too, not the DRDC surfaces; the component file gets no such key); the build's result carries the part and
+  its number of blades, `vehicle_cad.run_vehicle` hands it to `vehicle_setup` (`cad_parts`: the propeller
+  record's `part` whole, half or sector and `part_blades`), and `build_from_setup` takes the STEP's solid
+  whatever the part and fuses it with the hull and the appendages as before; the status line and the report
+  name the part (`part_text`). A STEP of DRDC faces only (an older set-up) still gives the whole propeller,
+  and the record says so. The blade panel's note says the Vehicle CAD takes its part. The Vehicle tab's lines
+  still draw all Z blades. Cloud (the blade's CAD through a pythonocc stand-in over cadquery-ocp): SUBOFF, 4
+  rudders and the MSc blade's 1/5 sector, one valid solid, V 0.70169 m^3 (0.70199 with the whole propeller),
+  the propeller part to one side of the axis, 99 s. For Eddie: in `<case>_vehicle_setup.json` the propeller
+  record's `part` now names the part (it was always `whole`), `part_blades` is new. Tests: hull 66 with the
+  window and the vehicle CAD (the set-up's record; the 1/Z through build_task(case, half=False) in the
+  vehicle), tool 61, blade 77, wing 69.
 
 ## Next steps
 
