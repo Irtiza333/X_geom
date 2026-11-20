@@ -676,6 +676,32 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   13 s against 18. Limit: the joint has to stay under the tip patch's corners (about 190 mm on this rudder; H
   185 builds, 192 is refused with the reason: lower H, or tick tangent at H). No file format changed. Tests:
   tool 68 with the window, wing 69, hull 65, modify 136.
+- A planar rudder's file loads as the original modified below H (19 Nov 2026; the user: loading BB2's or the
+  wind-tunnel rudder's set-up showed a different panel, without the tangency switch; after loading, the panel
+  must look the same, with the same features; his choice: the loaded rudder becomes the original). Loading a
+  component file of kind rudder (`--file`, or Load ... in the rudder's Set-up box) used to put the Rudder
+  slot on the planar model (the wing's panel). Now `xgeom_from_cad.rudder_from_planar` writes the planar
+  rudder's sections as an extraction writes a CAD's, into `<name>_modified_below_H/` beside the file: 61
+  horizontal sections of 121 points (`PLANAR_SECTIONS`, `PLANAR_POINTS`: the planar builds' own layout; at
+  101 points a side the tip patch over BB2's cap folds, in the planar build too), the tilted tip section and
+  the cap loops after them in `sections_xcad_with_cap_*_m.dat`, `corner_points.dat`, the stack file (its
+  sections at 101 points a side, `PLANAR_FIT_POINTS`: BB2's blunt TE round needs them for the flank the fits
+  look for); fits every section (`fit_section_table`) and the laws (`best_rudder_orders`), and writes the
+  set-up `<name>_original_design_space.json` there: the rudder unchanged, its sections' TE radius, 121 points
+  a section, H between 0.1 and 0.4 of the top horizontal section (`H_FRACTIONS`) and at 0.4. About 25 s the
+  first time, off the GUI thread (`App._load_planar_rudder`); while the file and its section file are
+  unchanged (their digest in `source.json`) it is read back in a fraction of a second. The tool's cases of it
+  go to that folder. `xgeom_rudder.load_space` now also takes `num_pts` from a set-up. `python
+  xgeom_from_cad.py rudder <file>.txt` does the same without the window. The planar rudder's model
+  (`xgeom_wing.PlanarRudderAdapter`) stays in the code; the tool no longer shows it for rudders. Checked: the
+  baseline writes the planar sections themselves (1.4e-5 mm on the wind-tunnel rudder, 7e-4 mm on BB2's
+  plane); the window after Load ... of bb2_sternplane.txt shows the panel modified below H (H, tangent at H,
+  the section control points); its CAD one valid solid of 6 faces, the planar build's volume to 1e-5, the tip
+  patch as the planar build's (no fold), not tangent at H two lofts of 10 faces; the wind-tunnel rudder's
+  583.30 cm^3 (the planar build's 583.30). No file format changed (for Eddie: component and assembly files
+  as before; the web contract test passes, its 4 notes as before). Tests: wing 71 with the window (the
+  conversion, its cache, a changed file made again; the Rudder slot loading the planar file both ways), tool
+  68, hull 65.
 
 ## Next steps
 

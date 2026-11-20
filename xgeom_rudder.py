@@ -446,8 +446,8 @@ class RudderAdapter:
         """Take over a saved set-up (<case>_design_space.json, written by save_space or an XCAD run), whatever
         the adapter holds now: the section degree, every curve's order and join, every variable's value,
         bounds and free flag, the H bounds, the full height, and the settings saved with it (the number of
-        sections, the TE radius, the half body, the strips). A file that cannot be taken over raises a
-        ValueError that says why and leaves the adapter as it was."""
+        sections and of points a section, the TE radius, the half body, the strips). A file that cannot be
+        taken over raises a ValueError that says why and leaves the adapter as it was."""
         name = os.path.basename(path)
         try:
             with open(path) as fh:
@@ -459,7 +459,7 @@ class RudderAdapter:
                              f"XCAD wrote)")
         keep, settings, meta = dict(self.__dict__), dict(self.settings), copy.deepcopy(self.meta)
         try:
-            for k in ("n_sections", "te_radius_mm", "half", "strip_frac", "tip_drop"):
+            for k in ("n_sections", "num_pts", "te_radius_mm", "half", "strip_frac", "tip_drop"):
                 if k in rec.get("settings", {}):
                     self.settings[k] = rec["settings"][k]
             files = rec.get("files") or {}

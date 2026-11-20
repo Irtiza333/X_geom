@@ -237,7 +237,14 @@ optimiser reads it (blade_modify.load_component, wing_modify.load_component,
 hull_modify.load_component, xgeom_files.load). The rudder (modified below H)
 keeps its set-up JSON: Save set-up writes <output folder>/<case>_design_space.json
 (rudder_modify.load_design_space), and Load ... in its Set-up box, or --space,
-reads one back.
+reads one back. Load ... (or --file) of a planar rudder's component file (kind
+rudder: bb2/outputs/bb2_sternplane.txt, outputs/wind_tunnel_rudder.txt) makes that
+rudder the original of the model modified below H (19 Nov 2026, the user: the
+panel must stay the same, H and tangent at H with it): xgeom_from_cad.
+rudder_from_planar writes its sections, tip and cap as an extraction would and
+fits them, beside the file (<name>_modified_below_H/, about half a minute the
+first time, read back while the file is unchanged), and the design starts as
+that rudder unchanged.
 The build button builds the component of its panel (in the vehicle its text
 names it): XCAD (rudder) writes the case to the output folder (XCAD file, section
 table, design and the same set-up JSON), lofts the XCAD file into a solid and
@@ -304,8 +311,9 @@ from xgeom_common import Row                                         # noqa: E40
 ADAPTERS = {"rudder": ("xgeom_rudder", "RudderAdapter"), "blade": ("xgeom_blade", "BladeAdapter"),
             "hull": ("xgeom_hull", "HullAdapter"), "wing": ("xgeom_wing", "WingAdapter"),
             "fin": ("xgeom_wing", "FinAdapter")}
-PLANAR_RUDDER = ("xgeom_wing", "PlanarRudderAdapter")   # the Rudder slot's planar model: a component file of
-                                                         # kind rudder (13 Nov 2026; BB2's stern plane)
+PLANAR_RUDDER = ("xgeom_wing", "PlanarRudderAdapter")   # a planar rudder's model (13 Nov 2026; BB2's stern plane):
+                                                         # the tool loads its files as the original of the model
+                                                         # modified below H since 19 Nov (rudder_from_planar)
 VEHICLE = ("hull", "blade", "rudder", "fin", "wing")   # the vehicle's components, in the switcher's order
 NAMES = {"hull": "Hull", "blade": "Propeller", "rudder": "Rudder", "fin": "Fin", "wing": "Wing"}
 COUNTS = ("rudders", "fins", "wings")              # the Vehicle tab's whole numbers
@@ -322,8 +330,8 @@ FROM_CAD_KINDS = ("blade", "hull", "rudder")   # From CAD ...: the components wi
 
 
 def planar_rudder_file(path):
-    """Is path a planar rudder's component file (kind rudder: the Rudder slot then takes the planar model,
-    xgeom_wing.PlanarRudderAdapter), rather than a set-up of the modified-below-H model (JSON)?"""
+    """Is path a planar rudder's component file (kind rudder: the Rudder slot makes it the original of the
+    model modified below H, xgeom_from_cad.rudder_from_planar), rather than a set-up of that model (JSON)?"""
     if not path or str(path).lower().endswith(".json") or not os.path.isfile(path):
         return False
     if importlib.util.find_spec(PLANAR_RUDDER[0]) is None:          # the Rudder folder: no planar model
@@ -337,10 +345,14 @@ def is_planar(ad):
     return getattr(ad, "role", None) is not None
 
 
-def load_adapter(name, params=None):
+def load_adapter(name, params=None, progress=None):
     """The adapter of a component, from its parameter or component file when given; the rudder's is the
-    planar model for a planar rudder's component file (planar_rudder_file), else the modified-below-H one."""
-    module, cls = PLANAR_RUDDER if name == "rudder" and planar_rudder_file(params) else ADAPTERS[name]
+    modified-below-H model, a planar rudder's component file (planar_rudder_file) its original
+    (xgeom_from_cad.rudder_from_planar; progress(text) is told what runs)."""
+    if name == "rudder" and planar_rudder_file(params):
+        import xgeom_from_cad as FC
+        return FC.rudder_from_planar(params, progress=progress or (lambda text: None))["adapter"]
+    module, cls = ADAPTERS[name]
     return getattr(importlib.import_module(module), cls)(**({"params": params} if params else {}))
 
 
@@ -504,6 +516,10 @@ class App:
             return None
         st = self.start[kind]
         try:
+            if kind == "rudder" and planar_rudder_file(st["params"]):
+                self.say(f"the rudder of {os.path.basename(st['params'])} as the original modified below H (its "
+                         f"sections fitted the first time, about half a minute) ...", busy=True)
+                self.root.update_idletasks()
             ad = load_adapter(kind, st["params"])
             if st["space"]:
                 ad.load_space(st["space"])
@@ -1382,6 +1398,9 @@ class App:
                                           filetypes=[("component files", "*.txt"), ("old parameter files", "*.dat")]
                                           + ([("modified-below-H set-ups", "*_design_space.json")] if rudder else [])
                                           + [("all files", "*")])
+        if path and rudder and planar_rudder_file(path):  # a planar rudder: the original modified below H
+            self._load_planar_rudder(path)
+            return
         if path and rudder and path.lower().endswith(".json"):
             def back():                                  # the modified-below-H model from its set-up
                 import xgeom_rudder as XR
@@ -1471,12 +1490,8 @@ class App:
                                           filetypes=[("set-up files", "*_design_space.json"),
                                                      ("JSON files", "*.json"),
                                                      ("planar rudder component files", "*.txt"), ("all files", "*")])
-        if path and planar_rudder_file(path):            # the planar model takes the slot
-            self.say(f"reading {os.path.basename(path)} ...")
-            self.root.update_idletasks()
-            if self.guard(lambda: self.replace_adapter("rudder", load_adapter("rudder", path)) or True):
-                self._note = f"planar rudder loaded: {path}"
-                self.say(self._note)
+        if path and planar_rudder_file(path):            # a planar rudder: the original modified below H
+            self._load_planar_rudder(path)
             return
         if path:
             self.say(f"reading {os.path.basename(path)} ...")
@@ -1485,6 +1500,33 @@ class App:
                 self.after_change(structure=True)
                 self._note = f"set-up loaded: {self.ad.setup_file}"      # stays once the views are drawn
                 self.say(self._note)
+
+    def _load_planar_rudder(self, path):
+        """A planar rudder's component file in the Rudder slot: off the GUI thread it becomes the original of
+        the model modified below H (xgeom_from_cad.rudder_from_planar: its sections written and fitted beside
+        the file the first time, read back after), which then takes the slot; the panel stays the one of that
+        model."""
+        if self._job is not None:
+            return
+        import xgeom_from_cad as FC
+        label = "Planar rudder"
+
+        def run(job):
+            def progress(text):
+                job["message"] = f"{label}: {text} ..."
+            res = FC.rudder_from_planar(path, progress=progress)
+            res.update(view=None, error=False,
+                       message=f"{os.path.basename(path)} as the original modified below H"
+                               + (" (made before)" if res["cached"] else f" ({res['seconds']:.0f} s)"))
+            return res
+        self._start("rudder", label, "load", run, f"{label}: {os.path.basename(path)} as the original modified "
+                                                   f"below H", then=self._planar_rudder_done)
+
+    def _planar_rudder_done(self, res):
+        """After _load_planar_rudder: the rudder modified below H on that original in the slot."""
+        self.replace_adapter("rudder", res["adapter"])
+        self._note = f"rudder loaded: {res['name']} as the original modified below H, its set-up {res['setup']}"
+        self.say(self._note)
 
     def open_occ_viewer(self):
         if not self.step:
@@ -1512,8 +1554,8 @@ def rudder_panel(app):
     ttk.Button(row, text="From CAD ...", command=app.on_from_cad).pack(side="left", padx=(0, 4))
     ttk.Label(row, text="Load: a set-up file that Save set-up (below) or XCAD wrote (<case>_design_space.json): "
                         "every variable's value, bounds and free flag, the curves, the full height and the "
-                        "settings; a planar rudder's component file (.txt, kind rudder) puts the rudder on the "
-                        "planar model. From CAD: a rudder's STEP or IGES, extracted (sections, tip, cap), its "
+                        "settings; a planar rudder's component file (.txt, kind rudder) becomes the original "
+                        "modified below H. From CAD: a rudder's STEP or IGES, extracted (sections, tip, cap), its "
                         "sections and laws fitted (the orders with the least error), the set-up saved",
               foreground=INK2, wraplength=380).pack(side="left", padx=6)
 

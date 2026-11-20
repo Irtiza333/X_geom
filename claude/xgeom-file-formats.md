@@ -106,8 +106,9 @@ Rules:
 - `nose_m 0` (hull, 13 Nov 2026): a body without a nose, an aft half; its front the flat cut at x 0, tail curves
   only, no nose var line (BB2's `bb2/outputs/bb2_hull.txt`).
 - kind `rudder` (the planar rudder, wing_modify's engine; 13 Nov 2026: BB2's stern plane,
-  `bb2/outputs/bb2_sternplane.txt`): the tool opens it in the Rudder slot on the planar model (the wing's panel;
-  xgeom_wing.PlanarRudderAdapter); its JSON set-up says `rudder_planar`, the rudder-h model's keep `rudder`.
+  `bb2/outputs/bb2_sternplane.txt`): since 19 Nov 2026 the tool loads it in the Rudder slot as the original of
+  the rudder-h model (`xgeom_from_cad.rudder_from_planar`, below); the planar model's adapter
+  (xgeom_wing.PlanarRudderAdapter, its JSON set-up `rudder_planar`) stays for code.
 - `cap` (rudder, fin, wing; 18 Nov 2026, for BB2's stern plane, whose set-up gave a flat top): a tip cap over
   the tip section, tip_cap.py's models. `cap scaled` (tip_cap.ScaledCap): the cap's cross-sections scale with
   the tip section's local half-thickness w; keys `cap_k_le`, `cap_k_te` (the cap's height over w at the LE and
@@ -202,11 +203,16 @@ new.txt`. Examples in X_geom (the tool's defaults): `msc_blade.txt`, `wing.txt`,
   the LE, the LE and TE lines straight, the section the rows' mean thickness shape
   (`<case>_section.dat`) with the change points that fit best, the tilt and the radius cap of parameters.json.
   The wind-tunnel rudder's is `outputs/wind_tunnel_rudder.txt`.
-- The Rudder slot has two models: the modified-below-H one (rudder-h, its JSON set-ups and From CAD) and, since
-  13 Nov 2026, the planar rudder (a component file of kind rudder). `--file` with a planar rudder's file, or
-  Load ... of one in the rudder-h Set-up box, puts the rudder on the planar model; Load ... of a
-  `<case>_design_space.json` in the planar panel's File box puts it back on rudder-h. The Vehicle tab places a
-  planar rudder as the rudder-h one (the TE rake rule takes its TE line's slope from the design).
+- The Rudder slot shows the modified-below-H model (rudder-h, its JSON set-ups and From CAD) whatever is
+  loaded. Since 19 Nov 2026 (the user: loading BB2's or the wind-tunnel rudder's set-up must give the same
+  panel, tangent at H with it) `--file` with a planar rudder's component file, or Load ... of one in the
+  Set-up box, makes that rudder the rudder-h model's original (`xgeom_from_cad.rudder_from_planar`; `python
+  xgeom_from_cad.py rudder <file>.txt` the same without the window): its sections, tip and cap written as an
+  extraction writes a CAD's into `<name>_modified_below_H/` beside the file (61 horizontal sections, 121
+  points each), the sections fitted (about 25 s the first time), the set-up
+  `<name>_original_design_space.json` there (the rudder unchanged, H 0.1 to 0.4 of the top section, its TE
+  radius), read back while the file and its section file are unchanged; the cases of it go to that folder.
+  From 13 to 19 Nov such a file put the rudder on the planar model (the wing's panel).
 - Vehicle tab (step 4): Load assembly ... and Save assembly ... (each component written to its file; old .dat
   sources as new .txt files beside the assembly).
 - `python xgeom_tool.py --file <component file>` (`--params` the same); `--assembly <file>` (step 4).
@@ -249,3 +255,7 @@ files and one optional setting; files without them read as before.
 19 Nov 2026: the Vehicle CAD follows the blade's `part` (above). For the web app: in the vehicle set-up JSON the
 propeller record's `part` now names the part (it was always `whole`) and `part_blades` is new; the component
 files are unchanged.
+
+19 Nov 2026, later: a planar rudder's component file loads in the tool as the original of the rudder-h model
+(GUI, above), so the Rudder slot keeps one panel. The files themselves are unchanged (for the web app: nothing
+changes in reading or writing them).

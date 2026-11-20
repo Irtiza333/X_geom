@@ -52,6 +52,10 @@ points or of segments in the tool, which refits the curve and shows the error
     planar_rudder_setup(folder, setup_path)               a planar rudder's set-up from Rudder_geom_extraction's
                                                           outputs (the wind-tunnel rudder: its tilted tip and
                                                           its cap; 18 Nov 2026)
+    rudder_from_planar(component)                         a planar rudder's set-up as the original of the model
+                                                          modified below H (its sections written and fitted
+                                                          beside the file; the tool's Load ... of a planar
+                                                          rudder file; 19 Nov 2026)
 
 Command line (the file a STEP or IGES; for the blade an extracted <case>.txt, for
 the hull a <case>_params.dat: the set-up only; written next to the file):
@@ -61,6 +65,8 @@ the hull a <case>_params.dat: the set-up only; written next to the file):
     python xgeom_from_cad.py hull bb2/outputs/bb2_hull_params.dat --case bb2_hull
     python xgeom_from_cad.py rudder_planar outputs --case wind_tunnel_rudder   (an extraction folder: the
                                                                              planar set-up, no OCC needed)
+    python xgeom_from_cad.py rudder bb2/outputs/bb2_sternplane.txt   (a planar rudder's file: the original
+                                                                    modified below H, no OCC needed)
 """
 
 from __future__ import annotations
@@ -475,6 +481,163 @@ def planar_rudder_setup(folder, setup_path, name=None, notes=(), rows=PLANAR_ROW
     return setup, report, forms
 
 
+PLANAR_SECTIONS = 61    # a planar rudder as the original of the model modified below H: its horizontal sections
+PLANAR_POINTS = 61      # ... points per side of each loop of its XCAD file, 121 a loop (cosine stations, the layout
+                        # rudder_modify's sections take at that count): wing_modify.POINTS, the planar builds' own
+                        # (at 101 the tip patch over BB2's cap folds, in the planar build too)
+PLANAR_FIT_POINTS = 101     # ... and of the sections its section fits take (the stack file): BB2's blunt TE round
+                            # needs them to find its flank (temp_funcs.untruncated_profile; 61 do not)
+H_FRACTIONS = (0.1, 0.4)    # ... H between these fractions of its top horizontal section (the wind-tunnel
+                            # rudder's 20 and 80 mm of 199.5), H itself the upper one
+PLANAR_VERSION = 1      # the made original's layout: one kept from another version is made again
+
+
+def _inputs_digest(component):
+    """A digest of a planar component file and the section file it names (a change to either changes the
+    rudder)."""
+    import hashlib
+    h = hashlib.md5(open(component, "rb").read())
+    for line in open(component, errors="replace"):
+        m = re.match(r"#\s*section\s+(\S+)", line)
+        if m:
+            path = os.path.join(os.path.dirname(component), m.group(1))
+            if os.path.isfile(path):
+                h.update(open(path, "rb").read())
+    return h.hexdigest()
+
+
+def _write_planar_stack(path, stack, source):
+    """Horizontal sections (rudder_modify.StackSection, root first) as Rudder_geom_extraction writes its stack
+    file: top to bottom, each section's Selig points in its airfoil frame (rudder_modify.read_stack reads it)."""
+    top = sorted(stack, key=lambda s: -s.y)
+    n = len(top[0].xy)
+    with open(path, "w") as fh:
+        fh.write("# Rudder cross-sectional airfoil coordinates\n")
+        fh.write(f"# source        : {source} (a planar rudder's sections, xgeom_from_cad.rudder_from_planar)\n")
+        fh.write("# frame         : origin at the root leading edge; +X LE->TE, +Y root->tip, +Z thickness\n")
+        fh.write(f"# n_sections    : {len(top)}\n# n_points      : {n} per section\n")
+        fh.write(f"# section order : TOP to BOTTOM, y = {top[0].y:.6f} down to y = {top[-1].y:.6f} mm\n")
+        fh.write("# point order   : Selig, TE -> upper -> LE -> lower -> TE\n")
+        fh.write("# columns       : x_mm y_mm in that section's own airfoil frame, x = 0 at its LE and growing aft,\n")
+        fh.write("#                 y = thickness with the +Z side positive\n")
+        fh.write(f"# load          : np.loadtxt(path).reshape({len(top)}, {n}, 2)\n")
+        for k, s in enumerate(top, start=1):
+            fh.write(f"#\n# SECTION {k:d} / {len(top):d}   y = {s.y:.6f}   chord = {s.chord:.6f}   x_le = {s.x_le:.6f}"
+                     f"   x_te = {s.x_te:.6f}\n# {'x_mm':>18s} {'y_mm':>18s}\n")
+            for x, y in s.xy:
+                fh.write(f"{x:20.9f} {y:18.9f}\n")
+
+
+def _write_planar_corners(path, rows, tilted):
+    """The LE and TE points (rows of x1 y1 z1 x2 y2 z2, root first) as Rudder_geom_extraction writes
+    corner_points.dat; the last row the tilted tip section's when there is one."""
+    with open(path, "w") as fh:
+        fh.write("# LE and TE corner points, one spanwise station per row (a planar rudder's sections)\n")
+        fh.write("# frame   : origin at the root leading edge; +X LE->TE, +Y root->tip, +Z thickness\n")
+        fh.write("# point 1 : leading edge      point 2 : trailing edge\n")
+        fh.write(f"# rows    : {len(rows)}, root first" + ("; the last row the tilted tip section, top of the LE to "
+                                                         "the top of the TE" if tilted else "") + "\n")
+        fh.write("# {:>16s} {:>16s} {:>16s} {:>18s} {:>16s} {:>16s}\n".format("x1", "y1", "z1", "x2", "y2", "z2"))
+        for le, te in rows:
+            fh.write(f"{le[0]:18.9f} {le[1]:16.9f} {le[2]:16.9f} {te[0]:18.9f} {te[1]:16.9f} {te[2]:16.9f}\n")
+
+
+def rudder_from_planar(component, out_dir=None, progress=print, sections=None, points=None):
+    """A planar rudder (a component file of kind rudder: bb2/outputs/bb2_sternplane.txt,
+    outputs/wind_tunnel_rudder.txt) as the original of the model modified below H (the user, 19 Nov 2026:
+    loaded, it must give the same panel as the default rudder, H, tangent at H and the section control points
+    with it). Its sections are written as Rudder_geom_extraction writes a CAD's, into out_dir (default
+    <the file's folder>/<name>_modified_below_H): `sections` horizontal ones (PLANAR_SECTIONS; the layout of
+    wing_modify.section_stations, so a tilted tip follows half a step above the last) of 2 `points` - 1 points
+    in the XCAD file (cosine stations, as rudder_modify lays out its own sections at that count), the tilted tip
+    section and the cap loops after them, the LE and TE points; then every horizontal section is fitted
+    (rudder_modify.fit_section_table, about 0.4 s each, on the stack file's sections of 2 PLANAR_FIT_POINTS - 1
+    points), the original's laws with the orders that fit best, and the set-up
+    <name>_original_design_space.json written there: the rudder as it is (the baseline), its sections' TE
+    radius, 2 points - 1 points a section, H from H_FRACTIONS of the top horizontal section. The tool's cases
+    of it go to that folder too. Kept for the next time: while the component file and its section file are
+    unchanged (their digest in source.json) the set-up is read back instead. A rudder with pitch or rake is
+    refused (the model takes untwisted sections in the plane of symmetry). Returns a dict: the adapter (its
+    out_dir that folder), "setup", "folder", "cached", "name", "report", "seconds"."""
+    import json
+    import rudder_modify as RM
+    import wing_modify as WM
+    import xgeom_rudder as XR
+    t0 = time.time()
+    sections, points = int(sections or PLANAR_SECTIONS), int(points or PLANAR_POINTS)
+    component = os.path.abspath(component)
+    name = os.path.splitext(os.path.basename(component))[0]
+    folder = os.path.abspath(out_dir or os.path.join(os.path.dirname(component), f"{name}_modified_below_H"))
+    setup, src = os.path.join(folder, f"{name}_original_design_space.json"), os.path.join(folder, "source.json")
+    stamp = {"component": component, "digest": _inputs_digest(component), "sections": sections, "points": points,
+             "version": PLANAR_VERSION}
+    if os.path.isfile(setup) and os.path.isfile(src):
+        try:
+            with open(src) as fh:
+                old = json.load(fh)
+        except ValueError:
+            old = {}
+        if all(old.get(k) == stamp[k] for k in ("digest", "sections", "points", "version")):
+            progress(f"{name}: the original made from it before (the file unchanged)")
+            ad = XR.RudderAdapter(out_dir=folder)
+            ad.load_space(setup)
+            return {"adapter": ad, "setup": setup, "folder": folder, "cached": True, "seconds": time.time() - t0,
+                    "name": name, "report": [f"{name}: the original made from it before, {setup}"]}
+    progress(f"{name}: its sections, tip and cap")
+    ld = WM.load_component(component)
+    if ld.kind != "rudder":
+        raise ValueError(f"{component}: a {ld.kind}'s file, not a planar rudder's")
+    d, p = ld.design, ld.params
+    problems = WM.design_checks(d, p)[0]
+    if problems:
+        raise ValueError(f"{name}: {problems[0]}")
+    v = d.values(np.linspace(0.0, 1.0, 201))
+    if np.abs(v["pitch"]).max() > 1e-9 or np.abs(v["rake"]).max() > 1e-9:
+        raise ValueError(f"{name}: pitch or rake is not zero; the model modified below H takes untwisted sections "
+                         f"in the plane of symmetry")
+    tilted = p.tip_tilt > 0.0
+    eta = WM.section_stations(sections, tilted)
+    flats = [np.asarray(lp, dtype=float) for lp in WM.section_loops(d, p, eta, points)]
+    n_cap = int(ld.settings.get("cap_loops", WM.CAP_LOOPS)) if p.cap is not None else 0
+    tips = [np.asarray(lp, dtype=float) for lp in WM.tip_loops(d, p, points, n_cap)]
+    stack = RM.stack_of_loops([np.asarray(lp, dtype=float) for lp in WM.section_loops(d, p, eta, PLANAR_FIT_POINTS)])
+    tag = f"y0_y{d.span:.6g}"
+    os.makedirs(folder, exist_ok=True)
+    stack_path = os.path.join(folder, f"sections_stack_{tag}_raw_mm.dat")
+    _write_planar_stack(stack_path, stack, os.path.basename(component))
+    i_te = points - 1
+    rows = [(lp[0], lp[i_te]) for lp in flats] + ([(tips[0][0], tips[0][i_te])] if tilted else [])
+    _write_planar_corners(os.path.join(folder, "corner_points.dat"), rows, tilted)
+    RM.write_xcad_lines(os.path.join(folder, f"sections_xcad_with_cap_{tag}_m.dat"),
+                        [RM.xcad_lines(lp, "m") for lp in flats + tips])
+    top = max(s.y for s in stack)
+    t1 = time.time()
+    progress(f"{name}: fitting its {len(stack)} horizontal sections (about 0.4 s each)")
+    RM.fit_section_table(stack_path, top + 1e-6, os.path.join(folder, f"thickness_params_{tag}.txt"),
+                         os.path.join(folder, f"thickness_params_{tag}_info.dat"), verbose=False)
+    files = rudder_files(folder)
+    progress(f"{name}: fitting the original shape's laws")
+    orders = best_rudder_orders(files["corner_points"], files["section_table"])
+    ad = XR.RudderAdapter(files=files, fit_orders={c: o[0] for c, o in orders.items()}, out_dir=folder)
+    z_top = ad.orig.z_top
+    ad.settings.update(te_radius_mm=float(ad.orig.te_radius), num_pts=2 * points - 1,
+                       h_min=H_FRACTIONS[0] * z_top, h_max=H_FRACTIONS[1] * z_top)
+    ad.design = RM.baseline_design(ad.orig, ad.settings["h_max"], ad.orders, ad.join)
+    ad.meta = {}
+    ad._rebuild()
+    ad.save_space(setup)
+    with open(src, "w") as fh:
+        json.dump(dict(stamp, written=time.strftime("%d %b %Y %H:%M")), fh, indent=1)
+    report = [f"{c}: order {o[0]} ({100 * o[1]:.2f} % of its range)" for c, o in orders.items()]
+    report.append(f"{name}: {len(stack)} sections to z_top {z_top:.6g} mm" + (", the tilted tip section" if tilted
+                                                                               else "")
+                  + (f", {n_cap} cap loops" if n_cap else "") + f"; TE radius {ad.orig.te_radius:.4g} mm; the "
+                  f"section fits {time.time() - t1:.0f} s; {setup}")
+    progress(f"{name}: done in {time.time() - t0:.0f} s")
+    return {"adapter": ad, "setup": setup, "folder": folder, "cached": False, "report": report, "name": name,
+            "seconds": time.time() - t0}
+
+
 def rudder_files_partial(folder, pattern):
     hits = sorted(glob.glob(os.path.join(folder, pattern)))
     if not hits:
@@ -516,7 +679,14 @@ def main(argv=None):
         return
     table = a.file.lower().endswith((".txt", ".dat"))
     if table and a.kind == "rudder":
-        ap.error("the rudder's set-up needs its CAD (the extraction writes the files it is fitted to)")
+        import xgeom_files as XF
+        if not (a.file.lower().endswith(".txt") and XF.component_kind(a.file) == "rudder"):
+            ap.error("the rudder's set-up needs its CAD (the extraction writes the files it is fitted to) or a "
+                     "planar rudder's component file")
+        res = rudder_from_planar(a.file, a.out)
+        print(res["setup"])
+        print("\n".join(res["report"]))
+        return
     if table:
         case = a.case or re.sub(r"_params$", "", case_name(a.file))
         if a.kind == "blade":

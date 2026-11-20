@@ -314,6 +314,51 @@ def planar_rudder_file(tmp):
                               "rudder")
 
 
+def planar_copy(tmp, sub):
+    """outputs/wind_tunnel_rudder.txt (the planar set-up of 18 Nov 2026) and its section file copied into
+    tmp/sub, so what is made beside it stays in tmp."""
+    import shutil
+    folder = os.path.join(tmp, sub)
+    os.makedirs(folder, exist_ok=True)
+    for name in ("wind_tunnel_rudder.txt", "wind_tunnel_rudder_section.dat"):
+        shutil.copy(os.path.join(HERE, "outputs", name), folder)
+    return os.path.join(folder, "wind_tunnel_rudder.txt")
+
+
+def test_planar_original(tmp):
+    print("\na planar rudder as the original modified below H (xgeom_from_cad.rudder_from_planar)")
+    if not os.path.exists(os.path.join(HERE, "outputs", "wind_tunnel_rudder.txt")):
+        print("       skipped: outputs/wind_tunnel_rudder.txt is not here")
+        return
+    import rudder_modify as RM
+    import xgeom_from_cad as FC
+    path = planar_copy(tmp, "orig")
+    res = FC.rudder_from_planar(path, sections=21, progress=lambda text: None)
+    ad, ld = res["adapter"], WM.load_component(path)
+    print(f"       21 sections fitted in {res['seconds']:.1f} s; TE radius {ad.orig.te_radius:.4g} mm")
+    out = ad.build_xcad("base", plot=False, cad=False)
+    loops = [RM.xcad_to_working(pts, "m") for _, pts in RM.read_xcad(out["case"]["paths"]["xcad"])]
+    nm = out["case"]["xcad"]["n_modified"]
+    ys = np.array([lp[0, 1] for lp in loops[:nm]])
+    ref = WM.section_loops(ld.design, ld.params, ys / ld.design.span, FC.PLANAR_POINTS)
+    dev = max(float(np.abs(a - b).max()) for a, b in zip(loops[:nm], ref))
+    z_top = ld.design.span * 20.0 / 20.5                       # the top of 21 sections under the tilted tip
+    again = FC.rudder_from_planar(path, sections=21, progress=lambda text: None)
+    check("its sections fitted as the original (the model's own rudder adapter, the files beside the planar one), "
+          "the top section half a step under the tilted tip, its TE radius and 121 points a section in the "
+          "settings, H from 0.1 to 0.4 of the top and at 0.4, the design the rudder itself: the written sections "
+          "are the planar ones (mm); a second time it is read back, the same",
+          [getattr(ad, "role", None) is None, os.path.basename(res["folder"]) == "wind_tunnel_rudder_modified_below_H",
+           ad.orig.z_top - z_top, ad.settings["te_radius_mm"] - ad.orig.te_radius, ad.settings["num_pts"],
+           ad.settings["h_min"] / z_top, ad.design.H / z_top, len(ad.preview()["problems"]), dev < 1e-4,
+           again["cached"], max(abs(again["adapter"].values[k] - ad.values[k]) for k in ad.values)],
+          [1, 1, 0, 0, 2 * FC.PLANAR_POINTS - 1, 0.1, 0.4, 0, 1, 1, 0], 1e-9)
+    with open(path, "a") as fh:
+        fh.write("\n")                                          # the file changed: made again
+    third = FC.rudder_from_planar(path, sections=21, progress=lambda text: None)
+    check("a changed file is made again", third["cached"], 0, 0)
+
+
 def test_planar_rudder(tmp):
     print("\nthe planar rudder (xgeom_wing.PlanarRudderAdapter, xgeom_from_cad.wing_setup)")
     import xgeom_files as XF
@@ -469,44 +514,57 @@ def test_gui(tmp):
     cwd = os.getcwd()
     os.chdir(HERE)
     try:
-        planar = planar_rudder_file(tmp)
         import modify_control as MC
         rudder_h = all(os.path.exists(os.path.join(HERE, p)) for p in (MC.CORNER_POINTS, MC.SECTION_TABLE,
                                                                        MC.XCAD_ORIGINAL, MC.STACK))
-        if rudder_h:
-            app = XT.App(root, "vehicle", params=[planar])
-            settle()
-            app.switch("rudder")
-            settle()
-            first = (type(app.ad).__name__, app.build_btn.cget("text"), "span" in [r.name for r in app.rows])
+        if rudder_h and os.path.exists(os.path.join(HERE, "outputs", "wind_tunnel_rudder.txt")):
+            import xgeom_from_cad as FC
+            import xgeom_rudder as XR
+            planar = planar_copy(tmp, "gui")
+            keep_n, FC.PLANAR_SECTIONS = FC.PLANAR_SECTIONS, 21           # quicker fits for the check
             ask = XT.filedialog.askopenfilename
             try:
-                import xgeom_rudder as XR
+                app = XT.App(root, "vehicle", params=[planar])
+                settle()
+                app.switch("rudder")
+                settle()
+                made = os.path.join(os.path.dirname(planar), "wind_tunnel_rudder_modified_below_H")
+                first = (type(app.ad).__name__, app.build_btn.cget("text"), "H" in [r.name for r in app.rows],
+                         hasattr(app, "tangent_all"), os.path.dirname(os.path.abspath(app.ad.files["stack"])) == made)
                 setup = XR.RudderAdapter(out_dir=tmp).save_space(os.path.join(tmp, "rh_design_space.json"))
                 XT.filedialog.askopenfilename = lambda **kw: setup
-                app.on_load_params()                               # the planar file box: a rudder-h set-up
+                app.on_load_params()                               # a set-up of the model modified below H
                 settle()
                 second = (type(app.ad).__name__, app.ad.setup_file == setup, "H" in [r.name for r in app.rows])
                 XT.filedialog.askopenfilename = lambda **kw: planar
                 app.on_load_space()                                # the Set-up box: a planar rudder's file
+                t0 = time.time()
+                while app._job is not None and time.time() - t0 < 300.0:
+                    settle(2)
                 settle()
-                third = (type(app.ad).__name__, app.ad.file == os.path.abspath(planar))
+                third = (type(app.ad).__name__,
+                         app.ad.setup_file == os.path.join(made, "wind_tunnel_rudder_original_design_space.json"),
+                         "H" in [r.name for r in app.rows], hasattr(app, "tangent_all"),
+                         "as the original modified below H" in app.status.cget("text"))
                 app.book.select(XT.VEHICLE_TAB)
                 app.update_views()
                 settle()
             finally:
                 XT.filedialog.askopenfilename = ask
-            check("the Rudder slot: a planar rudder's file opens it on the planar model (the wing's panel, 'CAD "
-                  "rudder'); a set-up of the model modified below H puts it on that one, a planar file back; the "
-                  "Vehicle tab places the planar rudder",
-                  [first == ("PlanarRudderAdapter", "CAD rudder", True), second == ("RudderAdapter", True, True),
-                   third == ("PlanarRudderAdapter", True), app.status.cget("background") != XT.STATUS["error"][0]],
-                  [1, 1, 1, 1], 0)
+                FC.PLANAR_SECTIONS = keep_n
+            check("the Rudder slot: a planar rudder's file (the wind-tunnel rudder's) becomes the original of the "
+                  "model modified below H, its panel as without it (H, tangent at H, 'XCAD rudder'), the original "
+                  "made beside the file; a set-up of that model loads as before; the planar file through the Set-up "
+                  "box's Load ... the same (read back, off the GUI thread); the Vehicle tab places it",
+                  [first == ("RudderAdapter", "XCAD rudder", True, True, True), second == ("RudderAdapter", True, True),
+                   third == ("RudderAdapter", True, True, True, True),
+                   app.status.cget("background") != XT.STATUS["error"][0]], [1, 1, 1, 1], 0)
             app.root.update()
             for w in root.winfo_children():
                 w.destroy()
         else:
-            print("       the Rudder slot's models: skipped, the extraction's outputs are not here")
+            print("       the Rudder slot's models: skipped, the extraction's outputs or the wind-tunnel rudder's "
+                  "planar set-up are not here")
         app = XT.App(root, "vehicle")
         settle()
         app.switch("fin")
@@ -758,6 +816,7 @@ def main():
             test_planar_rudder(tmp)
             test_cap(tmp)
             test_tilt(tmp)
+            test_planar_original(tmp)
             test_vehicle()
             test_vehicle_cad(tmp)
             if "--gui" in sys.argv:
