@@ -43,6 +43,31 @@ def check(name, got, want, tol):
 CAP_RINGS = (0.15, 0.3, 0.5, 0.7, 0.85, 1.0)               # the round cap's loops: shares of a quarter turn
 
 
+def cad_edge(shape, a, b, tol=1.0e-3):
+    """The length (mm) of the solid's edge from point a to point b (either way), as OCCT measures it on the
+    CAD (BRepGProp on the edge); None when no edge runs between them."""
+    import importlib
+    explorer, edge_kind = XL._occ("TopExp", "TopExp_Explorer"), XL._occ("TopAbs", "TopAbs_EDGE")
+    as_edge = XL._topods("Edge")
+    mod = importlib.import_module(f"{XL._PKG}.TopExp")
+    topexp = getattr(mod, "topexp", None) or getattr(mod, "TopExp")
+    first, last = XL._static(topexp, "FirstVertex"), XL._static(topexp, "LastVertex")
+    pnt = XL._static(XL._occ("BRep", "BRep_Tool"), "Pnt")
+    mod = importlib.import_module(f"{XL._PKG}.BRepGProp")
+    linear = XL._static(getattr(mod, "brepgprop", None) or getattr(mod, "BRepGProp"), "LinearProperties")
+    props_of = XL._occ("GProp", "GProp_GProps")
+    ex = explorer(shape, edge_kind)
+    while ex.More():
+        e = as_edge(ex.Current())
+        ends = [np.array([p.X(), p.Y(), p.Z()]) for p in (pnt(first(e)), pnt(last(e)))]
+        if min(max(np.linalg.norm(ends[0] - p), np.linalg.norm(ends[1] - q)) for p, q in ((a, b), (b, a))) < tol:
+            props = props_of()
+            linear(e, props)
+            return float(props.Mass())
+        ex.Next()
+    return None
+
+
 def wing_loops(n=40, tilt=True, cap="round"):
     """A tapered wing in the XCAD frame (x chordwise, y thickness, z height),
     mm: n horizontal loops from z = 0 to 100, then (tilt) a tilted loop and a
@@ -111,10 +136,32 @@ def test_loft():
           1e-4)
     r_te = 0.004 * 150.0                                   # the TE's round at the root: radius 0.6 mm
     arc = r_te * (0.5 * np.pi - np.radians(10.0))          # from the TE to about where it meets the flank
-    check("the strips as wide as their edges' rounding: the TE strip the TE's round (its arc to the flank, mm), "
-          "the LE strip a few percent of the chord; the note gives both",
-          [res2.te_round, 0.9 * arc < res2.strips[1] < 1.3 * arc, 0.03 * 150.0 < res2.strips[0] < 0.12 * 150.0,
-           "their rounding" in res2.notes[0]], [1, 1, 1, 1], 0)
+    cor = res2.corners
+    cad = [cad_edge(res2.shape, cor["ur_a"], cor["ur_b"]), cad_edge(res2.shape, cor["ul_a"], cor["ul_b"])]
+    print(f"       the tip patch's LE and TE edges {res2.tip_edges[0]:.4f} and {res2.tip_edges[1]:.4f} mm (the CAD's "
+          f"{cad[0]:.4f} and {cad[1]:.4f}); the strips {res2.strips[0]:.3f} and {res2.strips[1]:.3f} mm, "
+          f"{len(res2.strip_knots) - 4} poles across")
+    check("the LE strip as wide as the LE's rounding (a few percent of the chord); the TE strip wider than the "
+          "TE's round (its arc to the flank), until the tip patch's TE edge is as long as its LE edge (to "
+          "EDGE_RTOL; the CAD's two edges measured by OCCT the same); the note says so",
+          [res2.te_round, res2.strips[1] > 2.0 * arc, 0.03 * 150.0 < res2.strips[0] < 0.12 * 150.0,
+           abs(res2.tip_edges[1] / res2.tip_edges[0] - 1.0) < XL.EDGE_RTOL, abs(cad[1] / cad[0] - 1.0) < 2e-3,
+           abs(cad[0] / res2.tip_edges[0] - 1.0) < 1e-3, "as long as its LE edge" in res2.notes[0]],
+          [0, 1, 1, 1, 1, 1, 1], 0)
+    check("no cap (a flat top): its TE edge as long as its LE edge too, so the TE strip as wide as the LE strip",
+          [abs(res.tip_edges[1] / res.tip_edges[0] - 1.0) < XL.EDGE_RTOL,
+           abs(res.strips[1] / res.strips[0] - 1.0) < 0.01, "flat top's TE edge" in res.notes[0]], [1, 1, 1], 0)
+    levels = [XL._SmoothLoop(lp, 99) for lp in loops2[:res2.n_smooth]]
+    plain = XL._refined_knots(40, "strip")
+    ring0 = XL._strip_knots(levels, res2.strips[0], res2.strips[1], plain, cap=len(plain) - 4)[1]
+    k_ref, ring1 = XL._strip_knots(levels, res2.strips[0], res2.strips[1], plain)
+    print(f"       the strips' rows on the plain knots within {ring0:.3f} deg of the sections' curves, on the "
+          f"refined ones ({len(k_ref) - 4} poles) {ring1:.3f} deg")
+    check("the TE's round inside the wider TE strip: fitted across on the plain knots, the rows turn off the "
+          "sections' curves by more than STRIP_ANGLE about the round's ends; on the knots refined there (as the "
+          "loft's are, mirrored about the middle) within it",
+          [ring0 > XL.STRIP_ANGLE, ring1 <= XL.STRIP_ANGLE, len(k_ref) > len(plain),
+           len(res2.strip_knots) > len(plain), np.abs(k_ref[::-1] - (1.0 - k_ref)).max() < 1e-12], [1, 1, 1, 1, 1], 0)
     k2 = res2.n_smooth                                     # the rim: the tilted loop
     top_le, top_te, cor = loops2[k2][0], loops2[k2][99], res2.corners
     run = [0.5 * (abs(cor[a][0] - top[0]) + abs(cor[b][0] - top[0]))
@@ -189,19 +236,20 @@ def test_loft():
     check("the test wing's cap and the note agree on whether it was blended; a blend moves it under 0.05 mm",
           [("blended" in res2.notes[-1]) == (res2.tip_blend[1] > 0.0), res2.tip_blend[1] < 0.05], [1, 1], 0)
     one = XL.loft_loops(loops2, strip_frac=0.07)
-    check("one fraction: the LE strip 0.07 of the root chord, the TE strip narrowed to the TE's round, the note "
-          "says so",
-          [one.strips[0] - 0.07 * 150.0, one.te_round, 0.9 * arc < one.strips[1] < 1.3 * arc,
-           "the TE's rounding" in one.notes[0]], [0, 1, 1, 1], 1e-9)
+    check("one fraction: the LE strip 0.07 of the root chord, the TE strip as wide as the tip patch's edges "
+          "need, the note says so",
+          [one.strips[0] - 0.07 * 150.0, one.te_round, one.strips[1] > 2.0 * arc,
+           abs(one.tip_edges[1] / one.tip_edges[0] - 1.0) < XL.EDGE_RTOL, "as long as its LE edge" in one.notes[0]],
+          [0, 0, 1, 1, 1], 1e-9)
     wide = XL.loft_loops(loops2, strip_frac=0.12)
-    check("wider strips: still valid, 6 faces; the TE strip stays on the round",
-          [wide.valid, XL.count_faces(wide.shape), wide.strips[0] - 0.12 * 150.0, wide.strips[1] - one.strips[1]],
-          [1, 6, 0, 0], 0.05)
+    check("a wider LE strip: still valid, 6 faces; the TE strip widens with it, its edge as long",
+          [wide.valid, XL.count_faces(wide.shape), wide.strips[0] - 0.12 * 150.0, wide.strips[1] > one.strips[1],
+           abs(wide.tip_edges[1] / wide.tip_edges[0] - 1.0) < XL.EDGE_RTOL], [1, 6, 0, 1, 1], 1e-9)
     pair = XL.loft_loops(loops2, strip_frac=(0.07, 0.03))
-    check("a strip width each for the LE and the TE is used as given: valid, 6 faces; no step found in the "
-          "horizontal loops",
-          [pair.valid, XL.count_faces(pair.shape), len(res.steps), pair.strips[1] - 0.03 * 150.0, pair.te_round],
-          [1, 6, 0, 0, 0], 1e-9)
+    check("a strip width each for the LE and the TE is used as given (the TE edge then shorter): valid, 6 "
+          "faces; no step found in the horizontal loops",
+          [pair.valid, XL.count_faces(pair.shape), len(res.steps), pair.strips[1] - 0.03 * 150.0, pair.te_round,
+           pair.tip_edges[1] < 0.9 * pair.tip_edges[0]], [1, 6, 0, 0, 0, 1], 1e-9)
     print(f"       with that 4.5 mm TE strip round a 0.6 mm TE: {pair.notes[-1]}")
     lo = XL._SmoothLoop(loops2[5], 99)
     st = np.array([0.0, 0.3 * lo.S, lo.s_te, 0.8 * lo.S, lo.S, lo.S + 2.0])
@@ -247,14 +295,16 @@ def test_loft():
     one_k, two = XL.loft_loops(kinked), XL.loft_split(kinked, j)
     two_h = XL.loft_split(kinked, j, half=True)
     print(f"       a kink in the LE line at loop {j + 1}: one loft {one_k.v_error:.3g} mm off the loops, two "
-          f"lofts {two.v_error:.2g} mm, {two.seconds:.1f} s")
+          f"lofts {two.v_error:.2g} mm (the tip patch {two.tip_error:.2g} mm of that), {two.seconds:.1f} s")
     check("a kink at a section (the part below swept back): two lofts joined there (loft_split) follow it, one "
-          "loft smooths it over; one valid solid, the seams' strips the whole stack's, nine patches and the root; "
-          "its half body 9 faces, half the volume",
-          [two.valid, two.free_edges, two.faces, two.joint, two.v_error < 0.002, one_k.v_error > 0.02,
-           two.strips[0] - one_k.strips[0], two.strips[1] - one_k.strips[1], abs(two.volume / one_k.volume - 1.0),
+          "loft smooths it over; one valid solid, the seams' strips the whole stack's (the TE strip as the upper "
+          "loft's tip patch needs, the one loft's to EDGE_RTOL), nine patches and the root; its half body 9 "
+          "faces, half the volume",
+          [two.valid, two.free_edges, two.faces, two.joint, two.v_error < 0.005, one_k.v_error > 0.02,
+           two.strips[0] - one_k.strips[0], abs(two.strips[1] / one_k.strips[1] - 1.0) < XL.EDGE_RTOL,
+           abs(two.tip_edges[1] / two.tip_edges[0] - 1.0) < XL.EDGE_RTOL, abs(two.volume / one_k.volume - 1.0),
            two_h.valid, two_h.faces, two_h.volume / two.volume],
-          [1, 0, 10, j + 1, 1, 1, 0, 0, 0, 1, 9, 0.5], 1e-4)
+          [1, 0, 10, j + 1, 1, 1, 0, 1, 1, 0, 1, 9, 0.5], 1e-4)
     refused = []
     for bad in ((kinked, 0), (kinked, len(kinked) - 1), (kinked, len(kinked) - 3)):
         try:
@@ -377,15 +427,19 @@ def test_adapter():
             if XL.occ_available():
                 lr = res["loft"]
                 print(f"       solid: volume {lr.volume:.1f} mm^3, {lr.seconds:.1f} s, {lr.faces} faces")
+                print(f"       the strips {lr.strips[0]:.3f} and {lr.strips[1]:.3f} mm, {len(lr.strip_knots) - 4} "
+                      f"poles across; the tip patch's edges {lr.tip_edges[0]:.3f} and {lr.tip_edges[1]:.3f} mm")
                 check("XCAD: a valid closed solid and its STEP file; the rudder's 6 patches (the LE and TE "
                       "strips, the central panels, the tip, the root); no step at H for the loft to ease; "
-                      "the TE strip the 0.75 mm round itself (1.1 to 1.5 mm to each side); the tip patch's "
-                      "corners under the tip on the strip lines; the cap's 0.7 mm edge rounding blended over "
-                      "0.2 to 0.4 mm, which moved the cap by 0.005 to 0.03 mm",
+                      "the TE strip wider than the 0.75 mm round (8 to 14 mm to each side), as the tip "
+                      "patch's TE edge needs to be as long as its LE edge; the tip patch's corners under the tip "
+                      "on the strip lines; the cap's 0.7 mm edge rounding blended over 0.2 to 0.4 mm, which "
+                      "moved the cap by 0.005 to 0.03 mm",
                       [lr.valid, lr.free_edges, os.path.exists(res["step"]), lr.faces, len(lr.steps), lr.te_round,
-                       1.1 < lr.strips[1] < 1.5, lr.drops[0] > lr.drops[1] > 0.0, lr.tip_angle > 5.0,
+                       8.0 < lr.strips[1] < 14.0, abs(lr.tip_edges[1] / lr.tip_edges[0] - 1.0) < XL.EDGE_RTOL,
+                       lr.drops[0] > 0.0, lr.drops[1] > 0.0, lr.tip_angle > 5.0,
                        0.2 < lr.tip_blend[0] < 0.4, 0.005 < lr.tip_blend[1] < 0.03],
-                      [1, 0, 1, 6, 0, 1, 1, 1, 1, 1, 1], 0)
+                      [1, 0, 1, 6, 0, 0, 1, 1, 1, 1, 1, 1, 1], 0)
                 hres = ad.build_xcad("th", plot=False, cad=True, half=True)
                 hlr = hres["loft"]
                 check("XCAD half body: valid, 6 faces, half the volume",

@@ -702,6 +702,32 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   as before; the web contract test passes, its 4 notes as before). Tests: wing 71 with the window (the
   conversion, its cache, a changed file made again; the Rudder slot loading the planar file both ways), tool
   68, hull 65.
+- The TE strip as wide as the tip patch's edges need (20 Nov 2026; the user, for meshing: the tip patch's
+  front edge, at the LE, and its back edge, at the TE, carry the same number of nodes, so the cells spread on
+  the long LE edge and crowded on the short TE edge; make the TE strip wide enough that the two are close in
+  arc length). The TE strip had been the TE's round itself: on the wind-tunnel rudder the tip patch's LE edge
+  was 30.71 mm long, its TE edge 3.20 mm (BB2's plane from its planar set-up: 453.4 against 75.6).
+  `xcad_loft._match_te` now widens the TE strip until the TE edge (the TE strip's top row) is as long as the
+  LE edge to 0.1 % (`EDGE_RTOL`), never narrower than the round; the LE strip as before. The wind-tunnel
+  rudder: the TE strip 10.59 mm to each side of the TE (1.26 before), both edges 30.71 mm (OCCT on the STEP:
+  30.711 and 30.709), the tip patch's TE corners 12.4 mm under the TE's top (1.0 before); BB2's plane: 131.7
+  mm (25.3), both 453.4 mm. Without a cap the flat top's two ends are matched the same way (the TE strip as
+  wide as the LE strip); a pair `strip_frac` (LE, TE) is still used as given. Two lofts (not tangent at H):
+  the upper loft matches, the lower takes its widths and knots. With the round inside the wider strip, its
+  ends (a jump of curvature) made a fit on the plain knots ring: the strip's rows 0.4 deg off the sections'
+  curves on the rudder, 0.7 on BB2's plane (0.04 with the narrow strip). `_strip_knots` halves the knots
+  across the strips where a row's fit turns off by more than 0.05 deg (`STRIP_ANGLE`, mirrored about the
+  middle, up to `STRIP_POLES` 130): 94 poles across on the rudder (67 before), within 0.042 deg. Results: the
+  rudder from the extraction valid, 6 faces, 583,362.85 mm^3 (583,362.83 before), the rows within 6.6e-5 mm
+  of the patches, the tip patch within 0.0020 mm (0.0051 before), its lines at 15.6 deg or more (14.9), 12.6
+  s (9.3); modified below H: 6 faces tangent, 10 not tangent (joint 50), 9 for the half body, both edges
+  30.0 mm; BB2's plane the same volume, the tip patch 0.063 mm, 11 deg. `LoftResult.tip_edges` (the two
+  edges' lengths) and `strip_knots`. `Rudder/outputs/wind_tunnel_rudder_full.igs` and `_half.igs` written
+  again (6 faces each read back, 583,362.85 and 291,681.41 mm^3). BB2's stern-plane CAD files in
+  `bb2/outputs` (17 Nov) still have the narrow TE strip until rebuilt (`bb2/bb2_sternplane_loft.py`, its
+  docstring updated). No file format changed. Tests: tool 70 with the window (the CAD's two edges measured,
+  a flat top, the ringing on plain and refined knots, one fraction, a pair, two lofts), wing 71, hull 65,
+  modify 136; the web contract test passes.
 
 ## Next steps
 

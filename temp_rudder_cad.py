@@ -19,10 +19,11 @@ outputs/sections_xcad_with_cap_y0_y200_m.dat. Its sections above the top
 modified section are added, everything is lofted into one solid with
 xcad_loft's five patches (the blade's layout; user's sketch, 17 Nov 2026):
 bicubic patches fitted by least squares, the LE and TE strips wrapping their
-edges (each as wide as its edge's rounding), the central pressure and suction
-panels, the tip patch (its corners on the strip lines under the tip: it covers
-the cap and the sides above the four patches' sloping top edges), and the flat
-root; six faces. Where the sections step from one to the next (sections
+edges (the LE strip as wide as the LE's rounding, the TE strip as wide as the
+tip patch's TE edge needs to be as long as its LE edge, 20 Nov 2026), the
+central pressure and suction panels, the tip patch (its corners on the strip
+lines under the tip: it covers the cap and the sides above the four patches'
+sloping top edges), and the flat root; six faces. Where the sections step from one to the next (sections
 written from the Bezier model alone under the extracted ones, as before 12 Nov
 2026), the loft eases the step out of the sections below and above it, so the
 solid crosses it without a ripple; the step is printed. The solid is written

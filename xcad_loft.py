@@ -25,13 +25,26 @@ patch the cap alone).
   top of its edge line by tip_drop times its distance from that top along
   the chord (the diagonals' slope; 1.5 gave the smoothest patches on BB2's
   stern plane among 0.5 to 2).
-- The strips are as wide as their edges' rounding (strip_frac None). The LE
-  strip reaches 1.5 times the arc from the LE to where the section's
-  curvature has fallen to a quarter of its peak. The TE strip reaches the
-  arc from the TE to where the curvature has fallen to a tenth of its peak:
-  the strip is the TE's round, its seams lie where the round meets the
-  flanks, and no patch has that jump of curvature inside it (a jump inside a
-  patch leaves a ripple along it). The widths are the sections' median.
+- The LE strip is as wide as the LE's rounding (strip_frac None): 1.5 times
+  the arc from the LE to where the section's curvature has fallen to a
+  quarter of its peak (the sections' median). The TE strip is as wide as the
+  tip patch's TE edge needs to be as long as its LE edge (_match_te; the
+  user, 20 Nov 2026, for meshing: the tip patch's two ends take the same
+  number of nodes, which crowded on the short TE edge and spread on the long
+  LE edge), and no narrower than the TE's round (the arc from the TE to where
+  the curvature has fallen to a tenth of its peak). Until then the TE strip
+  was the round itself, its seams where the round meets the flanks: the
+  wind-tunnel rudder's tip patch had a TE edge of 3.2 mm against an LE edge
+  of 30.7 (both 30.7 now, the TE strip 10.6 mm to each side of the TE instead
+  of 1.26), BB2's stern plane 60 against 453. Without a cap the flat top's
+  two ends are matched the same way (the TE strip as wide as the LE strip).
+- The round inside the TE strip. Where its curvature jumps (the round's ends)
+  a strip fitted across on the plain knots rings: its rows turned off the
+  sections' curves by 0.4 deg on the wind-tunnel rudder, 0.7 on BB2's plane.
+  The knots across the strips are halved where a row's fit turns off its
+  section's curve by more than STRIP_ANGLE (0.05 deg; _strip_knots, mirrored
+  about the middle, up to STRIP_POLES): 94 poles across on the rudder (67
+  before), the rows within 0.042 deg, as close as the narrow strip's were.
 - The walls. The horizontal loops are fitted over the height once, point
   index by point index, as the patches' rows of poles are fitted along the
   span (_wall_loops). The rows, the lines up the body and the tip patch's
@@ -363,6 +376,9 @@ class LoftResult:
     tip_blend: tuple = (0.0, 0.0)  # (the stretch the cap's wraps were blended over, how far that moved the
                                    # cap), mm; (0, 0) when the cap has no rounding to blend (CAP_BLEND)
     joint: int = 0                 # loft_split: the loop its two lofts meet at, counted from 1; 0: one loft
+    tip_edges: tuple = (0.0, 0.0)  # the arc lengths of the tip patch's LE and TE edges (the strips' top rows;
+                                   # the flat top's two ends without a cap), mm
+    strip_knots: object = None     # the knots across the strips (and the tip patch across them)
 
 
 def _thru(wires, solid, ruled, max_degree=None):
@@ -677,13 +693,23 @@ LE_MARGIN = 1.5                            # strip_frac None: the LE strip reach
                                            # rounding (to a quarter of the peak curvature) to each side of the LE
 LE_WINDOW = 0.25                           # ... the LE's rounding looked for within this share of a side's arc
 ROUND_SMALL = 0.5                          # one strip_frac given: the TE strip is narrowed to the TE's round
-                                           # when that is under this share of the strip
-TE_DROP = 0.1                              # the TE strip (as wide as the TE's round) reaches TE_MARGIN times the
-TE_MARGIN = 1.0                            # arc from the TE to where the curvature has fallen to TE_DROP of its peak: a
-                                           # round's end, where it meets the flank, lies just inside the strip's
-                                           # edge (the strip is the round, the central panel starts on the flank;
-                                           # BB2's 15 mm round inside a strip twice as wide left a ripple of 0.2
-                                           # deg along its end, the whole span)
+                                           # when that is under this share of the strip (then widened as the
+                                           # tip patch's edges need, _match_te)
+TE_DROP = 0.1                              # the TE strip reaches at least TE_MARGIN times the arc from the TE to
+TE_MARGIN = 1.0                            # where the curvature has fallen to TE_DROP of its peak (the TE's
+                                           # round), and as far as the tip patch's TE edge needs to be as long as
+                                           # its LE edge (_match_te; 20 Nov 2026). Until then the strip was the
+                                           # round, its seams where the round meets the flanks (BB2's 15 mm round
+                                           # inside a strip twice as wide had left a ripple of 0.2 deg along its
+                                           # end, the whole span)
+EDGE_RTOL = 1.0e-3                         # the TE strip is widened until the tip patch's TE edge is as long
+                                           # as its LE edge to this share (_match_te)
+STRIP_ANGLE = 0.05                         # the knots across the strips are halved where a strip's row fitted
+STRIP_POLES = 130                          # on them turns off its section's curve by more than this (deg), up
+                                           # to this many poles across (_strip_knots). A TE strip wider than the
+                                           # TE's round has the round's ends inside it, and their jump of
+                                           # curvature rang in a fit on the plain knots: 0.4 deg on the
+                                           # wind-tunnel rudder, 0.7 on BB2's stern plane
 TIP_DROP = 1.5                             # the slope of the strips' top edges in the side view: the tip
                                            # patch's corners (the tops of the strip lines) sit under the tops
                                            # of the LE and TE lines by this times their distance from them
@@ -1871,8 +1897,92 @@ def _strip_widths(levels, chord_root, fr):
     return w_le, w_te, te_round, note
 
 
+def _edge_lengths(rows):
+    """The arc lengths (mm) of the tip patch's LE and TE edges: the LE strip's and the TE strip's top rows
+    (without a cap the flat top's two ends)."""
+    return tuple(float(np.linalg.norm(np.diff(np.asarray(rows[nm][-1]), axis=0), axis=1).sum())
+                 for nm in ("le", "te"))
+
+
+def _match_te(rows_for, w0, w_max, rtol=EDGE_RTOL):
+    """The TE strip's reach (mm) at which the tip patch's TE edge is as long as its LE edge (the user, 20 Nov
+    2026, for meshing: the patch's two ends carry the same number of nodes, so they are spread alike on both).
+    rows_for(w) gives the rows and the tip's info with the TE strip reaching w; the LE edge does not depend on
+    it. w0 is the reach the TE's rounding needs, the least taken (a TE edge that is the longer already keeps
+    it); w_max the most the sections allow. Returns (reach, rows, info, (LE edge, TE edge))."""
+    from scipy.optimize import brentq
+    done = {}
+
+    def at(w):
+        if w not in done:
+            rows, info = rows_for(w)
+            done[w] = (rows, info, _edge_lengths(rows))
+        return done[w]
+
+    rows, info, (l_le, l_te) = at(w0)
+    if l_te >= (1.0 - rtol) * l_le or w0 >= w_max:
+        return w0, rows, info, (l_le, l_te)
+    lo, hi = w0, min(max(1.05 * w0 * l_le / max(l_te, 1e-300), 1.01 * w0), w_max)   # the edge grows about in
+    for _ in range(40):                                                            # step with the strip
+        try:
+            if at(hi)[2][1] >= l_le or hi >= w_max:
+                break
+            lo, hi = hi, min(1.5 * hi, w_max)
+        except ValueError:                             # no room for the tip patch: a narrower strip
+            hi = 0.5 * (lo + hi)
+    if at(hi)[2][1] < l_le:                            # as wide as the sections allow
+        return (hi, *at(hi))
+    w = brentq(lambda w: at(w)[2][1] - l_le, lo, hi, xtol=0.25 * rtol * w0, rtol=0.25 * rtol)
+    return (w, *at(w))
+
+
+def _strip_knots(levels, w_le, w_te, knots, tol=STRIP_ANGLE, cap=STRIP_POLES, n_dense=4001):
+    """The knots across the strips (the LE strip and the TE strip share them, and the tip patch takes them
+    across): `knots` (_refined_knots' strip knots) with the spans halved, mirrored about the middle, where a
+    strip's row on about 25 of the levels (_SmoothLoop), fitted on them with its ends held as the loft fits it,
+    turns off the section's smooth curve by more than tol deg, until none does or the strips have cap poles.
+    A TE strip wider than the TE's round has the round's ends inside it, where the curvature jumps; a fit on
+    the plain knots rings about them. A sharp TE (a corner) is left to the plain knots. Returns (knots, the
+    largest turn left, deg)."""
+    sel = list(levels[::max(1, len(levels) // 24)]) + [levels[-1]]
+    uu = np.linspace(0.0, 1.0, n_dense)
+    rows = []
+    for lo in sel:
+        for w, apex in ((w_le, 0.0), (w_te, lo.s_te)):
+            if apex > 0.0 and lo.corner:
+                continue
+            e = 1.0e-4 * w
+            t = lo.at(apex - w + uu * (2.0 * w) + e) - lo.at(apex - w + uu * (2.0 * w) - e)
+            rows.append((lo, apex - w, 2.0 * w, t / np.linalg.norm(t, axis=1)[:, None]))
+    worst = np.zeros(1)
+    for _ in range(12):
+        u = _knot_stations(knots)
+        a = _design(u, knots)
+        pinv = np.linalg.pinv(a[:, 1:-1])
+        d_u = _design(uu, knots, deriv=1)
+        uk = np.unique(knots)
+        span = np.clip(np.searchsorted(uk, uu, side="right") - 1, 0, len(uk) - 2)
+        worst = np.zeros(len(uk) - 1)
+        for lo, s0, ds, tan in rows:
+            row = lo.at(s0 + u * ds)
+            poles = np.empty((a.shape[1], 3))
+            poles[0], poles[-1] = row[0], row[-1]
+            poles[1:-1] = pinv @ (row - np.outer(a[:, 0], row[0]) - np.outer(a[:, -1], row[-1]))
+            d1 = d_u @ poles
+            cos = np.sum(tan * d1, axis=1) / np.maximum(np.linalg.norm(d1, axis=1), 1e-300)
+            np.maximum.at(worst, span, np.degrees(np.arccos(np.clip(cos, -1.0, 1.0))))
+        bad = np.where(worst > tol)[0]
+        if not len(bad) or len(knots) - 4 >= cap:
+            break
+        mids = 0.5 * (uk[bad] + uk[bad + 1])
+        inner = np.unique(np.round(np.r_[knots[4:-4], mids, 1.0 - mids], 13))
+        knots = np.r_[[0.0] * 4, inner, [1.0] * 4]
+    return knots, float(worst.max())
+
+
 def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3, v_poles=30,
-               strip_frac=None, half=False, sym_tol=0.2, ease="both", tip_drop=TIP_DROP, widths=None):
+               strip_frac=None, half=False, sym_tol=0.2, ease="both", tip_drop=TIP_DROP, widths=None,
+               match_te=None, strip_knots=None):
     """The solid through closed loops (each (n, 3), mm, the same point count,
     LE first), bottom to top, in five patches and the flat root; see the
     module docstring for how it is built.
@@ -1883,18 +1993,20 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
     v_poles     rows of poles along the span to start with; fewer rows than
                 loops smooth extraction noise out, and rows are added where a
                 sharp turn of the planform needs them (_span_fit)
-    strip_frac  None (default): each strip is as wide as its edge's rounding:
-                the LE strip LE_MARGIN times the arc from the LE to where the
+    strip_frac  None (default): the LE strip is as wide as the LE's
+                rounding: LE_MARGIN times the arc from the LE to where the
                 section's curvature has fallen to a quarter of its peak
-                there, the TE strip the arc from the TE to where it has
-                fallen to a tenth (the TE's round itself; the sections'
-                median; an edge without a rounding, a sharp TE: 0.07 of the
-                root chord). A fraction: each strip reaches that fraction of
-                the root chord along the section's arc to both sides of its
-                edge (the blade's constant-width rule), a TE strip more than
-                twice as wide as the TE's round narrowed to the round. A
-                pair (LE, TE) gives the two strips their own fractions, used
-                as given
+                there (the sections' median; an LE without a rounding: 0.07
+                of the root chord). The TE strip is as wide as the tip
+                patch's TE edge needs to be as long as its LE edge
+                (_match_te; the patch's two ends then take a mesh's nodes at
+                the same spacing; without a cap the flat top's two ends),
+                and at least the TE's round (the arc from the TE to where
+                the curvature has fallen to a tenth of its peak). A fraction:
+                the LE strip reaches that fraction of the root chord along
+                the section's arc to both sides of the LE (the blade's
+                constant-width rule), the TE strip as above. A pair (LE, TE)
+                gives the two strips their own fractions, used as given
     tip_drop    under a cap: the slope of the strips' top edges in the side
                 view. The tip patch's four corners, the tops of the strip
                 lines, sit under the top of the LE line and of the TE line by
@@ -1910,6 +2022,13 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
     widths      None, or the strips' reach (LE, TE) in mm, used as given in
                 place of strip_frac's (loft_split gives its two lofts the
                 whole stack's, so they meet on the same seams)
+    match_te    widen the TE strip until the tip patch's TE edge is as long
+                as its LE edge (from the width set, the least taken). None:
+                when the TE strip's width is not given (strip_frac None or
+                one fraction, no widths)
+    strip_knots None (the knots across the strips refined where their rows
+                need it, _strip_knots), or the knots used as given
+                (loft_split gives its lower loft its upper loft's)
     """
     if ease not in ("both", "below", "above"):
         raise ValueError('ease is "both", "below" or "above"')
@@ -1978,6 +2097,8 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
         w_le, w_te = (float(v) for v in widths)
         te_round = False
         strips_note = f"the strips {w_le:.6g} mm wide about the LE and {w_te:.6g} mm about the TE (as given)"
+    if match_te is None:
+        match_te = widths is None and (fr is None or fr.size == 1)
     slopes = (float(td[0]), float(td[-1]))
 
     # per level the four patches' sample rows at shared split points; under a cap the rows are turned onto
@@ -1990,7 +2111,7 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
     pinv = {"cen": np.linalg.pinv(a_cen[:, 1:-1]), "strip": np.linalg.pinv(a_strip[:, 1:-1])}
     mid = int(np.argmin(np.abs(u_strip - 0.5)))
 
-    def rows_of(levels):
+    def rows_of(levels, w_te):
         grid = {nm: [] for nm in NAMES}
         for lo in levels:
             for nm, row in zip(NAMES, _row_arcs(lo, w_le, w_te, u_strip, u_cen)):
@@ -2000,7 +2121,40 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
             return {nm: list(rows) for nm, rows in grid.items()}, None
         return _tip_rows(grid, zf, z_axis, thick, mid, slopes, 2.0e-6 * size)
 
-    rows, tip_info = rows_of(smooth)
+    if match_te:                                       # the TE strip as wide as the tip patch's edges need
+        w_round = w_te
+        w_max = 0.999 * 0.45 * min(min(lo.s_te, lo.S - lo.s_te) for lo in smooth)    # _row_arcs' limit
+        w_te, rows, tip_info, t_edges = _match_te(lambda w: rows_of(smooth, w), w_round, w_max)
+        te_round = te_round and w_te == w_round
+        what = "the tip patch's" if k < n else "the flat top's"
+        strips_note = (f"the strips {w_le:.6g} mm wide about the LE and {w_te:.6g} mm about the TE ("
+                       + (f"as wide as {what} TE edge needs to be as long as its LE edge, {t_edges[0]:.5g} mm; "
+                          f"the TE's round {w_round:.4g} mm" if w_te > w_round else
+                          f"the TE's round: {what} TE edge, {t_edges[1]:.5g} mm, is as long as its LE edge, "
+                          f"{t_edges[0]:.5g} mm, or longer")
+                       + (f"; THE SECTIONS ALLOW NO WIDER: its TE edge {t_edges[1]:.5g} mm" if
+                          t_edges[1] < (1.0 - EDGE_RTOL) * t_edges[0] else "") + ")")
+    else:
+        rows, tip_info = rows_of(smooth, w_te)
+        t_edges = _edge_lengths(rows)
+
+    # the knots across the strips: halved where the strips' rows ring about a jump of curvature inside them
+    # (the TE's round inside a TE strip wider than it), or as given
+    if strip_knots is None:
+        k_new, ring = _strip_knots(smooth, w_le, w_te, k_strip)
+        if len(k_new) > len(k_strip):
+            strips_note += (f"; the strips' knots across refined to {len(k_new) - 4} poles, their rows' fits within "
+                            f"{ring:.2g} deg of the sections' curves")
+    else:
+        k_new = np.asarray(strip_knots, dtype=float)
+    if len(k_new) != len(k_strip) or np.any(k_new != k_strip):
+        k_strip = k_new
+        u_strip = _knot_stations(k_strip)
+        a_strip, d_strip = _design(u_strip, k_strip), _design(u_strip, k_strip, deriv=1)
+        pinv["strip"] = np.linalg.pinv(a_strip[:, 1:-1])
+        mid = int(np.argmin(np.abs(u_strip - 0.5)))
+        rows, tip_info = rows_of(smooth, w_te)
+        t_edges = _edge_lengths(rows)
     n_rows = len(rows["le"])
     drops = tip_info["drops"] if k < n else (0.0, 0.0)
     if k < n:
@@ -2030,7 +2184,7 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
             spacing.append(float(np.linalg.norm(stacked - last, axis=1).mean()))
         last = stacked
     first_a = rows["cen_a"][0]
-    data = rows_of(levels_of(given))[0] if steps else rows     # the distances reported: the loops as given
+    data = rows_of(levels_of(given), w_te)[0] if steps else rows   # the distances reported: the loops as given
 
     # along the span: every family on the same parameters and knots, so the shared seams are the same curves
     vpar = np.r_[0.0, np.cumsum(np.maximum(spacing, 1e-9 * max(max(spacing), 1e-12)))]
@@ -2101,7 +2255,8 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
                       drops, float(tip_err),
                       (int(tip.shape[1]), int(tip.shape[0])) if tip is not None else (0, 0), tip_angle,
                       None if tip_info is None else {kk: np.array(vv) for kk, vv in tip_info["corners"].items()},
-                      (float(tip_blend[0]), float(tip_blend[1])))
+                      (float(tip_blend[0]), float(tip_blend[1])), tip_edges=(float(t_edges[0]), float(t_edges[1])),
+                      strip_knots=np.array(k_strip))
 
 
 def _box(shape):
@@ -2123,11 +2278,12 @@ def loft_split(loops, split, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol
     takes it for steps and ripples about it.
 
     Both lofts run through loop `split` exactly (loft_loops holds the first and the last loop) and have the
-    same strips (as wide as the whole stack's edges need, or the fractions of the root chord given), so
-    they end on the same four curves there, and the seams run on across it. The lower loft's four patches,
-    the upper loft's four and its tip patch and the flat root are sewn into one solid; the two flat faces on
-    the joint are left out: nine patches and the root, ten faces (an upper part without a cap: its flat top,
-    eleven). half: that solid cut on the plane of symmetry, as loft_loops cuts its own.
+    same strips (the LE strip as wide as the whole stack's LE needs, the TE strip as the upper loft's tip
+    patch needs, or the fractions of the root chord given) and the same knots across them, so they end on
+    the same four curves there, and the seams run on across it. The lower loft's four patches, the upper
+    loft's four and its tip patch and the flat root are sewn into one solid; the two flat faces on the joint
+    are left out: nine patches and the root, ten faces (an upper part without a cap: its flat top, eleven).
+    half: that solid cut on the plane of symmetry, as loft_loops cuts its own.
 
     Returns one LoftResult: the solid; the notes of the two lofts (marked below and above the joint); steps
     counted on the whole stack; the tip's numbers from the upper loft; joint = split + 1."""
@@ -2163,10 +2319,11 @@ def loft_split(loops, split, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol
         _symmetric(levels, thick, sym_tol)
 
     kw = dict(n_poles=n_poles, height_axis=height_axis, flat_tol=flat_tol, sew_tol=sew_tol, v_poles=v_poles,
-              ease=ease, tip_drop=tip_drop, widths=(w_le, w_te))
+              ease=ease, tip_drop=tip_drop)
     z_j = float(loops[split][0, z_axis])
-    try:
-        upper = loft_loops(loops[split:], **kw)                     # the upper first: it is the one that can fail
+    match = fr is None or fr.size == 1                  # the TE strip as wide as the tip patch's edges need: the
+    try:                                                # upper loft finds it, the lower takes it (the upper first:
+        upper = loft_loops(loops[split:], widths=(w_le, w_te), match_te=match, **kw)       # it can fail)
     except ValueError as exc:
         if "do not leave room" in str(exc):                         # _tip_rows: the joint under the tip patch
             raise ValueError(f"the joint at z {z_j:.6g} mm lies too close to the tip: the loft above it (loops "
@@ -2174,7 +2331,11 @@ def loft_split(loops, split, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol
                              f"tops of the LE and TE lines by tip_drop times their distance from them along the "
                              f"chord; lower the joint") from exc
         raise ValueError(f"the loft above the joint (loops {split + 1} to {n}): {exc}") from exc
-    lower = loft_loops(loops[:split + 1], **kw)
+    lower = loft_loops(loops[:split + 1], widths=upper.strips, match_te=False, strip_knots=upper.strip_knots, **kw)
+    if match:
+        w_te = upper.strips[1]
+        strips_note = (f"the strips {w_le:.6g} mm wide about the LE and {w_te:.6g} mm about the TE, as wide as "
+                       f"the tip patch's TE edge needs to be as long as its LE edge (the upper loft's)")
 
     # the faces of both but the flat ones on the joint, sewn into one solid
     tol = max(1.0e-6 * max(1.0, size), 10.0 * flat_tol * max(1.0, size))
@@ -2208,8 +2369,9 @@ def loft_split(loops, split, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol
     return LoftResult(solid, valid, vol, area, free, max(lower.fit_error, upper.fit_error),
                       lower.n_smooth + upper.n_smooth - 1, upper.n_ruled, time.time() - t0, notes,
                       count_faces(solid), max(lower.v_error, upper.v_error), bool(half), steps, (w_le, w_te),
-                      te_round, upper.drops, upper.tip_error, upper.tip_poles, upper.tip_angle, upper.corners,
-                      upper.tip_blend, split + 1)
+                      te_round and w_te == upper.strips[1] and not match, upper.drops, upper.tip_error,
+                      upper.tip_poles, upper.tip_angle, upper.corners, upper.tip_blend, split + 1, upper.tip_edges,
+                      upper.strip_knots)
 
 
 # --------------------------------------------------------------------------

@@ -30,11 +30,12 @@ Each loop is laid out as xcad_loft expects (801 points, the LE first, the w < 0 
 TE is a 15 mm round, and where it meets the sides the loop's points have to be about 2 mm apart for the
 smooth curve through them to hold the shape) in the frame (x, w, s), w along (0, 1, -1)/sqrt(2) so the triad
 is right-handed; loft_loops builds the solid there, and it is turned to the STP frame after: the LE and TE
-strips wrapping their edges, as wide as loft_loops finds the edges' rounding (about 190 mm to each side of
-the LE, 1.5 times the nose's rounding; about 22 mm at the TE, the 15 mm round itself, so its seams lie where
-the round meets the flanks), the central pressure and suction panels, the tip patch, and the flat root; six
-faces. The strips' top edges rise at loft_loops' slope of 1.5 in the side view, which puts the tip patch's
-corners about 146 mm under the top of the LE line and 7 mm under the top of the TE line. Below s = 2920 the
+strips wrapping their edges (the LE strip as wide as loft_loops finds the LE's rounding, about 190 mm to each
+side of the LE, 1.5 times the nose's rounding; the TE strip, since 20 Nov 2026, as wide as the tip patch's TE
+edge needs to be as long as its LE edge, the 15 mm round inside it; until then about 22 mm, the round itself),
+the central pressure and suction panels, the tip patch, and the flat root; six faces. The strips' top edges
+rise at loft_loops' slope of 1.5 in the side view, which puts the tip patch's corners about 146 mm under the
+top of the LE line (with the round-wide TE strip, 7 mm under the top of the TE line). Below s = 2920 the
 plane's buried root is chopped by its sloping root face, so the sections there are synthesized instead: the
 straight taper continued, a linear fit per loop point over the full sections at s = 2920 to 3720 (which lie
 within 0.1 mm of it). The chop sits 150 mm or more inside the hull, so wherever the synthetic root differs

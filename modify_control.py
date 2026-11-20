@@ -66,13 +66,14 @@ class ModifySettings:
                                    # distributions too curved for a polynomial of the order below
     half: bool = False             # the CAD as the half body, cut at the plane of symmetry (CFD on half the
                                    # domain; the sections are symmetric, so either side is the same)
-    strip_frac: object = None      # the LE and TE wrap strips (xcad_loft). None: as wide as their edges'
-                                   # rounding (the LE strip 1.5 times the arc to where the curvature has
-                                   # fallen to a quarter of its peak, the TE strip the TE's round itself: 1.3
-                                   # mm to each side of the 0.75 mm round). A fraction: both reach that
-                                   # fraction of the root chord along the arc to both sides of their edge
-                                   # (the blade's constant width), the TE strip narrowed to the TE's round.
-                                   # A pair (LE, TE), e.g. (0.07, 0.07), is used as given
+    strip_frac: object = None      # the LE and TE wrap strips (xcad_loft). None: the LE strip as wide as
+                                   # the LE's rounding (1.5 times the arc to where the curvature has fallen
+                                   # to a quarter of its peak), the TE strip as wide as the tip patch's TE
+                                   # edge needs to be as long as its LE edge (about 10.6 mm to each side of
+                                   # the TE; 20 Nov 2026, for meshing; before, the 0.75 mm round itself, 1.3
+                                   # mm). A fraction: the LE strip reaches that fraction of the root chord
+                                   # along the arc to both sides of the LE (the blade's constant width), the
+                                   # TE strip as above. A pair (LE, TE), e.g. (0.07, 0.07), is used as given
     tip_drop: float = 1.5          # the slope of the strips' top edges in the side view (the diagonals from
                                    # the strip lines' tops up to the tops of the LE and TE): the tip patch's
                                    # four corners sit on the strip lines, under the tip by this times their
