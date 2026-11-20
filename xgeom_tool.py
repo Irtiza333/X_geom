@@ -13,10 +13,8 @@ shows the solid.
                                             start from a saved set-up
     python xgeom_tool.py blade              the propeller blade of blade_control.PARAMS (msc_blade.txt)
     python xgeom_tool.py blade --file my_blade.txt
-                                            the blade of another component file (or an old
-                                            parameter file, .dat; --params is the same)
-    python xgeom_tool.py blade --space outputs/blade/gui_design_space.json
-                                            an old set-up JSON
+                                            the blade of another component file (--params is
+                                            the same)
     python xgeom_tool.py hull               the hull of suboff_hull.txt
     python xgeom_tool.py hull --file my_hull.txt
     python xgeom_tool.py wing               the wing of wing.txt (fin: fin.txt)
@@ -132,10 +130,11 @@ Left panel (blade)
               D, blades, root r/R, hub height, the section, the settings, each
               curve's form and every variable's value, bounds and free flag, the
               radial table). Load reads another one, and the whole panel follows
-              it; or an old parameter file (blade_modify.py, .dat: the curves are
-              fitted to it, a parameter flagged N as the file has it, one flagged
-              Y with its variables free, within low .. high when given). Save
-              set-up (below) writes the design as it stands as a component file.
+              it (a table file, no curve or var lines: the curves are fitted to
+              it, a parameter flagged N on its vary line as the file has it, one
+              flagged Y with its variables free, within low .. high when given).
+              Save set-up (below) writes the design as it stands as a component
+              file.
     Blade and hub
               the blade radius R, the hub radius and the hub height (m; the hub
               is centred at x = 0 and must cover the blade root). A change of
@@ -147,10 +146,10 @@ Left panel (blade)
               hub height from the base; the hub radius is then the blade root
               radius, where the table starts, and the blade runs on into the
               hub, which trims it in the CAD. All held to start with.
-              blades Z: the number of blades, 2 to 7 (the parameter file's to
-              start with); the clearance check, the propeller tab, the vehicle,
-              the CAD's hub sector and the parameter file written follow it. It
-              is saved with the set-up; it is not in the design vector. Blades
+              blades Z: the number of blades, 2 to 7 (the file's to start
+              with); the clearance check, the propeller tab, the vehicle and
+              the CAD's hub sector follow it. It is saved with the set-up; it
+              is not in the design vector. Blades
               closer than the clearance (they interfere) give a warning, not a
               problem: moving the root section (the hub radius) or the root's
               chord and pitch may make room for them.
@@ -174,8 +173,8 @@ Left panel (hull)
     File      the hull's component file (the nose, middle-body, tail and cap
               lengths, each curve's order, every variable, the station table: the
               half-height r and with elliptical sections the half-width r'). Load
-              reads another one, or an old station table (hull_modify.py, .dat:
-              the curves fitted to it); Save set-up writes the design as one.
+              reads another one (a table file, the stations alone: the curves
+              fitted to it); Save set-up writes the design as one.
     Body      the four lengths, the largest radius r* and the tail end's re (m);
               elliptical sections: the half-width r' (XY view) gets radii and
               curves of its own, r is then the half-height (XZ view).
@@ -188,8 +187,7 @@ Left panel (wing, fin)
     File      the wing's (or fin's) component file (the span, the section by name
               or as a coordinate file, the pitch axis, the settings, each curve's
               form, every variable, and per row the pitch, chord, t/c, f/c, sweep
-              and rake (dihedral)). Load and Save set-up as for the blade; an old
-              parameter file (wing_modify.py, .dat) loads too.
+              and rake (dihedral)). Load and Save set-up as for the blade.
     Span and sections
               the span (mm; the curves stretch over it); the sections of the XCAD
               file (evenly from the root to the flat tip); change points: how many
@@ -231,8 +229,8 @@ Right panel
                  sections by part; the wing's or fin's XCAD sections.
 Save set-up ... writes the component as it stands as a component file (every
 variable with its value, bounds and free flag, each curve's form and points, the
-settings, the table; xgeom_files.py): a dialog opens on the file it came from (an
-old .dat gives a .txt beside it). Load ... and --file read it back exactly; the
+settings, the table; xgeom_files.py): a dialog opens on the file it came from.
+Load ... and --file read it back exactly; the
 optimiser reads it (blade_modify.load_component, wing_modify.load_component,
 hull_modify.load_component, xgeom_files.load). The rudder (modified below H)
 keeps its set-up JSON: Save set-up writes <output folder>/<case>_design_space.json
@@ -248,15 +246,15 @@ that rudder unchanged.
 The build button builds the component of its panel (in the vehicle its text
 names it): XCAD (rudder) writes the case to the output folder (XCAD file, section
 table, design and the same set-up JSON), lofts the XCAD file into a solid and
-writes it as STEP. CAD (blade) writes the case (parameter file, XCAD points,
-design and set-up JSON) and the CAD the Output box's "CAD writes" names: one
+writes it as STEP. CAD (blade) writes the case (its component file <case>.txt,
+XCAD points, design JSON) and the CAD the Output box's "CAD writes" names: one
 blade on its 1/Z of the hub (with a cylinder hub the DRDC five-surface blade
 and the hub sector of the MSc pipeline, untrimmed surfaces; with a cone the
 periodic sector as a solid), half the propeller (an even Z) or the whole, as
-solids, IGES and STEP (blade_modify.write_cad). CAD (hull) writes the case (parameter file, design and set-up
-JSON, stations, hydrostatics, section points, check plot) and the STEP. CAD
-(wing, fin) writes the case (parameter file, XCAD file, sections table, design
-and set-up JSON, check plot) to outputs/wing or outputs/fin and the loft of the
+solids, IGES and STEP (blade_modify.write_cad). CAD (hull) writes the case (component file, design JSON,
+stations, hydrostatics, section points, check plot) and the STEP. CAD (wing,
+fin) writes the case (component file, XCAD file, sections table, design JSON,
+check plot) to outputs/wing or outputs/fin and the loft of the
 XCAD file as STEP. OCC viewer opens the last STEP (needs pythonocc-core). Save
 CAD ... (and the Vehicle tab's Save vehicle CAD ...) writes the CAD of the
 design as it stands to a file picked in a dialog, STEP (.step, .stp) or IGES
@@ -397,7 +395,7 @@ def then_save(res, kind, path):
 
 def file_kind(path):
     """The geometry a set-up JSON ('geometry'), a component file (its kind) or an old parameter file (its first
-    line) is for."""
+    line; its component refuses it) is for."""
     if path.lower().endswith(".json"):
         with open(path) as fh:
             return json.load(fh).get("geometry")
@@ -491,7 +489,10 @@ class App:
             for path in ([paths] if isinstance(paths, str) else list(paths or [])):
                 kind = file_kind(path) if self.vehicle else adapter_name
                 if kind not in self.start:
-                    raise ValueError(f"{path}: not a set-up or parameter file of " + ", ".join(self.kinds))
+                    raise ValueError(f"{path}: not a set-up or component file of " + ", ".join(self.kinds))
+                if key == "space" and kind != "rudder":       # the old JSON set-ups of the others (20 Nov 2026)
+                    raise ValueError(f"{path}: a set-up JSON is the rudder's (modified below H); the {kind} starts "
+                                     f"from its component file (--file)")
                 self.start[kind][key] = path
         self.adapters, self.errors, self.frames, self.picked, self._vcache = {}, {}, {}, {}, {}
         self.kind, self.ad, self.placement, self._vinfo = None, None, None, None
@@ -1361,12 +1362,11 @@ class App:
             pass
 
     def save_target(self):
-        """Where Save set-up's dialog opens: (folder, file name) of the file the component came from (an old
-        parameter file: a .txt beside it), else the output folder and the case."""
+        """Where Save set-up's dialog opens: (folder, file name) of the file the component came from, else the
+        output folder and the case."""
         cur = getattr(self.ad, "file", None)
         if cur:
-            name = os.path.basename(cur) if not self.ad.legacy else os.path.splitext(os.path.basename(cur))[0] + ".txt"
-            return os.path.dirname(cur), name
+            return os.path.dirname(cur), os.path.basename(cur)
         return os.path.join(HERE, self.ad.out_dir), f"{self.case.get().strip() or 'gui'}.txt"
 
     def on_save(self):
@@ -1393,9 +1393,9 @@ class App:
     def on_load_params(self):
         cur = getattr(self.ad, "file", None)
         rudder = self.kind == "rudder"                 # the planar rudder: a set-up of the other model switches back
-        path = filedialog.askopenfilename(title=f"{NAMES.get(self.kind, self.kind)}: a component file (or an old "
-                                                f"parameter file)", initialdir=os.path.dirname(cur) if cur else HERE,
-                                          filetypes=[("component files", "*.txt"), ("old parameter files", "*.dat")]
+        path = filedialog.askopenfilename(title=f"{NAMES.get(self.kind, self.kind)}: a component file",
+                                          initialdir=os.path.dirname(cur) if cur else HERE,
+                                          filetypes=[("component files", "*.txt")]
                                           + ([("modified-below-H set-ups", "*_design_space.json")] if rudder else [])
                                           + [("all files", "*")])
         if path and rudder and planar_rudder_file(path):  # a planar rudder: the original modified below H
@@ -1628,8 +1628,7 @@ def file_box(app, path, info):
     from_cad = app.kind in FROM_CAD_KINDS and not is_planar(app.ad)    # no planar extraction yet
     if from_cad:
         ttk.Button(row, text="From CAD ...", command=app.on_from_cad).pack(side="left", padx=(0, 4))
-    ttk.Label(row, text="a component file (.txt) or an old parameter file (.dat); Save set-up (below) writes the "
-                        "design as a component file" + ("; From CAD ...: a STEP or IGES file, its parameters "
+    ttk.Label(row, text="a component file (.txt); Save set-up (below) writes the design as one" + ("; From CAD ...: a STEP or IGES file, its parameters "
                                                         "extracted and fitted (the form with the least error), "
                                                         "the set-up saved" if from_cad else "")
                         + ("; the rudder on the planar model: a set-up of the model modified below H "
@@ -1800,10 +1799,10 @@ def main():
     ap.add_argument("geometry", nargs="?", default=default, choices=sorted(ADAPTERS) + ["vehicle"],
                     help=f"what to design (default here: {default})")
     ap.add_argument("--space", action="append", default=[],
-                    help="a <case>_design_space.json to start from (the vehicle: one per component)")
+                    help="the rudder's (modified below H) <case>_design_space.json to start from")
     ap.add_argument("--file", "--params", dest="params", action="append", default=[],
-                    help="the blade's, the hull's, the wing's or the fin's component file (or old parameter file) to "
-                         "start from (the vehicle: any of them)")
+                    help="a component file to start from: the blade's, the hull's, the wing's or the fin's, or a "
+                         "planar rudder's (the vehicle: any of them)")
     args = ap.parse_args()
     if args.geometry == "vehicle" and not available("hull"):
         ap.error("the vehicle needs xgeom_hull.py (the X_geom folder)")

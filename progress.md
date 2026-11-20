@@ -18,28 +18,30 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   optimiser. The full height (root to the top of the cap) is a setting: a new one
   stretches the whole rudder in height (`OriginalShape.scaled`, `scaled_stack`; H, its bounds and the curves'
   heights in proportion, x, chords and section shapes kept), saved with the set-up as `height_scale`.
-- **Propeller blade** (`blade_modify.py`, `blade_control.py`, `msc_blade_params.dat`): a blade always starts from
-  a parameter file (D, blades, root r/R, hub height, section table, and the radial table r/R, P/D, c/D, t/c, f/c,
+- **Propeller blade** (`blade_modify.py`, `blade_control.py`, `msc_blade.txt`): a blade always starts from
+  a component file (D, blades, root r/R, hub height, section table, and the radial table r/R, P/D, c/D, t/c, f/c,
   skew, rake/D). Design variables: the blade radius, hub radius and hub height (the curves stretch over the span
   between the radii), and each distribution as a Bezier curve over r/R fitted to the file, of 1 segment (C0 .. Cm)
   or 2 segments (the form of `para_control_bez_updated.py`: P1 .. P4 and P4 .. P7, zero slope at P4, the weights
   w23 and w56 as variables; the default for all six). The MSc code builds the geometry (`para.py` for the XCAD
   points, `BladeSurface`, `tip_surfaces_new`, `hub_new` and `X_CAD_new` for the DRDC five-surface IGES with the hub
-  sector of the design's height, plus STEP). `msc_blade_params.dat` is the MSc blade as the pipeline builds it:
+  sector of the design's height, plus STEP). `msc_blade.txt` is the MSc blade as the pipeline builds it:
   its polynomials at 61 stations from `x_blade_new.R_VALUES[0]` (r/R 0.18), hub height 0.625 m (hub_new's).
   XCAD sections (53 points each): their number and how many lie in the tip band, closer together towards the tip
   (default 56, 14 from r/R 0.93, evenly spaced below); the clearance check keeps x_blade_new's stations.
-- **What varies, from the parameter file**: vary lines `# vary <name> Y|N [low high]` for pitch, chord,
+- **What varies, from the file**: var lines (a set-up: each variable free or held); in a table file (no curve
+  or var lines) vary lines `# vary <name> Y|N [low high]` for pitch, chord,
   thickness, camber, skew, rake, radius, hub_radius and hub_height. Y: a design variable (a distribution as a
   fitted Bezier curve, its variables free; low high bound its control values, or the radius or height); N: kept
   as the file has it (a distribution exactly, the cubic spline through its rows, `FileCurve`, no variables); a
   name not listed is N (the reader, `blade_vary.py`, uses the standard library only). Nothing Y: `blade_control.py`
-  writes only the case `original` and its CAD. A file with no vary line: every distribution fitted, `FREE` free,
-  as before. `msc_blade_params.dat`: pitch and chord Y. The
+  writes only the case `original` and its CAD. A table file with no vary line: every distribution fitted, `FREE`
+  free. `msc_blade.txt`: every distribution as its table has it, nothing free. The
   same file drives the MSc pipeline: `para_control_bez_updated.py` takes para_control 0 (the original blade: pitch
   and chord unchanged), 2 (chord), 3 (pitch) or 7 (both), and the cap of P4's pitch (max_pitch, 1.4);
   `x_blade.py`, `x_blade_new.py`, `X_CAD_new.X_CAD_from_design` and `cad_worker.py` pass both on.
-  `Initial_sampling.py` reads `BLADE_PARAMS` (`msc_blade_params.dat`): pitch and chord Y or N give para_control;
+  `Initial_sampling.py` reads `BLADE_PARAMS` (`msc_blade.txt`): its vary lines, else its free var lines
+  (`blade_vary.read_free`), pitch and chord Y or N give para_control;
   a range bounds pitch p1y, p7y and max_pitch, or chord p1y and y4 (the positions, fractions and weights keep the
   code's bounds); only the flagged parameters' variables are sampled and written (pitch's 6, then chord's 5);
   nothing Y: the original blade's CAD only (case 0, `geometry/original`).
@@ -47,7 +49,8 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   CFX and training scripts): the files it shares with X_geom are kept identical. `Initial_sampling.py` has
   Prop_hull's campaign changes (`--round r` runs infill mode for round r; case number 100 x round + row,
   `pipeline_config.case_id`; resumable from the accepted file) and X_geom's vary lines; `pipeline_config.py` is
-  Prop_hull's (`DATA_DIR` Training_3d). Prop_hull also holds `blade_vary.py` and `msc_blade_params.dat`.
+  Prop_hull's (`DATA_DIR` Training_3d). Prop_hull also holds `blade_vary.py` and `msc_blade.txt` (until 20 Nov
+  2026 `msc_blade_params.dat`).
 - **Airfoils** (`airfoils.py`, `airfoils/`): the UIUC Airfoil Coordinates Database offline (1,665 Selig-format
   files, `airfoils/index.dat` lists them) and the NACA 4- and 5-digit equations for NACA names without a file. A
   parameter file names its section by `# airfoil <name>` (for example naca2416, clarky) instead of
@@ -62,16 +65,16 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   midship its Cp, centroid and share of the parallel middle body (the quantities Lackenby's variation works
   with). Output: `outputs/hull/<case>_stations.dat` (the sectional area curve), `<case>_hydrostatics.dat`,
   `<case>_check.png`, `suboff.step`.
-- **Hull curves** (`hull_modify.py`, `suboff_hull_params.dat`): a hull starts from a station table (half-height r
+- **Hull curves** (`hull_modify.py`, `suboff_hull.txt`): a hull starts from a station table (half-height r
   and half-width r' at stations, the nose, middle-body, tail and cap lengths). Each part of each view is a CST
   curve: a class exponent (the nose's bluntness, the tail end's shape) times a Bernstein polynomial of control
   values, joining the middle body with zero slope. Sections are ellipses (circles where r = r'). Design vector:
   the lengths and the curves (exponents and coefficients) free by default (13 slots for SUBOFF), the radii and
   the cap held. Output: the
-  design as a station table and as JSON, the set-up, stations, hydrostatics, section points, check plot, and
+  design as a component file (the set-up) and as JSON, stations, hydrostatics, section points, check plot, and
   STEP (one NURBS face per part: the profile B-spline times the rational circle, so sections are exact
   ellipses).
-- **Wing and fin** (`wing_modify.py`, `wing_params.dat`, `fin_params.dat`): a wing or a fin starts from a parameter
+- **Wing and fin** (`wing_modify.py`, `wing.txt`, `fin.txt`): a wing or a fin starts from a component
   file (the span, the airfoil by name, the pitch axis, and per span fraction eta the chord, sweep (x of the LE),
   rake (z of the LE: the dihedral), pitch (twist), t/c and f/c; optional change columns). Sections: the named
   airfoil (its thickness with the TE closed, and its camber line; a symmetric airfoil gets the NACA 4-digit camber
@@ -80,7 +83,7 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   default, 0 to 8), pitched about the pitch axis (0.25 c by default) and moved by sweep and rake. Design
   variables: the span (the curves stretch over it) and each distribution and change as a Bezier curve over eta
   (1 or 2 segments as the blade's; 4 control points, 3 for the changes), the root's sweep and rake pinned at 0.
-  Output (`outputs/wing`, `outputs/fin`): the design as a parameter file and JSON, the set-up, the XCAD file (41
+  Output (`outputs/wing`, `outputs/fin`): the design as a component file (the set-up) and JSON, the XCAD file (41
   sections, 61 points per side), the sections table, the check plot, and the loft of the XCAD file as STEP (the
   tip flat for now). Example wing: span 200 mm, chord 120 to 70 mm, LE swept 28 mm, 3 deg dihedral, pitch 2 to
   -1 deg, NACA 2412 thinned to t/c 0.10 and f/c 0.015 at the tip. Example fin: span 220 mm, chord 300 to 220 mm,
@@ -748,6 +751,40 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   folder), its self-checks and whether the web app imports it; `README.md` points to the docs. Tests: tool 71
   with the window (an unchanged set-up saves to the same bytes), files 51, wing 71, blade 77, hull 65; the
   contract test passes with one note (request 6).
+- **Breaking**: component files only (20 Nov 2026; the user: "get rid of all old format set up files. From now
+  on it's just the new format"; his choices: old files refused with a clear message, the converter and the old
+  set-up loaders removed; Initial_sampling from the free variables; `legacy_kind` kept so the web app can
+  recognise and refuse old files). Old files: a parameter file (`# XGeom <kind> parameters`, .dat) and the
+  set-up JSONs of the blade, wing, fin, hull and planar rudder (`<case>_design_space.json` with `params_file`,
+  `rudder_planar`) are no longer read; `read_component`, `xgeom_files.load` and each module's `read_params` and
+  `load_component` say `<path>: an old <kind> parameter file, which XGeom no longer reads (since 20 Nov 2026):
+  it reads component files only ('# XGeom component' first)`; the tool still routes an old file to its
+  component (`file_kind`), which says so, and `--space` takes the rudder-h model's set-ups only (its JSON
+  stays). Deleted, 17 files: `msc_blade_params.dat`, `wing_params.dat`, `fin_params.dat`,
+  `suboff_hull_params.dat`, `outputs/hull/suboff_fit_params.dat`, `outputs/hull/suboff_fit_design_space.json`
+  (tracked), the tool's old saves `outputs/{blade,fin,wing,hull}/gui_params.dat` and `gui_design_space.json`,
+  and BB2's three tables (converted first). Removed from the code (none is in the web contract):
+  `xgeom_files.convert` and its command line, `legacy_header`, `Loaded.legacy`; `space_record`,
+  `load_blade_space`, `load_wing_space`, `load_hull_space`; `hull_modify.SUBOFF_PARAMS` (SUBOFF from its
+  equations in memory: `hull_modify.py --suboff`, and the hull adapter when `suboff_hull.txt` is not there);
+  the adapters' `save_params`, `vary_state`, `space_record`, `save_space`, `load_space` and `legacy` (the
+  rudder-h adapter's stay). In their place a table file: a component file with no curve or var lines (the
+  geometry, vary lines when it has them, the table), which `write_params` of blade_modify, wing_modify and
+  hull_modify now writes (`read_params` reads any component file's geometry and table); `load_component` fits
+  its curves as the old files were fitted. The component writer writes vary lines when a table has them (a
+  set-up has var lines, as before; the samples are unchanged byte for byte). The hull's From CAD writes its
+  stations as `<case>_table.txt` (was `<case>_params.dat`). Converted with the old reader before deleting,
+  each the same table, design and space to the last digit: `bb2/outputs/bb2_blade.txt` (the frame a note,
+  `bb2_frame x0_mm .. theta_ref_deg ..`, which `bb2_sections.read_frame` reads; `bb2_build.blade_surface` gives
+  the same blade at 400 points), `bb2_hull_table.txt`, `bb2_hull_aft_table.txt`, written and read by the bb2
+  scripts now; and the SUBOFF case's set-up as `outputs/hull/suboff_fit.txt` (its design.json's hull within
+  3e-13 m). `Initial_sampling.py` reads `msc_blade.txt`: its vary lines, else its free var lines
+  (`blade_vary.read_free`: pitch or chord on when one of its variables is free); `msc_blade.txt` frees nothing
+  of pitch or chord, as `msc_blade_params.dat`'s lines (all N) did, so para_control stays 0. Prop_hull needs
+  the new `Initial_sampling.py`, `blade_vary.py` and `msc_blade.txt`. For the web app: no key is new or
+  changed; the contract test passes (its one note as before). Tests: files 60 with the window (old files
+  refused by name, table files, the tool's refusals), blade 82 with the window and the CAD, wing 71, hull 65,
+  hull_modify 17, tool 71 with the window; Initial_sampling's checks run with OCC stubbed (the CAD left out).
 
 ## Next steps
 

@@ -1,34 +1,39 @@
 """
 blade_modify.py
 
-A propeller blade from a parameter file, and its design space: the blade radius,
-hub radius and hub height, and each radial distribution as a Bezier curve over r/R
-fitted to the file, whose control points (and, for 2 segments, weights) are the
-design variables. The geometry is the MSc blade code's: para.py gives the sections
-(the XCAD point file and the blade clearance check of x_blade_new.X_blade),
-blade_surface_new.BladeSurface, tip_surfaces_new, hub_new and X_CAD_new give the
+A propeller blade from a component file (xgeom_files.py, kind blade; claude/xgeom-file-formats.md), and its
+design space: the blade radius, hub radius and hub height, and each radial distribution as a Bezier curve over
+r/R fitted to the file's table, whose control points (and, for 2 segments, weights) are the design variables.
+The geometry is the MSc blade code's: para.py gives the sections (the XCAD point file and the blade clearance
+check of x_blade_new.X_blade), blade_surface_new.BladeSurface, tip_surfaces_new, hub_new and X_CAD_new give the
 DRDC five-surface CAD with the hub sector.
 
-Parameter file (.dat; '#' header, np.loadtxt reads the table):
+Component file ('#' header, np.loadtxt reads the table): the geometry, the settings (SETTING_TYPES), each
+curve's form ('table' as the file has it, 'bezier1 <points>', 'bezier2') and every variable's value, bounds and
+free flag ('# var'), and the radial table. A table file has no curve or var lines (write_params writes one),
+only the geometry, optional vary lines and the table:
 
-    # XGeom propeller blade parameters
-    # diameter_m     1.4
-    # blades         5
-    # root_r         0.18
-    # hub_height_m   0.625
-    # section_table  airfoil_data_fixed.csv          (or:  # airfoil  naca2416)
-    # vary  pitch       Y  0.6  1.4                   (optional: what changes, below)
-    # vary  chord       Y
-    # vary  thickness   N
-    ...
-    # r/R  P/D  c/D  t/c  f/c  skew_deg  rake/D
-    0.18000000  1.24135133  0.24524880  0.21585422  0.03041617  0.27575388  0.00001628
+    # XGeom component
+    # kind          blade
+    # name          msc_blade
+    # ---- geometry
+    # diameter_m    1.4
+    # blades        5
+    # root_r        0.18
+    # hub_height_m  0.625
+    # section       airfoil_data_fixed.csv              (or an airfoil by name: naca2416)
+    # ---- vary                                         (optional: what changes, below)
+    # vary   pitch       Y  0.6  1.4
+    # vary   chord       Y
+    # ---- distributions over r/R
+    #        r/R         P/D         c/D         t/c         f/c     skew_deg      rake/D
+      0.18000000  1.24135133  0.24524880  0.21585422  0.03041617   0.27575388  0.00001628
     ...
 
     diameter_m     propeller diameter D, m (the blade radius R = D/2)
     blades         number of blades Z (the clearance check and the hub sector)
     root_r         r/R of the blade root, the hub radius over R (default: the
-                   first row); rows below it are ignored
+                   first row); the table starts there
     hub_height_m   axial length of the hub in the CAD, m (optional, default
                    HUB_HEIGHT = hub_new.DEFAULT_HUB_HEIGHT); a cylinder of the
                    hub radius centred at x = 0, unless the next three keys make
@@ -44,15 +49,17 @@ Parameter file (.dat; '#' header, np.loadtxt reads the table):
                    wider and clear of it where it is narrower: the blade is
                    extended below its root into the hub (root_extension) and
                    the hub trims it in the CAD
-    section_table  the section family: x/c, camber, camber slope and thickness
-                   (para.py's airfoil_data_fixed.csv format), relative to the
-                   parameter file's folder
-    airfoil        instead of a section table: an airfoil by name (airfoils.py:
-                   the UIUC database in airfoils/, else the NACA 4- and 5-digit
-                   equations), e.g. naca2416, clarky, e387. It gives the shapes
-                   of the camber line and the thickness; t/c and f/c below
-                   scale them at each radius (a symmetric airfoil: no camber, f/c
-                   has no effect)
+    section        the section: a file relative to the component file's folder,
+                   para.py's section table (x/c, camber, camber slope and
+                   thickness, comma-separated: airfoil_data_fixed.csv) or
+                   airfoil coordinates (x y per line), else an airfoil by name
+                   (airfoils.py: the UIUC database in airfoils/, else the NACA
+                   4- and 5-digit equations), e.g. naca2416, clarky, e387. It
+                   gives the shapes of the camber line and the thickness; t/c
+                   and f/c below scale them at each radius (a symmetric
+                   airfoil: no camber, f/c has no effect)
+    section_tables the section shape per r/R (blade_sections.py; blade_extraction.py
+                   writes it), a file relative to the component file (optional)
     r/R            radius over the tip radius, rising to the tip (1)
     P/D            pitch ratio
     c/D            chord over the diameter
@@ -63,26 +70,23 @@ Parameter file (.dat; '#' header, np.loadtxt reads the table):
     vary           which parameters change, one line each: '# vary <name> Y|N [low high]'
                    (blade_vary.py) with <name> one of pitch, chord, thickness, camber, skew, rake (the
                    distributions), radius, hub_radius, hub_height (m) and, for a conic hub,
-                   hub_base, hub_top, hub_x (m). Y: a design
+                   hub_base, hub_top, hub_x (m), for the curves and globals with no var lines. Y: a design
                    variable; low high (optional) the range of its values (every control
                    value of a distribution, in its units), else default_bounds. N: as the
                    file has it, a distribution exactly (its cubic spline, FileCurve), a
-                   radius or height held. A name not listed is N. A file with no vary
+                   radius or height held. A name not listed is N. A table file with no vary
                    line: every distribution a fitted Bezier curve and blade_control.FREE
-                   free, as before. Nothing Y: the original blade (blade_control.py writes
+                   free. Nothing Y: the original blade (blade_control.py writes
                    it and its CAD only). x_blade_new's pipeline (Initial_sampling.py)
-                   reads the same lines for pitch and chord (para_control).
+                   reads the same lines for pitch and chord (para_control), else the
+                   free var lines.
 
 Between the rows a distribution is the cubic spline through them: the file's
-shape, the reference the design is compared with.
-
-Component file (xgeom_files.py, kind blade; claude/xgeom-file-formats.md): the
-same geometry and table (the section by one key, 'section': a section table,
-a coordinate file or an airfoil name), with the settings, each curve's form
-('table' as the file has it, 'bezier1 <points>', 'bezier2') and every
-variable's value, bounds and free flag ('# var'). load_component reads one
-exactly (or an old parameter file, fitted as below); write_component writes
-one (the design tool's Save set-up, write_case's <case>.txt).
+shape, the reference the design is compared with. load_component reads a
+component file exactly (a table file: its curves fitted as below);
+write_component writes the design as one (the design tool's Save set-up,
+write_case's <case>.txt), write_params the table alone (a table file). Old
+parameter files (.dat) are not read (20 Nov 2026).
 
 Design (BladeDesign): the blade radius R and the hub radius (m), the hub height
 (m), for a conic hub its base and top radii and base x (m), and per distribution
@@ -105,7 +109,7 @@ a change of either radius stretches the curves over the new span. A curve has
 fit_design fits the curves to the file (positions, weights and values by least
 squares); with vary lines only the distributions flagged Y.
 
-    params = read_params("msc_blade_params.dat")
+    params = read_params("msc_blade.txt")                   # the geometry and the table
     design, residuals = fit_design(params)                  # Y curves 2 segments, N as the file
     space = file_space(params, design)                       # the Y parameters free within their ranges
     x0, bounds = space.to_vector(design), space.bounds      # for the optimiser
@@ -139,7 +143,7 @@ from scipy.optimize import least_squares
 from scipy.spatial import cKDTree
 
 import xgeom_files as XF
-from blade_vary import CURVES, GLOBAL_SLOTS, HUB_SLOTS, VARY_NAMES, Vary, read_vary   # the names; the vary lines
+from blade_vary import CURVES, GLOBAL_SLOTS, HUB_SLOTS, VARY_NAMES, Vary   # the names; a vary line
 from prop_hub import HubProfile
 from hub_new import DEFAULT_HUB_HEIGHT
 from rudder_modify import Bezier, fit_values, fractions_from_heights, heights_from_fractions, law_basis
@@ -154,8 +158,6 @@ DESCRIPTIONS = {
     "skew": "skew angle, deg",
     "rake": "rake over the diameter, rake/D",
 }
-GLOBALS = ("diameter_m", "blades", "root_r", "hub_height_m", "hub_base_m", "hub_top_m", "hub_x_m", "section_table",
-           "airfoil", "section_tables")
 HUB_KEYS = {"hub_base": "hub_base_m", "hub_top": "hub_top_m", "hub_x": "hub_x_m"}   # the slots' file keys
 PARTS = ("whole", "half", "sector")  # what the CAD writes: the whole propeller, half of it (an even Z), one blade
                                      # on its 1/Z of the hub
@@ -180,12 +182,12 @@ _PROPS = {}                       # property functions by the curve's data
 
 
 # --------------------------------------------------------------------------
-# The parameter file
+# The parameters (a component file's geometry and table)
 # --------------------------------------------------------------------------
 
 @dataclass
 class BladeParams:
-    """A blade parameter file: the globals and the radial table."""
+    """A blade's parameters (its file's geometry and table): the globals and the radial table."""
     diameter: float               # m
     blades: int
     root_r: float
@@ -296,49 +298,12 @@ def vary_bounds(params):
 
 
 def read_params(path):
-    """The BladeParams of a parameter file (see the module docstring), or of a component file (xgeom_files.py:
-    its geometry and table; load_component gives its design and variables too)."""
-    if XF.is_component(path):
-        comp = XF.read_component(path)
-        if comp.kind != "blade":
-            raise ValueError(f"{path}: a {comp.kind} file, not a blade's")
-        return _component_params(comp)
-    head = {}
-    with open(path) as fh:
-        for line in fh:
-            s = line.strip()
-            if not s.startswith("#"):
-                continue
-            parts = s[1:].split(None, 1)
-            if len(parts) == 2 and parts[0] in GLOBALS:
-                head[parts[0]] = parts[1].strip()
-    missing = [k for k in ("diameter_m", "blades") if k not in head]
-    if ("section_table" in head) == ("airfoil" in head):
-        missing.append("section_table or airfoil (one of them)")
-    if missing:
-        raise ValueError(f"{path}: the header misses {', '.join(missing)}")
-    tab = np.atleast_2d(np.loadtxt(path, comments="#"))
-    if tab.shape[1] != len(COLUMNS):
-        raise ValueError(f"{path}: the table needs {len(COLUMNS)} columns ({' '.join(COLUMNS)}), "
-                         f"it has {tab.shape[1]}")
-    r = tab[:, 0]
-    if len(r) < 4 or np.any(np.diff(r) <= 0.0):
-        raise ValueError(f"{path}: r/R must rise from row to row, at least 4 rows")
-    root = float(head.get("root_r", r[0]))
-    if not r[0] - ROW_TOL <= root < r[-1] or np.sum(r > root + ROW_TOL) < 3:
-        raise ValueError(f"{path}: root_r {root:g} must lie in the table, with 4 rows from it to the tip")
-    hub_h = float(head["hub_height_m"]) if "hub_height_m" in head else None
-    tables = (head.get("section_tables") or "").split()
-    params = BladeParams(float(head["diameter_m"]), int(head["blades"]), root, head.get("section_table", ""), r,
-                         {c: tab[:, i + 1] for i, c in enumerate(CURVES)}, os.path.abspath(path), hub_h,
-                         head.get("airfoil"), read_vary(path) or None, *_hub_values(head, path),
-                         tables[0] if tables else None)
-    if params.airfoil:
-        try:
-            params.section_path()                    # the airfoil exists; its table is made
-        except ValueError as exc:
-            raise ValueError(f"{path}: {exc}") from None
-    return params
+    """The BladeParams of a component file (see the module docstring): its geometry, its table and its vary
+    lines (load_component gives its design and variables too)."""
+    comp = XF.read_component(path)
+    if comp.kind != "blade":
+        raise ValueError(f"{path}: a {comp.kind} file, not a blade's")
+    return _component_params(comp)
 
 
 def _hub_values(head, path):
@@ -366,48 +331,50 @@ def with_blades(params, blades):
     return params if z == params.blades else dataclasses.replace(params, blades=z)
 
 
-def write_params(path, params, notes=()):
-    """Write a parameter file (read_params reads it back), its vary lines when
-    it has them. A section table given by an absolute path is written relative
-    to the new file's folder."""
-    table = params.section_table
-    if os.path.isabs(table) and os.path.exists(table):
-        try:
-            table = os.path.relpath(table, os.path.dirname(os.path.abspath(path))).replace(os.sep, "/")
-        except ValueError:                      # another drive
-            pass
-    lines = ["# XGeom propeller blade parameters"]
-    lines += [f"# {n}" for n in notes]
-    lines += [f"# diameter_m     {params.diameter:.10g}",
-              f"# blades         {int(params.blades)}",
-              f"# root_r         {params.root_r:.10g}"]
+def write_params(path, params, name=None, notes=()):
+    """Write the parameters as a table file, a component file with no curve or var lines (read_params reads it
+    back; load_component fits the curves to its table): the geometry (D, Z, the root r/R, the hub height and a
+    conic hub, the section and the section tables, files relative to the new file's folder), the vary lines
+    when params has them, and the table from the root (rows), 8 decimals."""
+    folder = os.path.dirname(os.path.abspath(path))
+    comp = XF.Component("blade", name or os.path.splitext(os.path.basename(path))[0], list(notes))
+    g = comp.geometry
+    g["diameter_m"] = XF.num(params.diameter)
+    g["blades"] = str(int(params.blades))
+    g["root_r"] = XF.num(params.root_r)
     if params.hub_height is not None:
-        lines.append(f"# hub_height_m   {params.hub_height:.10g}")
+        g["hub_height_m"] = XF.num(params.hub_height)
     if params.hub_cone:
-        lines += [f"# {k:<14s} {getattr(params, g):.10g}" for g, k in HUB_KEYS.items()]
-    lines.append(f"# airfoil        {params.airfoil}" if params.airfoil else f"# section_table  {table}")
-    if params.section_tables:
-        tables = params.section_tables
-        if os.path.isabs(tables) and os.path.exists(tables):
-            try:
-                tables = os.path.relpath(tables, os.path.dirname(os.path.abspath(path))).replace(os.sep, "/")
-            except ValueError:
-                pass
-        lines.append(f"# section_tables {tables}")
-    if params.vary is not None:
-        lines.append("# Y/N per parameter: Y changes it (a design variable; low high, optional: the range of its "
-                     "values), N keeps it as this file has it")
-        for n in VARY_NAMES:
-            v = params.vary.get(n, Vary(False))
-            lines.append(f"# vary  {n:<11s} {'Y' if v.on else 'N'}"
-                         + (f"  {v.lo:.10g}  {v.hi:.10g}" if v.lo is not None else ""))
-    lines.append("# " + "  ".join(COLUMNS))
-    for i, r in enumerate(params.r):
-        row = [r] + [params.values[c][i] for c in CURVES]
-        lines.append("  ".join(f"{_clean(v):.8f}" for v in row))
-    with open(path, "w") as fh:
-        fh.write("\n".join(lines) + "\n")
-    return path
+        for slot, key in HUB_KEYS.items():
+            g[key] = XF.num(getattr(params, slot))
+    g.update(_section_keys(params, folder))
+    if params.vary is not None:                  # a cylinder hub: no lines for the cone's slots
+        comp.vary = {n: (v.on, v.lo, v.hi) for n, v in params.vary.items() if params.hub_cone or n not in HUB_SLOTS}
+    r, v = params.rows()
+    comp.columns = XF.COLUMNS["blade"]
+    comp.table = np.column_stack([r] + [v[c] for c in CURVES])
+    return XF.write_component(path, comp)
+
+
+def _section_keys(params, folder, extra=None):
+    """The geometry keys of the section ('section': a section table or a coordinate file relative to folder,
+    else the airfoil's name) and of extra (default: section_tables, when params has them; a file relative to
+    folder when it is there, else as written)."""
+    base = os.path.dirname(params.path) if params.path else folder
+    g = {}
+    if params.airfoil:
+        own = os.path.isabs(params.airfoil) and os.path.isfile(params.airfoil)     # a coordinate file
+        g["section"] = XF.rel(params.airfoil, folder) if own else params.airfoil
+    else:
+        sp = params.section_path()
+        g["section"] = XF.rel(os.path.abspath(sp), folder) if os.path.exists(sp) else params.section_table
+    extra = dict(extra or {})
+    if params.section_tables and "section_tables" not in extra:
+        extra["section_tables"] = params.section_tables
+    for k, v in extra.items():
+        full = XF.resolve(v, base)
+        g[k] = XF.rel(full, folder) if os.path.exists(full) else v
+    return g
 
 
 def _clean(v):
@@ -422,15 +389,12 @@ def cosine_stations(r0, r1, n=61):
     return r0 + (r1 - r0) * 0.5 * (1.0 - np.cos(np.pi * np.linspace(0.0, 1.0, int(n))))
 
 
-MSC_VARY = {n: Vary(n in ("pitch", "chord")) for n in VARY_NAMES}   # msc_blade_params.dat: pitch and chord change
-
-
 def msc_params(n=61, vary=None):
     """The MSc blade as the pipeline builds it (the polynomials of x_blade_new.py,
     D = 1.4 m, 5 blades, the root at R_VALUES[0], hub_new's hub height)
     tabulated at n cosine-clustered stations: the cubic splines through them
     follow the polynomials to 6e-6 of each distribution's range. vary: the
-    vary lines (msc_blade_params.dat has MSC_VARY), default none."""
+    vary lines ({name: Vary}), default none."""
     import x_blade_new as XB
     root = float(XB.R_VALUES[0])
     r = cosine_stations(root, 1.0, n)
@@ -1076,19 +1040,6 @@ class BladeSpace:
         return space, space.design_of(vals)
 
 
-def space_record(space, design, params, settings=None):
-    """The set-up as plain data: the parameter file (path and contents' globals),
-    the settings and the space with the design in it."""
-    return {"geometry": "blade", "created": datetime.datetime.now().isoformat(timespec="seconds"),
-            "params_file": params.path,
-            "globals": {"diameter_m": params.diameter, "blades": params.blades, "root_r": params.root_r,
-                        "hub_height_m": params.hub_height, "hub_base_m": params.hub_base,
-                        "hub_top_m": params.hub_top, "hub_x_m": params.hub_x, "section_table": params.section_table,
-                        "airfoil": params.airfoil},
-            "vary": None if params.vary is None else {n: [v.on, v.lo, v.hi] for n, v in params.vary.items()},
-            "settings": dict(settings or {}), "space": space.to_dict(design)}
-
-
 def file_space(params, design, free=None):
     """The design space as the parameter file sets it up: the parameters flagged Y free, within their ranges
     where the file gives them (default_bounds otherwise); free (names) when the file has no vary line."""
@@ -1101,26 +1052,6 @@ def outside_bounds(space, design):
     outside it)."""
     vals = space.values(design)
     return [n for n, (lo, hi) in zip(space.all_names, space.all_bounds) if not lo <= vals[n] <= hi]
-
-
-def load_blade_space(path):
-    """(space, design, record) of a set-up the design tool saved
-    (<case>_design_space.json); the parameter file is read again from the path
-    the record names, with the record's number of blades (the tool can change
-    it):
-
-        space, design, rec = load_blade_space("outputs/blade/gui_design_space.json")
-        x0, bounds = space.to_vector(design), space.bounds
-        d = space.to_design(x)
-        problems = design_problems(d, space.params)
-    """
-    with open(path) as fh:
-        rec = json.load(fh)
-    params = read_params(rec["params_file"])
-    if rec.get("globals", {}).get("blades") is not None:
-        params = with_blades(params, rec["globals"]["blades"])
-    space, design = BladeSpace.from_dict(params, rec["space"])
-    return space, design, rec
 
 
 # --------------------------------------------------------------------------
@@ -1279,21 +1210,16 @@ def _component_space(comp, params, design, free=None):
 
 
 def load_component(path, orders=None, segments=None, free=None):
-    """A blade from a component file (xgeom_files.py, kind blade) or an old parameter file (read_params, its
-    curves fitted as fit_design fits them, free as its vary lines say, else the names in free): an XF.Loaded
-    with the parameters, the design, the design space (every variable, the held ones fixed), the file's
-    settings (SETTING_TYPES; an old file has none), its name, notes and extra geometry (section_tables).
+    """A blade from a component file (xgeom_files.py, kind blade): an XF.Loaded with the parameters, the design
+    (each curve as its var lines give it; a curve without them fitted to its column as fit_design fits it,
+    orders and segments, or as the table has it), the design space (every variable, the held ones fixed; a
+    variable without a var line free as the vary lines say, else as the names in free), the file's settings
+    (SETTING_TYPES), its name, notes and extra geometry (section_tables).
 
         ld = load_component("msc_blade.txt")
         x0, bounds = ld.space.to_vector(ld.design), ld.space.bounds
         d = ld.space.to_design(x)
     """
-    name = os.path.splitext(os.path.basename(path))[0]
-    if not XF.is_component(path):
-        params = read_params(path)
-        design, _ = fit_design(params, orders, segments)
-        notes, extra = XF.legacy_header(path, GLOBALS, ("section_tables",))
-        return XF.Loaded("blade", params, design, file_space(params, design, free), {}, name, notes, extra, True)
     comp = XF.read_component(path)
     if comp.kind != "blade":
         raise ValueError(f"{path}: a {comp.kind} file, not a blade's")
@@ -1302,7 +1228,7 @@ def load_component(path, orders=None, segments=None, free=None):
     space = _component_space(comp, params, design, free)
     extra = {k: comp.geometry[k] for k in ("section_tables",) if k in comp.geometry}
     return XF.Loaded("blade", params, design, space, XF.typed_settings(comp, SETTING_TYPES), comp.name,
-                     list(comp.notes), extra, False)
+                     list(comp.notes), extra)
 
 
 def write_component(path, params, design, space, settings=None, name=None, notes=(), extra=None):
@@ -1311,7 +1237,6 @@ def write_component(path, params, design, space, settings=None, name=None, notes
     (SETTING_TYPES), each curve's form, every variable of space (value, bounds, free) and the distributions at
     the parameter file's rows (their fractions of the span on the design's span, rounded as written)."""
     folder = os.path.dirname(os.path.abspath(path))
-    base = os.path.dirname(params.path) if params.path else folder
     comp = XF.Component("blade", name or os.path.splitext(os.path.basename(path))[0], list(notes))
     g = comp.geometry
     g["diameter_m"] = XF.num(design.diameter)
@@ -1321,18 +1246,7 @@ def write_component(path, params, design, space, settings=None, name=None, notes
     if design.hub_cone:
         for slot, key in HUB_KEYS.items():
             g[key] = XF.num(getattr(design, slot))
-    if params.airfoil:
-        own = os.path.isabs(params.airfoil) and os.path.isfile(params.airfoil)     # a coordinate file
-        g["section"] = XF.rel(params.airfoil, folder) if own else params.airfoil
-    else:
-        sp = params.section_path()
-        g["section"] = XF.rel(os.path.abspath(sp), folder) if os.path.exists(sp) else params.section_table
-    extra = dict(extra or {})
-    if params.section_tables and "section_tables" not in extra:
-        extra["section_tables"] = params.section_tables
-    for k, v in extra.items():
-        full = XF.resolve(v, base)
-        g[k] = XF.rel(full, folder) if os.path.exists(full) else v
+    g.update(_section_keys(params, folder, extra))
     comp.settings = XF.settings_text(settings, SETTING_TYPES)
     for c in CURVES:
         cu = design.curves[c]

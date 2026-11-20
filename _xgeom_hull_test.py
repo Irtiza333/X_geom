@@ -2,7 +2,7 @@
 _xgeom_hull_test.py
 
 Self-check for the hull in the design tool (xgeom_hull.py) and the vehicle (xgeom_vehicle.py): the adapter's
-variables, orders, elliptical sections, set-up and parameter files and build; the placement of the propeller
+variables, orders, elliptical sections, set-up and table files and build; the placement of the propeller
 and the rudder on the hull; with --gui the window in vehicle mode (Save vehicle CAD with the vehicle's CAD
 left out) and the hull alone (xgeom_tool.py).
 
@@ -86,20 +86,21 @@ def test_adapter(tmp):
     hs = HM.hydrostatics(ad.design)
     check("r'* 0.2: breadth 0.4 m, depth 0.508 m (the curves may rise above r* by 0.1 um)",
           [hs["breadth"], hs["depth"]], [0.4, 0.508], 1e-7)
-    path = ad.save_params(os.path.join(tmp, "flat.dat"))
+    path = HM.write_params(os.path.join(tmp, "flat.txt"), HM.design_params(ad.design))
     ad2 = XH.HullAdapter(path)
-    check("the elliptical design as a parameter file, loaded again (order 5): elliptic, within 0.3 mm",
+    check("the elliptical design as a table file, loaded again (order 5): elliptic, within 0.3 mm",
           [ad2.elliptic, 1000 * max(HM.fit_report(ad2.params, ad2.design).values())], [1, 0], 0.3)
     ad.set_free("tail_rp.t2", False)
-    setup = ad.save_space(os.path.join(tmp, "s_design_space.json"))
-    ad3 = XH.HullAdapter()
-    ad3.load_space(setup)
-    sp, des, _ = HM.load_hull_space(setup)
-    check("Save set-up, then load_space and load_hull_space: values, bounds, free flags, vector",
+    setup = ad.save_file(os.path.join(tmp, "s.txt"))
+    ad3 = XH.HullAdapter(setup)
+    ld = HM.load_component(setup)
+    sp, des = ld.space, ld.design
+    check("Save set-up (a component file), loaded by the adapter and by load_component: values, bounds, free "
+          "flags, vector (to the figures written)",
           [max(abs(ad3.values[k] - ad.values[k]) for k in ad.values),
            max(abs(ad3.bounds(k)[i] - ad.bounds(k)[i]) for k in ad.values for i in (0, 1)),
            ad3.is_free("tail_rp.t2"), sp.names == ad.free_space().names,
-           np.abs(sp.to_vector(des) - ad.free_space().to_vector(ad.design)).max()], [0, 0, 0, 1, 0], 1e-12)
+           np.abs(sp.to_vector(des) - ad.free_space().to_vector(ad.design)).max()], [0, 0, 0, 1, 0], 1e-9)
     ad.set_elliptic(False)
     check("circular sections again: 2 curves, r' = r",
           [len(ad.names), ad.design.rp is None, np.abs(ad.design.radius("rp", x) - ad.design.radius("r", x)).max()],
@@ -183,7 +184,7 @@ def test_aft_hull(tmp):
     print("\na body without a nose (the aft half: hull_modify with Ln 0)")
     import xgeom_from_cad as FC
     params = aft_params()
-    pp = HM.write_params(os.path.join(tmp, "aft_params.dat"), params)
+    pp = HM.write_params(os.path.join(tmp, "aft_table.txt"), params)
     d = HM.fit_design(HM.read_params(pp))
     space = HM.HullSpace(d)
     full = HM.suboff_params()
@@ -227,10 +228,9 @@ def test_aft_hull(tmp):
 
 
 def test_from_cad(tmp):
-    print("\nthe hull's set-up from a parameter file or a CAD (xgeom_from_cad.py)")
+    print("\nthe hull's set-up from a table file or a CAD (xgeom_from_cad.py)")
     import xgeom_from_cad as FC
-    params = HM.read_params(os.path.join(HERE, HM.SUBOFF_PARAMS)) if os.path.exists(os.path.join(HERE, HM.SUBOFF_PARAMS)) \
-        else HM.suboff_params()
+    params = HM.suboff_params()
     orders = FC.best_hull_orders(params)
     scale = float(params.r.max())
     d = HM.fit_design(params, orders={k: v[0] for k, v in orders.items()})
@@ -255,7 +255,7 @@ def test_from_cad(tmp):
     check("From CAD: every variable inside its bounds (a negative coefficient of a high-order fit included), the "
           "lengths and curves free, the radii held", [len(inside), ad.is_free("tail") and ad.is_free("tail_r.N2"),
                                                      ad.is_free("r")], [0, 1, 0], 0)
-    check("From CAD (SUBOFF's STEP): the parameter file and the set-up written, the set-up's curves of the orders "
+    check("From CAD (SUBOFF's STEP): the table file and the set-up written, the set-up's curves of the orders "
           "found, L within 1 mm and the volume within 0.5 % of the STEP's, the adapter starts from it with no "
           "problems, progress said",
           [os.path.exists(res["file"]), os.path.exists(res["setup"]), ld.params.axisymmetric,

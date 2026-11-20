@@ -27,7 +27,8 @@ points or of segments in the tool, which refits the curve and shows the error
             blade_control.FREE free, the others held)
     hull    hull_extraction's stations of the CAD (hull_extraction.stations_
             from_cad; closed transverse sections) give the station table
-            <case>_params.dat (x, the half-height r and half-width r' from the
+            <case>_table.txt (a table file, hull_modify.write_params: x, the
+            half-height r and half-width r' from the
             sections' depth and breadth, axisymmetric when alike; the nose, the
             middle body and the tail from the sectional area curve's parallel
             middle body, cap 0) and the set-up <case>.txt with each CST curve of
@@ -58,11 +59,11 @@ points or of segments in the tool, which refits the curve and shows the error
                                                           rudder file; 19 Nov 2026)
 
 Command line (the file a STEP or IGES; for the blade an extracted <case>.txt, for
-the hull a <case>_params.dat: the set-up only; written next to the file):
+the hull a table file <case>_table.txt: the set-up only; written next to the file):
 
     python xgeom_from_cad.py rudder Wind_Tunnel_Rudder.stp
     python xgeom_from_cad.py blade bb2/outputs/bb2_prop.txt
-    python xgeom_from_cad.py hull bb2/outputs/bb2_hull_params.dat --case bb2_hull
+    python xgeom_from_cad.py hull bb2/outputs/bb2_hull_table.txt --case bb2_hull
     python xgeom_from_cad.py rudder_planar outputs --case wind_tunnel_rudder   (an extraction folder: the
                                                                              planar set-up, no OCC needed)
     python xgeom_from_cad.py rudder bb2/outputs/bb2_sternplane.txt   (a planar rudder's file: the original
@@ -211,9 +212,9 @@ def hull_params_from_cad(cad_path, n=201, case=None):
 
 
 def hull_setup(params_path, setup_path, source=None):
-    """The set-up of a hull's parameter file: as the tool starts from the file (xgeom_hull.HullAdapter: the
-    lengths and curves free, the radii held), each curve of the CST order that fits the stations best
-    (best_hull_orders); written as a component file. Returns (path, orders)."""
+    """The set-up of a hull's table file (its stations, no curve or var lines): as the tool starts from the file
+    (xgeom_hull.HullAdapter: the lengths and curves free, the radii held), each curve of the CST order that fits
+    the stations best (best_hull_orders); written as a component file. Returns (path, orders)."""
     import hull_modify as HM
     import xgeom_hull as XH
     orders = best_hull_orders(HM.read_params(params_path))
@@ -233,7 +234,7 @@ def hull_from_cad(cad_path, out_dir, case=None, progress=print, n=201):
     t0 = time.time()
     progress(f"cutting {n} stations of {os.path.basename(cad_path)}")
     params, hs = hull_params_from_cad(cad_path, n, case)
-    path = HM.write_params(os.path.join(out_dir, f"{case}_params.dat"), params)
+    path = HM.write_params(os.path.join(out_dir, f"{case}_table.txt"), params)
     params = HM.read_params(path)
     progress("fitting the curves")
     setup, orders = hull_setup(path, os.path.join(out_dir, f"{case}.txt"), os.path.basename(cad_path))
@@ -661,7 +662,7 @@ def main(argv=None):
                                              "(the module docstring).")
     ap.add_argument("kind", choices=KINDS)
     ap.add_argument("file", help="a STEP or IGES file; for the blade an extracted <case>.txt, for the hull a "
-                                 "<case>_params.dat (the set-up only)")
+                                 "table file <case>_table.txt (the set-up only)")
     ap.add_argument("--out", help="the folder to write in (default: the file's)")
     ap.add_argument("--case", help="the case name (default: from the file's name)")
     a = ap.parse_args(argv)
@@ -677,7 +678,7 @@ def main(argv=None):
         print(setup)
         print("\n".join(lines))
         return
-    table = a.file.lower().endswith((".txt", ".dat"))
+    table = a.file.lower().endswith(".txt")
     if table and a.kind == "rudder":
         import xgeom_files as XF
         if not (a.file.lower().endswith(".txt") and XF.component_kind(a.file) == "rudder"):
@@ -688,7 +689,7 @@ def main(argv=None):
         print("\n".join(res["report"]))
         return
     if table:
-        case = a.case or re.sub(r"_params$", "", case_name(a.file))
+        case = a.case or re.sub(r"_table$", "", case_name(a.file))
         if a.kind == "blade":
             setup, forms = blade_setup(a.file, os.path.join(out, f"{case}_setup.txt"))
             lines = [f"{c}: " + ("2 segments" if f[0][0] == 2 else f"1 segment, {f[0][1] + 1} points")

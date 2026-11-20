@@ -2,7 +2,7 @@
 hull_modify.py
 
 A hull with elliptical sections (submarines, UUVs, torpedoes, airships, fuselages) described by a few smooth
-curves, which are the design variables. A hull starts from a station table (a parameter file: SUBOFF's from its
+curves, which are the design variables. A hull starts from a station table (a table file: SUBOFF's from its
 equations, or any table of half-heights and half-widths), the curves are fitted to it, and any design gives its
 stations, hydrostatics, section points and CAD.
 
@@ -27,30 +27,34 @@ A curve's values are its exponent and its free coefficients (nose b_0 .. b_(n-2)
 order n. Its control points, drawn in the plots, are the coefficients at psi = i/n times the class function,
 scaled to radii. An axisymmetric hull (SUBOFF) has the r curves only (r' = r).
 
-Parameter file (a station table; read_params, write_params):
-    # XGeom hull parameters
+Component file (xgeom_files.py, kind hull; claude/xgeom-file-formats.md): the lengths, the axisymmetry, each
+curve's order ('# curve nose_r cst 5'), every variable's value, bounds and free flag ('# var') and the station
+table. A table file has no curve or var lines (read_params, write_params):
+    # XGeom component
+    # kind          hull
+    # name          suboff
+    # ---- geometry
     # nose_m        1.016
     # middle_m      2.22885
     # tail_m        1.016
     # cap_m         0.09525           optional, default 0
-    # x_m  r_m  rp_m                  rp_m optional: no column means axisymmetric
-    0.000000  0.000000  0.000000
+    # axisymmetric  Y                 N: elliptical sections, with the rp_m column
+    # ---- stations
+    #        x_m          r_m         (rp_m)
+      0.000000000  0.000000000
     ...
-The fit densifies each part of the table (monotone cubic, the nose in sqrt(x)), fits the coefficients by least
-squares and each exponent by a one-dimensional search.
-
-Component file (xgeom_files.py, kind hull; claude/xgeom-file-formats.md): the same lengths and station table
-with the axisymmetry, each curve's order ('# curve nose_r cst 5') and every variable's value, bounds and free
-flag; load_component reads one exactly (or an old parameter file, fitted), write_component writes one (the
-design tool's Save set-up, write_case's <case>.txt).
+load_component reads a component file exactly; a table file's curves are fitted: the fit densifies each part
+of the table (monotone cubic, the nose in sqrt(x)), fits the coefficients by least squares and each exponent
+by a one-dimensional search. write_component writes the design as one (the design tool's Save set-up,
+write_case's <case>.txt). Old parameter files (.dat) are not read (20 Nov 2026).
 
 Outputs (write_case, outputs/hull/): <case>.txt (the design as a component file), <case>_design.json (the design
 exactly), <case>_stations.dat and <case>_hydrostatics.dat (hull_extraction), <case>_sections_m.dat (section
 points: '#k', then x y z per point, m), <case>_check.png, and with OCC <case>.step: one NURBS face per part, the
 profile B-spline times the rational circle (exact ellipses).
 
-    python hull_modify.py --suboff                 fit SUBOFF (suboff_hull_params.dat) and write the case
-    python hull_modify.py params.dat [--case NAME] [--order 5] [--no-cad]
+    python hull_modify.py --suboff                 fit SUBOFF (its equations, suboff.py) and write the case
+    python hull_modify.py table.txt [--case NAME] [--order 5] [--no-cad]
 """
 
 from __future__ import annotations
@@ -79,7 +83,6 @@ EXP_KEY = {"nose": "N1", "tail": "N2"}
 LENGTHS = ("nose", "middle", "tail", "cap")
 SECTION_POINTS = 64                       # points per section in the section file
 FIT_POINTS = 600                          # points per part in a fit, evenly spaced along the curve
-SUBOFF_PARAMS = "suboff_hull_params.dat"
 
 
 def part_kinds(nose):
@@ -344,62 +347,27 @@ class HullParams:
 
 
 def read_params(path):
-    """The HullParams of a parameter file (see the module docstring), or of a component file (xgeom_files.py:
-    its lengths and station table; load_component gives its design and variables too)."""
-    if XF.is_component(path):
-        comp = XF.read_component(path)
-        if comp.kind != "hull":
-            raise ValueError(f"{path}: a {comp.kind} file, not a hull's")
-        return _component_params(comp)
-    head, rows = {}, []
-    with open(path) as fh:
-        for line in fh:
-            s = line.strip()
-            if not s:
-                continue
-            if s.startswith("#"):
-                parts = s[1:].split()
-                if len(parts) >= 2 and parts[0] in ("nose_m", "middle_m", "tail_m", "cap_m", "axisymmetric"):
-                    head[parts[0]] = parts[1]
-                continue
-            rows.append([float(v) for v in s.split()])
-    missing = [k for k in ("nose_m", "middle_m", "tail_m") if k not in head]
-    if missing:
-        raise ValueError(f"{path}: no {', '.join(missing)} in the header")
-    tab = np.array(rows, dtype=float)
-    if tab.ndim != 2 or tab.shape[1] not in (2, 3) or len(tab) < 4:
-        raise ValueError(f"{path}: the table needs columns x_m r_m [rp_m] and at least 4 rows")
-    if np.any(np.diff(tab[:, 0]) <= 0):
-        raise ValueError(f"{path}: x must rise from row to row")
-    ln, lm, lt = (float(head[k]) for k in ("nose_m", "middle_m", "tail_m"))
-    lc = float(head.get("cap_m", 0.0))
-    if ln < 0 or lt <= 0 or lm < 0 or lc < 0:
-        raise ValueError(f"{path}: the tail length must be positive, nose, middle and cap not negative (nose 0: "
-                         f"a body without a nose)")
-    length = ln + lm + lt + lc
-    if abs(tab[0, 0]) > 1e-6 * length or abs(tab[-1, 0] - (length - lc)) > 1e-6 * length and \
-            abs(tab[-1, 0] - length) > 1e-6 * length:
-        raise ValueError(f"{path}: the table must run from x = 0 to the end of the tail (or of the cap)")
-    rp = tab[:, 2] if tab.shape[1] == 3 else tab[:, 1].copy()
-    axi = tab.shape[1] == 2 or bool(int(head.get("axisymmetric", "0"))) or np.allclose(rp, tab[:, 1], atol=1e-12)
-    return HullParams(ln, lm, lt, lc, tab[:, 0], tab[:, 1], rp, axi, os.path.abspath(path))
+    """The HullParams of a component file (see the module docstring): its lengths and station table
+    (load_component gives its design and variables too)."""
+    comp = XF.read_component(path)
+    if comp.kind != "hull":
+        raise ValueError(f"{path}: a {comp.kind} file, not a hull's")
+    return _component_params(comp)
 
 
-def write_params(path, params, notes=()):
-    """Write a parameter file (read_params reads it back)."""
-    lines = ["# XGeom hull parameters"] + [f"# {n}" for n in list(params.notes) + list(notes)]
-    lines += [f"# nose_m        {params.nose:.9g}", f"# middle_m      {params.middle:.9g}",
-              f"# tail_m        {params.tail:.9g}", f"# cap_m         {params.cap:.9g}",
-              f"# axisymmetric  {int(params.axisymmetric)}"]
-    if params.axisymmetric:
-        lines.append("# x_m  r_m")
-        lines += [f"{x:.9f}  {r:.9f}" for x, r in zip(params.x, params.r)]
-    else:
-        lines.append("# x_m  r_m  rp_m")
-        lines += [f"{x:.9f}  {r:.9f}  {rp:.9f}" for x, r, rp in zip(params.x, params.r, params.rp)]
-    with open(path, "w") as fh:
-        fh.write("\n".join(lines) + "\n")
-    return path
+def write_params(path, params, name=None, notes=()):
+    """Write the station table as a table file, a component file with no curve or var lines (read_params reads it
+    back; load_component fits the curves to it): the lengths, the axisymmetry, the notes of params and notes, and
+    x, r (and r') at the stations, 9 decimals."""
+    comp = XF.Component("hull", name or os.path.splitext(os.path.basename(path))[0],
+                        list(params.notes) + list(notes))
+    g = comp.geometry
+    for k, key in LENGTH_KEYS.items():
+        g[key] = XF.num(getattr(params, k))
+    g["axisymmetric"] = XF.yn(params.axisymmetric)
+    comp.columns = ("x_m", "r_m") + (() if params.axisymmetric else ("rp_m",))
+    comp.table = np.column_stack([params.x, params.r] + ([] if params.axisymmetric else [params.rp]))
+    return XF.write_component(path, comp)
 
 
 def suboff_params(n=101):
@@ -636,20 +604,6 @@ class HullSpace:
         return space, d
 
 
-def space_record(space, design, params=None, settings=None):
-    return {"geometry": "hull", "created": datetime.datetime.now().isoformat(timespec="seconds"),
-            "params_file": getattr(params, "path", None), "settings": dict(settings or {}),
-            "space": space.to_dict(design)}
-
-
-def load_hull_space(path):
-    """(space, design, record) of a saved set-up (<case>_design_space.json)."""
-    with open(path) as fh:
-        rec = json.load(fh)
-    space, design = HullSpace.from_dict(rec["space"])
-    return space, design, rec
-
-
 def design_record(design):
     """The design as plain data (exact)."""
     rec = {"geometry": "hull", "axisymmetric": design.axisymmetric,
@@ -805,27 +759,22 @@ def _component_space(comp, design, free=None):
 
 
 def load_component(path, orders=None, free=None):
-    """A hull from a component file (xgeom_files.py, kind hull) or an old parameter file (read_params, its curves
-    fitted by fit_design, free the names in free, default DEFAULT_FREE): an XF.Loaded with the parameters (the
-    station table), the design, the design space (every variable, the held ones fixed), no settings, its name
-    and notes.
+    """A hull from a component file (xgeom_files.py, kind hull): an XF.Loaded with the parameters (the station
+    table), the design (each curve as its var lines give it; without them fitted by fit_design, a table file's
+    in the orders of its curve lines, else orders, default DEFAULT_ORDER), the design space (every variable, the
+    held ones fixed; a variable without a var line free as the vary lines say, else as the names in free,
+    default DEFAULT_FREE), the settings (SETTING_TYPES), its name and notes.
 
         ld = load_component("suboff_hull.txt")
         x0, bounds = ld.space.to_vector(ld.design), ld.space.bounds
     """
-    name = os.path.splitext(os.path.basename(path))[0]
-    if not XF.is_component(path):
-        params = read_params(path)
-        design = fit_design(params, orders)
-        notes, _ = XF.legacy_header(path, tuple(LENGTH_KEYS.values()) + ("axisymmetric",))
-        return XF.Loaded("hull", params, design, HullSpace(design, free=free), {}, name, notes, {}, True)
     comp = XF.read_component(path)
     if comp.kind != "hull":
         raise ValueError(f"{path}: a {comp.kind} file, not a hull's")
     params = _component_params(comp)
     design = _component_design(comp, params, orders)
     return XF.Loaded("hull", params, design, _component_space(comp, design, free),
-                     XF.typed_settings(comp, SETTING_TYPES), comp.name, list(comp.notes), {}, False)
+                     XF.typed_settings(comp, SETTING_TYPES), comp.name, list(comp.notes), {})
 
 
 def _mapped_x(params, design):
@@ -1191,10 +1140,9 @@ def write_case(out_dir, case, design, params=None, space=None, cad=True, plot=Tr
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Fit a hull's curves to a parameter file and write the case.")
-    ap.add_argument("params", nargs="?", help="parameter file (a station table)")
-    ap.add_argument("--suboff", action="store_true", help=f"SUBOFF ({SUBOFF_PARAMS}, written from its equations "
-                                                         "if it is not there)")
+    ap = argparse.ArgumentParser(description="Fit a hull's curves to a station table and write the case.")
+    ap.add_argument("params", nargs="?", help="a component file (its station table)")
+    ap.add_argument("--suboff", action="store_true", help="SUBOFF (the station table of its equations)")
     ap.add_argument("--case", default=None, help="case name (default: the file's name, suboff_fit for SUBOFF)")
     ap.add_argument("--order", type=int, default=DEFAULT_ORDER, help=f"order of every curve (default "
                                                                       f"{DEFAULT_ORDER})")
@@ -1202,14 +1150,11 @@ def main():
     ap.add_argument("--no-cad", action="store_true", help="no STEP")
     args = ap.parse_args()
     if args.suboff:
-        if not os.path.exists(SUBOFF_PARAMS):
-            write_params(SUBOFF_PARAMS, suboff_params())
-        path, case = SUBOFF_PARAMS, args.case or "suboff_fit"
+        params, case = suboff_params(), args.case or "suboff_fit"
     elif args.params:
-        path, case = args.params, args.case or os.path.splitext(os.path.basename(args.params))[0]
+        params, case = read_params(args.params), args.case or os.path.splitext(os.path.basename(args.params))[0]
     else:
-        ap.error("give a parameter file or --suboff")
-    params = read_params(path)
+        ap.error("give a component file or --suboff")
     names = [f"{k}_{v}" for v in (("r",) if params.axisymmetric else VIEWS) for k in part_kinds(params.nose)]
     design = fit_design(params, {n: args.order for n in names})
     files, hs = write_case(args.out, case, design, params, HullSpace(design), not args.no_cad)

@@ -24,9 +24,10 @@ places the generator line). Writes into the output folder:
   bb2_sections_raw.dat     the cuts, x y z (mm, the STP frame), a block per r/R
   bb2_section_tables.dat   the section shape at each r/R, para.py's section table format, a block per r/R
   bb2_section_table.dat    the shape at r/R 0.7 alone: the one table blade_modify (para.py, BladeSurface) takes
-  bb2_blade_params.dat     the XGeom blade parameter file (blade_modify.read_params): D, Z, the root, the tables,
-                           every vary line N, r/R P/D c/D t/c f/c skew_deg rake/D; c/D beyond r/R 0.9 is divided by
-                           BladeSurface's tip taper, so the CAD gets the measured chord
+  bb2_blade.txt            the XGeom blade as a table file (a component file without curve or var lines,
+                           blade_modify.write_params): D, Z, the root, the tables, every vary line N, r/R P/D c/D t/c
+                           f/c skew_deg rake/D, the frame as a note ('bb2_frame x0_mm .. theta_ref_deg ..'); c/D
+                           beyond r/R 0.9 is divided by BladeSurface's tip taper, so the CAD gets the measured chord
   bb2_sections_check.png   the distributions against r/R
 and prints, per cut, how far the cut lies from the blade the files give (para.py's mapping of the cut's own table;
 BladeSurface with one table, bb2_section_table.dat).
@@ -275,14 +276,14 @@ def read_tables(path):
 
 
 def read_frame(params_path):
-    """(x0 mm, theta_ref rad) from the parameter file's '# bb2_frame' line."""
-    with open(params_path) as fh:
-        for line in fh:
-            parts = line[1:].split() if line.startswith("#") else []
-            if parts and parts[0] == "bb2_frame":
-                v = dict(zip(parts[1::2], parts[2::2]))
-                return float(v["x0_mm"]), np.radians(float(v["theta_ref_deg"]))
-    raise ValueError(f"{params_path}: no '# bb2_frame' line")
+    """(x0 mm, theta_ref rad) from the blade file's 'bb2_frame' note."""
+    import xgeom_files as XF
+    for note in XF.read_component(params_path).notes:
+        parts = note.split()
+        if parts and parts[0] == "bb2_frame":
+            v = dict(zip(parts[1::2], parts[2::2]))
+            return float(v["x0_mm"]), np.radians(float(v["theta_ref_deg"]))
+    raise ValueError(f"{params_path}: no 'bb2_frame' note")
 
 
 def blade_to_cad(pts_m, x0, theta_ref):
@@ -391,30 +392,21 @@ def main():
     with open(os.path.join(out, "bb2_section_table.dat"), "w") as fh:
         fh.write(table_text(tables[k_ref]).replace(TABLE_HEAD, TABLE_HEAD + f" (BB2's propeller at r/R {REF_RR})"))
     hub_height = np.ceil(2.02 * max(abs(v) for s in secs[:1] for v in _root_extent(s, x0)) / 100.0) / 10.0
-    lines = ["# XGeom propeller blade parameters",
-             f"# BB2's propeller, cut from {os.path.basename(prop_path)} by bb2_sections.py",
-             "# c/D beyond r/R 0.9 is the measured chord over BladeSurface's tip taper sqrt(1 - t^3), t = (r/R - 0.9) "
-             "/ 0.1; the row at r/R 1 is continued from the last cuts (P/D the drawing's)",
-             f"# bb2_frame  x0_mm {x0:.4f}  theta_ref_deg {np.degrees(theta_ref):.8f}",
-             "# section_tables  bb2_section_tables.dat      (the shape per r/R: bb2_build.py)",
-             f"# diameter_m     {D_MM / 1000.0:g}",
-             f"# blades         {BLADES}",
-             f"# root_r         {ROOT_RR:g}",
-             f"# hub_height_m   {hub_height:g}",
-             "# section_table  bb2_section_table.dat",
-             "# Y/N per parameter: Y changes it (a design variable; low high, optional: the range of its values), "
-             "N keeps it as this file has it"]
-    lines += [f"# vary  {n:<11s} N" for n in ("pitch", "chord", "thickness", "camber", "skew", "rake", "radius",
-                                               "hub_radius", "hub_height")]
-    lines.append("# r/R  P/D  c/D  t/c  f/c  skew_deg  rake/D")
-    lines += ["  ".join(f"{v:.8f}" for v in row) for row in table]
-    params_path = os.path.join(out, "bb2_blade_params.dat")
-    with open(params_path, "w") as fh:
-        fh.write("\n".join(lines) + "\n")
+    import blade_modify as BM
+    params_path = BM.write_params(
+        os.path.join(out, "bb2_blade.txt"),
+        BM.BladeParams(D_MM / 1000.0, BLADES, ROOT_RR, os.path.join(out, "bb2_section_table.dat"), table[:, 0],
+                       {c: table[:, i + 1] for i, c in enumerate(BM.CURVES)}, hub_height=float(hub_height),
+                       vary={n: BM.Vary(False) for n in BM.VARY_NAMES},              # every vary line N
+                       section_tables=os.path.join(out, "bb2_section_tables.dat")),   # the shape per r/R
+        "bb2_blade",
+        [f"BB2's propeller, cut from {os.path.basename(prop_path)} by bb2_sections.py",
+         "c/D beyond r/R 0.9 is the measured chord over BladeSurface's tip taper sqrt(1 - t^3), t = (r/R - 0.9) / 0.1; "
+         "the row at r/R 1 is continued from the last cuts (P/D the drawing's)",
+         f"bb2_frame  x0_mm {x0:.4f}  theta_ref_deg {np.degrees(theta_ref):.8f}"])
     print(f"wrote {params_path} and the section files ({time.time() - t0:.0f} s)")
 
     # checks
-    import blade_modify as BM
     from blade_surface_new import BladeSurface
     params = BM.read_params(params_path)
     design, _ = BM.fit_design(params)
@@ -460,7 +452,7 @@ def plot_check(path, table):
         ax.set_xlabel("r/R")
         ax.set_ylabel(names[k])
         ax.grid(True, color="#e4e3df")
-    fig.suptitle("BB2's propeller: the distributions of bb2_blade_params.dat (the cuts and the row at r/R 1)")
+    fig.suptitle("BB2's propeller: the distributions of bb2_blade.txt (the cuts and the row at r/R 1)")
     fig.tight_layout()
     fig.savefig(path, dpi=110)
     return path

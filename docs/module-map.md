@@ -26,7 +26,7 @@ Vehicle tab. Each component is an adapter class that the window drives through t
 | `xgeom_hull.py` | The hull: a hull file as variables, views, the CAD build | X_geom, web | hull, wing, contract |
 | `xgeom_wing.py` | The wing and the fin (and the planar rudder's own model): a wing file as variables, views, the CAD build | X_geom, web | wing, contract |
 | `xgeom_vehicle.py` | The Vehicle tab: the propeller, rudders, fins and wings placed on the hull (positions as x/L), `assemble()` | X_geom, web | hull, wing, files, contract |
-| `xgeom_files.py` | The component and assembly files: read, write, convert old `.dat` files | X_geom, web | files, wing, contract |
+| `xgeom_files.py` | The component and assembly files: read and write (an old `.dat` parameter file is refused, named as one) | X_geom, web | files, wing, contract |
 | `xgeom_from_cad.py` | From CAD: a set-up from a STEP or IGES file (extraction and fits per component); a planar rudder's file as the original modified below H | both (the Rudder copy is older) | tool, wing, hull, blade |
 | `vehicle_cad.py` | The vehicle as one CAD solid (Vehicle CAD): each component's CAD placed and fused; blade solids, booleans | X_geom | hull, wing, blade |
 
@@ -40,9 +40,9 @@ Vehicle tab. Each component is an adapter class that the window drives through t
 | `tip_cap.py` | The rudder's tip cap: its model, fit and loops (numpy and scipy only) | both, web | tip_cap, wing |
 | `wing_modify.py` | Wings, fins and the planar rudder: the six distributions over the span, sections, tilted tip, cap, design space, component files | X_geom, web | wing, files, contract |
 | `blade_modify.py` | The propeller blade's design space: the distributions as Bezier curves over r/R, the blade surface, its CAD | X_geom, web | blade, files, contract |
-| `blade_control.py` | A blade from a component or parameter file, built with the MSc blade code | X_geom, web | through blade_modify |
+| `blade_control.py` | A blade from a component file, built with the MSc blade code | X_geom, web | through blade_modify |
 | `blade_sections.py` | Blades whose section shape changes along the span (one section table per radius) | X_geom, web | blade |
-| `blade_vary.py` | The blade file's vary lines: which parameters change, and their ranges | X_geom | blade |
+| `blade_vary.py` | What changes in a blade file: its vary lines (and their ranges), or its free var lines (`read_free`); standard library only, for `Initial_sampling.py` | X_geom | blade |
 | `prop_hub.py` | The propeller's hub: the DRDC cylinder, or a cone with a rounded nose | X_geom, web | blade |
 | `hull_modify.py` | Hulls with elliptical sections from a few CST curves: fit, design space, sections, CAD | X_geom, web | hull_modify, hull, files, wing, contract |
 | `suboff.py` | The DARPA SUBOFF bare hull from its equations (the public example) | X_geom | hull_modify, hull_eq |
@@ -104,7 +104,7 @@ The Bezier replica of a rudder section, used to fit the original rudder's sectio
 
 | Module | What it does | Where | Tests |
 | --- | --- | --- | --- |
-| `Initial_sampling.py` | Round-0 designs for the surrogate (Latin hypercube over the blade file's vary lines) and their CAD | X_geom | blade |
+| `Initial_sampling.py` | Round-0 designs for the surrogate (Latin hypercube over what `msc_blade.txt` frees: its vary lines, else its free var lines) and their CAD | X_geom | blade |
 | `pipeline_config.py`, `pipeline_io.py` | The pipeline's paths and table helpers | X_geom | none |
 | `plot_fig1_parameter_space.py`, `plot_fig2_tip_closure.py`, `plot_fig3_five_surfaces.py` | The DRDC pipeline's explainer figures | X_geom | none |
 
@@ -161,7 +161,7 @@ unrelated to XGeom).
 - `Bezier code/` and `Alternate truncation/`: the user's earlier Bezier and truncation work, kept for reference;
   the tool imports none of it.
 - At the root: the component samples `fin.txt`, `wing.txt`, `suboff_hull.txt`, `msc_blade.txt` (what the tool
-  writes, LF), their old parameter files `*_params.dat`, `airfoil_data_fixed.csv` (the MSc blade's sections),
+  writes, LF; the only file format since 20 Nov 2026), `airfoil_data_fixed.csv` (the MSc blade's sections),
   the wind-tunnel rudder's CAD (`Wind_Tunnel_Rudder.stp`, `.igs`, `.stl`), `XGeom_plan.pdf`.
 
 On the user's machine but not in the repository: copies named `*-1.py` (`blade_modify-1.py`,

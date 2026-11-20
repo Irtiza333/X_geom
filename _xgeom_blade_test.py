@@ -1,8 +1,8 @@
 """
 _xgeom_blade_test.py
 
-Self-check for the propeller blade in XGeom: the parameter file and its fitted
-curves of 1 and 2 segments (blade_modify.py), its vary lines (Y/N per parameter,
+Self-check for the propeller blade in XGeom: the component file (a table file)
+and its fitted curves of 1 and 2 segments (blade_modify.py), its vary lines (Y/N per parameter,
 blade_vary.py, blade_control.py, and para_control in the MSc pipeline:
 para_control_bez_updated, x_blade_new, Initial_sampling.py with the CAD left
 out), the blade radius, hub radius and hub height, the geometry through the MSc
@@ -52,19 +52,20 @@ def check(name, got, want, tol):
 
 
 def msc_file(tmp, table=None):
-    """The MSc blade's parameter file, with another section table if given."""
+    """The MSc blade as a table file (a component file with no curve or var lines), with another section table if
+    given."""
     p = BM.msc_params()
     if table:
         p.section_table = os.path.abspath(table)
-    return BM.write_params(os.path.join(tmp, "msc.dat"), p)
+    return BM.write_params(os.path.join(tmp, "msc.txt"), p)
 
 
 def vary_file(tmp, name, lines, table=None):
-    """The MSc blade's parameter file with '# vary' lines (e.g. 'pitch Y 0.6 1.6') above its table."""
-    head, rest = open(msc_file(tmp, table)).read().split("# r/R", 1)
+    """The MSc blade's table file with '# vary' lines (e.g. 'pitch Y 0.6 1.6') above its table."""
+    head, rest = open(msc_file(tmp, table)).read().split("# ---- distributions", 1)
     path = os.path.join(tmp, name)
     with open(path, "w") as fh:
-        fh.write(head + "".join(f"# vary {s}\n" for s in lines) + "# r/R" + rest)
+        fh.write(head + "".join(f"# vary {s}\n" for s in lines) + "# ---- distributions" + rest)
     return path
 
 
@@ -80,14 +81,14 @@ def refused(fn, *args):
 
 
 def test_file(tmp):
-    print("\nthe parameter file")
+    print("\nthe table file (the geometry and the table: read_params, write_params)")
     import x_blade_new as XB
     path = msc_file(tmp)
     p = BM.read_params(path)
     p0 = BM.msc_params()
     check("written and read back: globals (hub height too) and the table (8 decimals)",
           [p.diameter - 1.4, p.blades - 5, p.root_r - XB.R_VALUES[0], p.hub_height - BM.HUB_HEIGHT,
-           p.section_table == "airfoil_data_fixed.csv",
+           os.path.basename(p.section_table) == "airfoil_data_fixed.csv" and os.path.isfile(p.section_path()),
            max(np.abs(p.values[c] - p0.values[c]).max() for c in BM.CURVES), np.abs(p.r - p0.r).max()],
           [0, 0, 0, 0, 1, 0, 0], 5e-9)
     rf = np.linspace(XB.R_VALUES[0], 1.0, 5001)
@@ -97,45 +98,48 @@ def test_file(tmp):
           [np.abs(p.spline(c)(rf) - fns[c](rf)).max() / np.ptp(fns[c](rf)) for c in BM.CURVES], 0.0, 1e-5)
     q = BM.read_params(path)
     q.root_r, q.hub_height = 0.2, None
-    BM.write_params(os.path.join(tmp, "root02.dat"), q)
-    q2 = BM.read_params(os.path.join(tmp, "root02.dat"))
+    BM.write_params(os.path.join(tmp, "root02.txt"), q)
+    q2 = BM.read_params(os.path.join(tmp, "root02.txt"))
     r, v = q2.rows()
-    check("a root between two rows gets a row of its own (value from the spline); no hub height: None",
+    check("a root between two rows: the table written from it, the root's row from the spline; no hub height: "
+          "None",
           [r[0], r[1] > 0.2, v["pitch"][0] - fns["pitch"](0.2), q2.hub_height is None,
            BM.fit_design(q2, segments=ONE)[0].hub_height], [0.2, 1, 0, 1, BM.HUB_HEIGHT], 1e-5)
-    bad = os.path.join(tmp, "bad.dat")
+    bad = os.path.join(tmp, "bad.txt")
+    cols = "# r/R  P/D  c/D  t/c  f/c  skew_deg  rake/D\n"
     out = []
-    for text in ("# diameter_m 1.4\n# blades 5\n0.2 1 2 3 4 5 6\n",
-                 "# diameter_m 1.4\n# blades 5\n# section_table x.csv\n0.2 1 2 3\n0.3 1 2 3\n0.4 1 2 3\n0.5 1 2 3\n"):
+    for text in ("# diameter_m 1.4\n# blades 5\n" + cols + "0.2 1 2 3 4 5 6\n0.3 1 2 3 4 5 6\n",
+                 "# diameter_m 1.4\n# blades 5\n# section x.csv\n# r/R  P/D  c/D  t/c\n0.2 1 2 3\n0.3 1 2 3\n"):
         with open(bad, "w") as fh:
-            fh.write(text)
+            fh.write("# XGeom component\n# kind blade\n" + text)
         out.append(refused(BM.read_params, bad))
-    check("a file without the section table, or with 4 columns, is refused", out, [1, 1], 0)
+    check("a file without the section, or with 4 columns, is refused", out, [1, 1], 0)
     q = BM.read_params(path)
     q.section_table, q.airfoil = "", "NACA 2416"
-    pa = BM.write_params(os.path.join(tmp, "naca.dat"), q)
+    pa = BM.write_params(os.path.join(tmp, "naca.txt"), q)
     qa = BM.read_params(pa)
     tab = np.loadtxt(qa.section_path(), delimiter=",", skiprows=1)
     pts, _ = BM.blade_points(BM.fit_design(qa, segments=ONE)[0], qa)
     out = []
-    for head in ("# section_table airfoil_data_fixed.csv\n# airfoil naca2412\n", "# airfoil nosuchfoil\n"):
+    for head in ("# section_table airfoil_data_fixed.csv\n# airfoil naca2412\n", "# section nosuchfoil\n"):
         with open(bad, "w") as fh:
-            fh.write("# diameter_m 1.4\n# blades 5\n" + head + open(pa).read().split("# r/R", 1)[1].split("\n", 1)[1])
+            fh.write("# XGeom component\n# kind blade\n# diameter_m 1.4\n# blades 5\n" + head
+                     + open(pa).read().split("# ---- distributions", 1)[1].split("\n", 1)[1])
         out.append(refused(BM.read_params, bad))
-    check("an airfoil by name (NACA 2416): read back, its section table (26 rows), the blade; both keys or an "
-          "unknown airfoil refused", [qa.airfoil == "NACA 2416", qa.section_table == "", tab.shape[0],
+    check("an airfoil by name (NACA 2416): read back, its section table (26 rows), the blade; the section given "
+          "twice (the old keys section_table and airfoil) or an unknown airfoil refused", [qa.airfoil == "NACA 2416", qa.section_table == "", tab.shape[0],
                                       np.all(np.isfinite(pts))] + out, [1, 1, 26, 1, 1, 1], 0)
 
 
 def test_vary(tmp):
     print("\nthe vary lines (Y/N per parameter)")
-    p = BM.read_params(vary_file(tmp, "vary.dat", ["pitch Y 0.6 1.6", "chord y", "skew N", "radius yes 0.6 0.8"]))
+    p = BM.read_params(vary_file(tmp, "vary.txt", ["pitch Y 0.6 1.6", "chord y", "skew N", "radius yes 0.6 0.8"]))
     check("read: Y (y, yes) and N, a range; a name not listed is N; a file with no vary line: None",
           [BM.vary_free(p) == ("pitch", "chord", "radius"), BM.vary_bounds(p) == {"pitch": (0.6, 1.6),
                                                                                  "radius": (0.6, 0.8)},
            p.vary["thickness"].on, p.vary["skew"].on, BM.vary_free(BM.read_params(msc_file(tmp))) is None],
           [1, 1, 0, 0, 1], 0)
-    out = [refused(BM.read_params, vary_file(tmp, "bad_vary.dat", lines))
+    out = [refused(BM.read_params, vary_file(tmp, "bad_vary.txt", lines))
            for lines in (["twist Y"], ["pitch Y", "pitch N"], ["pitch maybe"], ["pitch Y 1.6 0.6"], ["pitch Y 0.6"],
                          ["pitch Y low high"])]
     check("refused: an unknown name, a second line for one, a flag not Y or N, low not below high, one bound, "
@@ -147,8 +151,8 @@ def test_vary(tmp):
     run = subprocess.run([sys.executable, "-I", "-c", "import sys; sys.path.insert(0, sys.argv[1]); import blade_vary "
                           "as V; v = V.read_vary(sys.argv[2]); print(' '.join(n for n in V.VARY_NAMES if v[n].on))",
                           alone, p.path], capture_output=True, text=True)
-    check("blade_vary.py alone (standard library only) reads them; blade_modify's names and reader are its own",
-          [run.stdout.strip() == "pitch chord radius", BM.read_vary is BV.read_vary,
+    check("blade_vary.py alone (standard library only) reads them; blade_modify's names are its own",
+          [run.stdout.strip() == "pitch chord radius", BM.VARY_NAMES is BV.VARY_NAMES,
            BM.VARY_NAMES == BM.CURVES + BM.GLOBAL_SLOTS + BM.HUB_SLOTS], [1, 1, 1], 0)
     design, _ = BM.fit_design(p, segments={"chord": 1, "thickness": 1})
     kept = [c for c in BM.CURVES if c not in ("pitch", "chord")]
@@ -170,17 +174,17 @@ def test_vary(tmp):
            all(bnd[n] == (0.6, 1.6) for n in space.names if n.startswith("pitch.v")), bnd["radius"] == (0.6, 0.8),
            np.abs(space.to_vector(space.to_design(x0)) - x0).max(), len(BM.outside_bounds(space, design))],
           [19, 8, 10, 1, 0, 1, 1, 0, 0], 1e-14)
-    narrow = BM.read_params(vary_file(tmp, "narrow.dat", ["pitch Y 1.0 1.2"]))
+    narrow = BM.read_params(vary_file(tmp, "narrow.txt", ["pitch Y 1.0 1.2"]))
     dn, _ = BM.fit_design(narrow)
     out_n = BM.outside_bounds(BM.file_space(narrow, dn), dn)
-    alln = BM.read_params(vary_file(tmp, "all_n.dat", ALL_N))
+    alln = BM.read_params(vary_file(tmp, "all_n.txt", ALL_N))
     da, _ = BM.fit_design(alln)
     check("a range the file's blade leaves (pitch 1.0 .. 1.2): outside_bounds names pitch's values; every line N: "
           "nothing free, every curve the file's own, the blade exactly the file's",
           [len(out_n) > 0, all(n.startswith("pitch.v") for n in out_n), BM.vary_free(alln) == (),
            len(BM.file_space(alln, da)), all(da.curves[c].segments == 0 for c in BM.CURVES),
            max(BM.fit_report(alln, da)[c][0] for c in BM.CURVES)], [1, 1, 1, 0, 1, 0], 1e-12)
-    q = BM.read_params(BM.write_params(os.path.join(tmp, "vary_back.dat"), BM.design_params(design, p)))
+    q = BM.read_params(BM.write_params(os.path.join(tmp, "vary_back.txt"), BM.design_params(design, p)))
     big = design.copy()
     big.radius, big.hub_radius = 0.77, 1.2 * design.hub_radius
     frac = np.linspace(0.0, 1.0, 11)
@@ -188,11 +192,19 @@ def test_vary(tmp):
           "blade and hub radius", [q.vary == p.vary] + [np.abs(big.at(c, big.r0 + frac * (big.r1 - big.r0))
                                                             - design.at(c, design.r0 + frac * (design.r1 - design.r0))
                                                             ).max() for c in kept], [1, 0, 0, 0, 0], 1e-12)
-    repo = BM.read_params(os.path.join(HERE, "msc_blade_params.dat"))
+    repo = BM.read_params(os.path.join(HERE, "msc_blade.txt"))
     m = BM.msc_params()
-    check("msc_blade_params.dat: its vary lines read (the flags are the user's); its table the MSc polynomials' (8 "
-          "decimals, written on another machine)",
-          [repo.vary is not None, max(np.abs(repo.values[c] - m.values[c]).max() for c in BM.CURVES)], [1, 0], 2e-8)
+    free = BV.read_free(os.path.join(HERE, "msc_blade.txt"))
+    ld = BM.load_component(vary_file(tmp, "free_src.txt", ["pitch Y", "radius Y"]))
+    setup = BM.write_component(os.path.join(tmp, "free_setup.txt"), ld.params, ld.design, ld.space)
+    sv = BV.read_free(setup)
+    check("msc_blade.txt: no vary line, its var lines with nothing of pitch or chord free (read_free); its table "
+          "the MSc polynomials' (8 decimals, written on another machine); a saved set-up's free var lines: pitch "
+          "and the radius Y, the others N",
+          [repo.vary is None, free["pitch"].on or free["chord"].on, max(np.abs(repo.values[c] - m.values[c]).max()
+                                                                       for c in BM.CURVES),
+           [n for n in BV.VARY_NAMES if sv[n].on] == ["pitch", "radius"], BV.read_free(msc_file(tmp)) == {}],
+          [1, 0, 0, 1, 1], 2e-8)
 
 
 def test_msc_flags():
@@ -230,20 +242,26 @@ def test_sampling(tmp):
         return
     import Initial_sampling as IS
     import para as PARA
-    files = {"both": vary_file(tmp, "s7.dat", ["pitch Y", "chord Y"]), "none": vary_file(tmp, "s0.dat", ALL_N),
-             "pitch": vary_file(tmp, "s3.dat", ["pitch Y 0.9 1.5"]),
-             "chord": vary_file(tmp, "s2.dat", ["chord Y 0.2 0.6", "skew Y"])}
+    files = {"both": vary_file(tmp, "s7.txt", ["pitch Y", "chord Y"]), "none": vary_file(tmp, "s0.txt", ALL_N),
+             "pitch": vary_file(tmp, "s3.txt", ["pitch Y 0.9 1.5"]),
+             "chord": vary_file(tmp, "s2.txt", ["chord Y 0.2 0.6", "skew Y"])}
     s = {k: IS.sampling_setup(v) for k, v in files.items()}
-    s["legacy"], s["missing"] = IS.sampling_setup(msc_file(tmp)), IS.sampling_setup(os.path.join(tmp, "nofile.dat"))
+    s["table"], s["missing"] = IS.sampling_setup(msc_file(tmp)), IS.sampling_setup(os.path.join(tmp, "nofile.txt"))
+    ld = BM.load_component(vary_file(tmp, "s_src.txt", ["chord Y"]))           # a set-up: chord's variables free
+    setup = BM.write_component(os.path.join(tmp, "s_setup.txt"), ld.params, ld.design, ld.space)
+    s["setup"], s["msc"] = IS.sampling_setup(setup), IS.sampling_setup(os.path.join(HERE, "msc_blade.txt"))
     dev = lambda k: np.abs(s[k]["pitch_bounds"] - IS.pitch_bounds).max() + np.abs(s[k]["chord_bounds"]
                                                                                  - IS.chord_bounds).max()
     check("sampling_setup: pitch and chord Y 7 (the code's bounds); every line N 0; pitch only 3 (its range on "
-          "p1y, p7y, max_pitch); chord only 2 (its range on p1y, y4; skew noted); no vary line or no file 7",
+          "p1y, p7y, max_pitch); chord only 2 (its range on p1y, y4; skew noted); no vary or var line or no file 7; "
+          "a set-up with chord's variables free 2 (the code's bounds); msc_blade.txt (nothing of pitch or chord "
+          "free) 0",
           [s["both"]["para_control"], dev("both"), s["none"]["para_control"], "nothing varies" in s["none"]["notes"][0],
            s["pitch"]["para_control"], *s["pitch"]["pitch_bounds"][[0, 5]].ravel(), s["pitch"]["max_pitch"],
            s["chord"]["para_control"], *s["chord"]["chord_bounds"][[0, 3]].ravel(), "skew" in s["chord"]["notes"][-1],
-           s["legacy"]["para_control"], dev("legacy"), s["missing"]["para_control"]],
-          [7, 0, 0, 1, 3, 0.9, 1.5, 0.9, 1.5, 1.5, 2, 0.2, 0.6, 0.2, 0.6, 1, 7, 0, 7], 0)
+           s["table"]["para_control"], dev("table"), s["missing"]["para_control"], s["setup"]["para_control"],
+           dev("setup"), s["msc"]["para_control"]],
+          [7, 0, 0, 1, 3, 0.9, 1.5, 0.9, 1.5, 1.5, 2, 0.2, 0.6, 0.2, 0.6, 1, 7, 0, 7, 2, 0, 0], 0)
     calls = []
 
     def no_cad(pitch_con, chord_con, case_id, geometry_dir, para_control=7, max_pitch=1.4):
@@ -331,10 +349,10 @@ def test_curves(tmp):
           [d2s.curves["chord"].segments - 2,
            np.abs(d2s.prop("chord")(rs) - ref).max() / np.ptp(ref)], 0.0, 0.02)
     design, _ = BM.fit_design(p)
-    path = BM.write_params(os.path.join(tmp, "design.dat"), BM.design_params(design, p))
+    path = BM.write_params(os.path.join(tmp, "design.txt"), BM.design_params(design, p))
     q = BM.read_params(path)
     rr = np.linspace(design.r0, design.r1, 3001)
-    check("the design (2 segments) written as a parameter file reproduces it (fraction of each range)",
+    check("the design (2 segments) written as a table file reproduces it (fraction of each range)",
           [np.abs(q.spline(c)(rr) - design.prop(c)(rr)).max() / np.ptp(design.prop(c)(rr)) for c in BM.CURVES],
           0.0, 2e-3)
     f = design.prop("skew")
@@ -368,15 +386,14 @@ def test_space(tmp):
     check("globals in the space: radius and hub height free, the hub radius held",
           [space.names[:2] == ["radius", "hub_height"], d3.radius, d3.hub_height, d3.hub_radius, d3.r0],
           [1, 0.8, 1.2, d2.hub_radius, d2.hub_radius / 0.8], 1e-12)
-    rec = BM.space_record(space, d3, p)
-    path = os.path.join(tmp, "space.json")
-    with open(path, "w") as fh:
-        json.dump(rec, fh)
-    s3, d4, rec3 = BM.load_blade_space(path)
-    check("space_record, then load_blade_space: the same variables, values, bounds, forms",
+    path = BM.write_component(os.path.join(tmp, "space.txt"), p, d3, space)
+    ld = BM.load_component(path)
+    s3, d4 = ld.space, ld.design
+    check("the set-up as a component file, then load_component: the same variables, values, bounds, forms (to "
+          "the figures written)",
           [s3.names == space.names, np.abs(s3.to_vector(d4) - space.to_vector(d3)).max(),
-           np.abs(s3.bounds - space.bounds).max(), rec3["geometry"] == "blade", s3.forms == space.forms],
-          [1, 0, 0, 1, 1], 0)
+           np.abs(s3.bounds - space.bounds).max(), ld.kind == "blade", s3.forms == space.forms],
+          [1, 0, 0, 1, 1], 1e-9)
     old = BM.BladeSpace(p, d1, free=("pitch",)).to_dict(d1)           # a set-up saved before the globals
     old.pop("forms")
     old["r0"] = d1.r0
@@ -470,8 +487,7 @@ def test_hub(tmp, table):
     vals = sp.values(dc)
     vals.update(hub_top=0.05, hub_x=-0.35)
     d2 = sp.design_of(vals)
-    rec = BM.space_record(sp, d2, p)
-    s3, d3 = BM.BladeSpace.from_dict(p, rec["space"])
+    s3, d3 = BM.BladeSpace.from_dict(p, sp.to_dict(d2))
     check("hub_top and hub_x free: the design from the vector, the set-up record read back with the cone",
           [sp.names == ["hub_top", "hub_x"], d2.hub_top, d2.hub_x, d2.hub_base, d3.hub_top, d3.hub_x, d3.hub_base,
            s3.names == sp.names], [1, 0.05, -0.35, 0.2, 0.05, -0.35, 0.2, 1], 1e-12)
@@ -479,17 +495,17 @@ def test_hub(tmp, table):
     BM.write_component(comp, p, d2, sp, {"part": "half", "sections": 40})
     ld = BM.load_component(comp)
     text = open(comp).read()
-    dat = os.path.join(tmp, "cone.dat")
-    BM.write_params(dat, BM.design_params(ld.design, ld.params))
-    pd = BM.read_params(dat)
-    lines = [l for l in open(dat).read().splitlines() if not l.startswith("# hub_x_m")]
-    with open(os.path.join(tmp, "two.dat"), "w") as fh:
+    tab_file = os.path.join(tmp, "cone_table.txt")
+    BM.write_params(tab_file, BM.design_params(ld.design, ld.params))
+    pd = BM.read_params(tab_file)
+    lines = [l for l in open(tab_file).read().splitlines() if not l.startswith("# hub_x_m")]
+    with open(os.path.join(tmp, "two.txt"), "w") as fh:
         fh.write("\n".join(lines) + "\n")
     check("the component file: hub_base_m, hub_top_m, hub_x_m and the var lines; the part setting; read back "
-          "exactly; a parameter file (.dat) carries the keys too; two of the three keys refused",
+          "exactly; a table file carries the keys too; two of the three keys refused",
           ["# hub_top_m     0.05" in text, "# var    hub_x" in text, ld.settings["part"] == "half",
            ld.design.hub_top, ld.design.hub_x, ld.design.hub_base, ld.space.names == sp.names,
-           pd.hub_top, pd.hub_x, pd.hub_cone, refused(BM.read_params, os.path.join(tmp, "two.dat"))],
+           pd.hub_top, pd.hub_x, pd.hub_cone, refused(BM.read_params, os.path.join(tmp, "two.txt"))],
           [1, 1, 1, 0.05, -0.35, 0.2, 1, 0.05, -0.35, 1, 1], 1e-12)
     parts = [BM.cad_part({"part": s}, 6) for s in ("whole", "half", "sector")] + [BM.cad_part({}, 6)]
     check("cad_part: whole (6 blades), half (3), sector (1), the default sector; half of 5 blades refused, an "
@@ -665,21 +681,22 @@ def test_adapter(tmp, table):
     pv = ad.preview(skeleton=True)
     check("set_sections: 40 sections in the skeleton, a bad set refused",
           [np.shape(pv["skeleton"])[0], no_sec, ad.settings["tip_sections"]], [40, 1, 10], 0)
-    sp = ad.save_space(os.path.join(tmp, "setup.json"))
-    s2, d2, _ = BM.load_blade_space(sp)
-    ad2 = XBL.BladeAdapter(params=path)
-    ad2.load_space(sp)
-    check("Save set-up: load_blade_space and the adapter read it back (forms, globals, sections)",
+    sp = ad.save_file(os.path.join(tmp, "setup.txt"))
+    ld = BM.load_component(sp)
+    s2, d2 = ld.space, ld.design
+    ad2 = XBL.BladeAdapter(params=sp)
+    check("Save set-up (a component file): load_component and the adapter read it back (forms, globals, sections; "
+          "to the figures written)",
           [s2.names == ad.free_space().names, np.abs(s2.to_vector(d2) - ad.free_space().to_vector(ad.design)).max(),
            max(abs(ad2.values[k] - ad.values[k]) for k in ad.values), ad2.n_free() == ad.n_free(),
            ad2.segments("chord"), ad2.design.radius, ad2.settings["sections"] == 40],
-          [1, 0, 0, 1, 1, 0.72, 1], 1e-14)
-    saved = ad.save_params(os.path.join(tmp, "saved.dat"))
+          [1, 0, 0, 1, 1, 0.72, 1], 1e-8)
+    saved = BM.write_params(os.path.join(tmp, "saved.txt"), BM.design_params(ad.design, ad.params))
     ad3 = XBL.BladeAdapter(params=saved)
     for c in BM.CURVES:                                    # the same forms (a curve as fitted: from the file)
         ad3.set_segments(c, ad.segments(c))
     rr = np.linspace(ad.design.r0, ad.design.r1, 501)
-    check("Save parameters, then Load: the globals, the curves fitted again to the saved file (fraction of range)",
+    check("the design as a table file, then Load: the globals, the curves fitted again to it (fraction of range)",
           [ad3.design.radius - 0.72, ad3.design.hub_radius - 0.13]
           + [np.abs(ad3.design.prop(c)(rr) - ad.design.prop(c)(rr)).max() / np.ptp(ad.design.prop(c)(rr))
              for c in BM.CURVES], 0.0, 0.01)
@@ -687,15 +704,14 @@ def test_adapter(tmp, table):
     no_z = [refused(ad.set_blades, z) for z in (1, 8, 4.5)]
     ad.set_blades(7)
     pv7 = ad.preview()
-    sp7 = ad.save_space(os.path.join(tmp, "setup7.json"))
-    s7, _, rec7 = BM.load_blade_space(sp7)
-    ad7 = XBL.BladeAdapter(params=path)
-    ad7.load_space(sp7)
-    p7 = BM.read_params(ad.save_params(os.path.join(tmp, "z7.dat")))
-    check("blades Z: 1, 8 and 4.5 refused (2 to 7); 7: the blades closer, the set-up and the saved file keep 7, "
-          "the file's 5 kept apart", no_z + [pv7["clearance_mm"] < gap5, rec7["globals"]["blades"], s7.params.blades,
-                                             ad7.params.blades, ad7.file_blades, p7.blades],
-          [1, 1, 1, 1, 7, 7, 7, 5, 7], 0)
+    sp7 = ad.save_file(os.path.join(tmp, "setup7.txt"))
+    s7 = BM.load_component(sp7).space
+    ad7 = XBL.BladeAdapter(params=sp7)
+    p7 = BM.read_params(BM.write_params(os.path.join(tmp, "z7.txt"), BM.design_params(ad.design, ad.params)))
+    check("blades Z: 1, 8 and 4.5 refused (2 to 7); 7: the blades closer, the set-up and a table file of the "
+          "design keep 7, the adapter that loads the set-up starts with 7",
+          no_z + [pv7["clearance_mm"] < gap5, s7.params.blades, ad7.params.blades, ad7.file_blades, p7.blades],
+          [1, 1, 1, 1, 7, 7, 7, 7], 0)
     print(f"       blades {gap5:.1f} mm apart with 5, {pv7['clearance_mm']:.1f} mm with 7")
     ad.settings["clearance_mm"] = pv7["clearance_mm"] + 10.0       # closer than the clearance: interfering
     pvw = ad.preview()
@@ -712,7 +728,6 @@ def test_adapter(tmp, table):
     pv = ad.preview()
     ad.set_bounds("hub_x", -0.9, 0.1)
     ad.set("hub_x", -0.2)
-    vs = ad.vary_state()
     held = [ad.is_free(n) for n in BM.HUB_SLOTS]
     hub_x = ad.get("hub_x")
     part = ad.set_part("whole")
@@ -722,14 +737,14 @@ def test_adapter(tmp, table):
     comp = ad.save_file(os.path.join(tmp, "cone_gui.txt"))
     ad2 = XBL.BladeAdapter(params=comp)
     ad.set_hub_shape("cylinder")
-    check("the adapter: the hub a cone (six global rows, its variables held, a negative hub_x allowed, vary lines "
-          "N for it), the preview's hub outline, CAD part whole, half refused with 7 blades and allowed with 6; "
-          "the set-up saved and read back with the cone and the part; a cylinder again",
+    check("the adapter: the hub a cone (six global rows, its variables held, a negative hub_x allowed), the "
+          "preview's hub outline, CAD part whole, half refused with 7 blades and allowed with 6; the set-up saved "
+          "and read back with the cone and the part; a cylinder again",
           [msg.startswith("cone"), rows == list(BM.GLOBAL_SLOTS + BM.HUB_SLOTS), pv["hub_shape"] == "cone",
-           pv["hub_outline"].shape[1], any(held), hub_x, vs["hub_top"].on, part == "whole", bad_part,
+           pv["hub_outline"].shape[1], any(held), hub_x, part == "whole", bad_part,
            half == "half", ad2.design.hub_shape == "cone", ad2.design.hub_x, ad2.settings["part"] == "half",
            ad2.n_free()[1] - ad.n_free()[1], ad.hub_shape == "cylinder", len(ad.global_rows())],
-          [1, 1, 1, 2, 0, -0.2, 0, 1, 1, 1, 1, -0.2, 1, 3, 1, 3], 1e-12)
+          [1, 1, 1, 2, 0, -0.2, 1, 1, 1, 1, -0.2, 1, 3, 1, 3], 1e-12)
     ad.set_blades(5)
     ad.set_part("sector")
 
@@ -737,7 +752,7 @@ def test_adapter(tmp, table):
 def test_adapter_vary(tmp, table):
     print("\nthe tool's blade adapter and the vary lines")
     import xgeom_blade as XBL
-    ad = XBL.BladeAdapter(params=vary_file(tmp, "vary_ad.dat", ["pitch Y 0.6 1.6", "chord Y", "radius Y"], table))
+    ad = XBL.BladeAdapter(params=vary_file(tmp, "vary_ad.txt", ["pitch Y 0.6 1.6", "chord Y", "radius Y"], table))
     kept = ("thickness", "camber", "skew", "rake")
     check("starts from the vary lines: pitch and chord 2 segments, free (pitch's values in 0.6 .. 1.6), the radius "
           "free, the hub height held; the N curves the file's own ('(file)' in the picker, a pinned row)",
@@ -758,19 +773,21 @@ def test_adapter_vary(tmp, table):
     for n in ad.space.all_names:
         if n.startswith("chord."):
             ad.set_free(n, False)
-    q = BM.read_params(ad.save_params(os.path.join(tmp, "vary_saved.dat")))
-    ad2 = XBL.BladeAdapter(params=q.path)
-    check("save_params writes the vary lines as the design stands (chord held: N; pitch Y with its range, the "
-          "radius Y); loaded again: chord the saved file's own",
-          [BM.vary_free(q) == ("pitch", "radius"), q.vary["pitch"].lo, q.vary["pitch"].hi, ad2.segments("chord"),
-           ad2.n_free() == (9, 11)], [1, 0.6, 1.6, 0, 1], 0)
+    saved = ad.save_file(os.path.join(tmp, "vary_saved.txt"))
+    ad2 = XBL.BladeAdapter(params=saved)
+    on = BV.read_free(saved)
+    check("Save set-up as the design stands (chord's variables held; pitch's free in 0.6 .. 1.6, the radius "
+          "free): loaded again the same, and read_free (Initial_sampling) sees pitch and the radius",
+          [[n for n in BV.VARY_NAMES if on[n].on] == ["pitch", "radius"], ad2.bounds("pitch.v4") == (0.6, 1.6),
+           ad2.segments("chord"), ad2.n_free() == ad.n_free(), ad2.n_free()[0], ad2.is_free("radius")],
+          [1, 1, 2, 1, 9, 1], 0)
 
 
 def test_control_original(tmp, table):
     print("\nblade_control.py with every vary line N (no CAD, no plot)")
     out = os.path.join(tmp, "control")
     src = open(os.path.join(HERE, "blade_control.py")).read()
-    src = src.replace('if __name__ == "__main__":', f"PARAMS, OUT_DIR = {vary_file(tmp, 'control_n.dat', ALL_N, table)!r}"
+    src = src.replace('if __name__ == "__main__":', f"PARAMS, OUT_DIR = {vary_file(tmp, 'control_n.txt', ALL_N, table)!r}"
                       f", {out!r}\nsettings.cad = settings.plot = False\n\nif __name__ == \"__main__\":", 1)
     script = os.path.join(tmp, "blade_control_n.py")
     with open(script, "w") as fh:
@@ -855,7 +872,7 @@ def test_gui(tmp, table):
               [app.status.cget("background") == XT.STATUS["warn"][0], warn.startswith("warning (CAD still possible)"),
                len(app.ad.preview()["problems"])], [1, 1, 0], 0)
         app.ad.settings["clearance_mm"] = BM.CLEARANCE_MM
-        app.ad.load_params(vary_file(tmp, "vary_gui.dat", ["pitch Y", "chord Y"], table))   # as Load ... does
+        app.ad.load_params(vary_file(tmp, "vary_gui.txt", ["pitch Y", "chord Y"], table))   # as Load ... does
         app._title()
         app.after_change(structure=True)
         app.curve.set("skew")
@@ -936,7 +953,7 @@ def test_cad(tmp, table):
     if importlib.util.find_spec("OCC") is None:
         print("       skipped: no pythonocc-core")
         return
-    p = BM.read_params(vary_file(tmp, "cad.dat", ["pitch Y", "chord Y"], table))
+    p = BM.read_params(vary_file(tmp, "cad.txt", ["pitch Y", "chord Y"], table))
     design, _ = BM.fit_design(p)                           # pitch and chord 2 segments, the others the file's own
     design.hub_height = 0.8
     out = BM.write_cad(tmp, "cad", design, p)

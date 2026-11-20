@@ -125,12 +125,13 @@ def test_space(d):
 def test_files(p, d):
     print("\nfiles")
     with tempfile.TemporaryDirectory() as tmp:
-        pa = HM.write_params(os.path.join(tmp, "suboff.dat"), p)
+        pa = HM.write_params(os.path.join(tmp, "suboff.txt"), p)
         q = HM.read_params(pa)
         e = test_ellipsoid.d
-        pe = HM.write_params(os.path.join(tmp, "ell.dat"), HM.design_params(e))
+        pe = HM.write_params(os.path.join(tmp, "ell.txt"), HM.design_params(e))
         qe = HM.read_params(pe)
-        check("parameter files read back: lengths, table (9 decimals), axisymmetric or not",
+        check("table files (component files without curve or var lines) read back: lengths, table (9 decimals), "
+              "axisymmetric or not",
               [abs(q.middle - p.middle), np.abs(q.r - p.r).max(), q.axisymmetric, qe.axisymmetric,
                np.abs(qe.rp - HM.design_params(e).rp).max()], [0, 0, 1, 0, 0], 1e-8)
         files, hs = HM.write_case(tmp, "t", d, p, HM.HullSpace(d), cad=False)

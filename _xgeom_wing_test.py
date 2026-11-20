@@ -1,7 +1,7 @@
 """
 _xgeom_wing_test.py
 
-Self-check for the wing and the fin in XGeom: the parameter file and its fitted curves (wing_modify.py), the
+Self-check for the wing and the fin in XGeom: the component file and its fitted curves (wing_modify.py), the
 sections (the airfoil, its Bezier changes, the pitch), the design space, the case files and the loft, the
 design tool's adapters (xgeom_wing.py), the fins and the wing pair on the hull (xgeom_vehicle.py) and in the
 vehicle's CAD (vehicle_cad.py); with --gui the window (xgeom_tool.py).
@@ -22,7 +22,7 @@ import xcad_loft as XL
 
 _FAILED = []
 HERE = os.path.dirname(os.path.abspath(__file__))
-WING, FIN = os.path.join(HERE, "wing_params.dat"), os.path.join(HERE, "fin_params.dat")
+WING, FIN = os.path.join(HERE, "wing.txt"), os.path.join(HERE, "fin.txt")      # the samples (read_params: the table)
 
 
 def check(name, got, want, tol):
@@ -43,37 +43,46 @@ def refused(fn, *args):
 
 
 def table_file(tmp, name, head, rows):
-    """A parameter file from header lines and table rows."""
+    """A wing's table file (a component file with no curve or var lines) from geometry lines and table rows: eta
+    pitch_deg chord_mm t/c f/c sweep_mm rake_mm, then dt1 .. dtk dc1 .. dck (an odd number of them: one dt
+    more)."""
+    n = rows.shape[1] - len(WM.XF.COLUMNS["wing"])
+    cols = list(WM.XF.COLUMNS["wing"]) + [f"dt{i}" for i in range(1, n - n // 2 + 1)] \
+        + [f"dc{i}" for i in range(1, n // 2 + 1)]
     path = os.path.join(tmp, name)
     with open(path, "w") as fh:
-        fh.write("\n".join(["# XGeom wing parameters"] + [f"# {h}" for h in head]
+        fh.write("\n".join(["# XGeom component", "# kind  wing"] + [f"# {h}" for h in head] + ["# " + "  ".join(cols)]
                            + ["  ".join(f"{v:.8f}" for v in r) for r in rows]) + "\n")
     return path
 
 
 def test_file(tmp):
-    print("\nthe parameter file")
+    print("\nthe component file's geometry and table (read_params, write_params)")
     w, f = WM.read_params(WING), WM.read_params(FIN)
-    check("the example wing and fin: kind, span, airfoil, rows, no change columns, the root's sweep and rake 0",
-          [w.kind == "wing", f.kind == "fin", w.span, f.span, w.airfoil == "naca2412", f.airfoil == "naca0015",
-           len(w.eta), w.changes, w.values["sweep"][0], w.values["rake"][0]], [1, 1, 200, 220, 1, 1, 11, 0, 0, 0], 0)
-    path = WM.write_params(os.path.join(tmp, "again.dat"), w)
+    check("the example wing and fin: kind, span, airfoil, rows, 3 change points (zero columns), the root's sweep "
+          "and rake 0", [w.kind == "wing", f.kind == "fin", w.span, f.span, w.airfoil == "naca2412",
+                         f.airfoil == "naca0015", len(w.eta), w.changes,
+                         max(np.abs(w.values[c]).max() for c in WM.change_names(3)), w.values["sweep"][0],
+                         w.values["rake"][0]], [1, 1, 200, 220, 1, 1, 11, 3, 0, 0, 0], 0)
+    path = WM.write_params(os.path.join(tmp, "again.txt"), w)
     w2 = WM.read_params(path)
-    check("written and read again: the same table", [np.abs(w2.values[c] - w.values[c]).max() for c in WM.CURVES]
-          + [np.abs(w2.eta - w.eta).max(), w2.span - w.span], 0.0, 1e-8)
+    comp = WM.XF.read_component(path)
+    check("written as a table file (no curve or var lines) and read again: the same table",
+          [np.abs(w2.values[c] - w.values[c]).max() for c in w.names]
+          + [np.abs(w2.eta - w.eta).max(), w2.span - w.span, len(comp.curves) + len(comp.vars)], 0.0, 1e-8)
     e = np.linspace(0.0, 1.0, 5)
-    rows = np.column_stack([e, 100 - 20 * e, 5 + 10 * e, 2 + 4 * e, 0 * e, 0.1 + 0 * e, 0.02 + 0 * e,
+    rows = np.column_stack([e, 0 * e, 100 - 20 * e, 0.1 + 0 * e, 0.02 + 0 * e, 5 + 10 * e, 2 + 4 * e,
                             0.01 * e, -0.01 * e, 0.005 + 0 * e, 0 * e])
-    p = WM.read_params(table_file(tmp, "shifted.dat", ["span_mm 150", "airfoil naca0012", "ref_xc 0.3"], rows))
+    p = WM.read_params(table_file(tmp, "shifted.txt", ["span_mm 150", "section naca0012", "ref_xc 0.3"], rows))
     check("a root LE off the origin is taken from the root's row; 2 change points read from 4 more columns; "
           "a symmetric airfoil's camber line", [p.values["sweep"][-1], p.values["rake"][-1], p.changes, p.ref_xc,
                                                 p.values["dt2"][-1], p.values["dc1"][0]], [10, 4, 2, 0.3, -0.01, 0.005], 1e-12)
-    bad = [table_file(tmp, "b1.dat", ["airfoil naca0012"], rows[:, :7]),
-           table_file(tmp, "b2.dat", ["span_mm 100", "airfoil naca0012"], rows[:, :8]),
-           table_file(tmp, "b3.dat", ["span_mm 100", "airfoil naca0012"], rows[1:, :7]),
-           table_file(tmp, "b4.dat", ["span_mm 100", "airfoil not_an_airfoil_9"], rows[:, :7]),
-           table_file(tmp, "b5.dat", ["span_mm 100", "airfoil naca0012", "camber_xc 1.2"], rows[:, :7]),
-           table_file(tmp, "b6.dat", ["span_mm -5", "airfoil naca0012"], rows[:, :7])]
+    bad = [table_file(tmp, "b1.txt", ["section naca0012"], rows[:, :7]),
+           table_file(tmp, "b2.txt", ["span_mm 100", "section naca0012"], rows[:, :8]),
+           table_file(tmp, "b3.txt", ["span_mm 100", "section naca0012"], rows[1:, :7]),
+           table_file(tmp, "b4.txt", ["span_mm 100", "section not_an_airfoil_9"], rows[:, :7]),
+           table_file(tmp, "b5.txt", ["span_mm 100", "section naca0012", "camber_xc 1.2"], rows[:, :7]),
+           table_file(tmp, "b6.txt", ["span_mm -5", "section naca0012"], rows[:, :7])]
     check("refused: no span, an odd change column, eta not from 0, an unknown airfoil, camber_xc 1.2, span -5",
           [refused(WM.read_params, b) for b in bad], [1] * len(bad), 0)
 
@@ -275,15 +284,17 @@ def test_adapter(tmp):
     check("5 change points: the sections kept, dt1 .. dt5 and dc1 .. dc5, held as before",
           [ad.design.changes, np.abs(sec1[0] - sec0[0]).max(), "dc5" in ad.names, ad.is_free("dt4.v0")],
           [5, 0, 1, 0], 1e-9)
-    path = ad.save_space(os.path.join(tmp, "w_design_space.json"))
-    ad2 = XW.WingAdapter()
-    ad2.load_space(path)
-    check("Save set-up, then load_space: values, bounds, free flags, 5 change points",
+    path = ad.save_file(os.path.join(tmp, "w_saved.txt"))
+    ad2 = XW.WingAdapter(path)
+    check("Save set-up (a component file), then a new adapter from it: values, bounds, free flags, 5 change "
+          "points (to the figures written)",
           [ad2.design.changes, max(abs(ad2.get(n) - ad.get(n)) for n in ad.space.all_names),
-           all(ad2.is_free(n) == ad.is_free(n) for n in ad.space.all_names)], [5, 0, 1], 1e-12)
-    pf = ad.save_params(os.path.join(tmp, "w_params.dat"))
+           max(abs(ad2.bounds(n)[i] - ad.bounds(n)[i]) for n in ad.space.all_names for i in (0, 1)),
+           all(ad2.is_free(n) == ad.is_free(n) for n in ad.space.all_names)], [5, 0, 0, 1], 1e-9)
+    pf = WM.write_params(os.path.join(tmp, "w_table.txt"), WM.design_params(ad.design, ad.params))
     ad3 = XW.WingAdapter(pf)
-    check("save_params and a new adapter from it (its curves 4 points again): the same wing, changes included",
+    check("the design as a table file and a new adapter from it (its curves 4 points again): the same wing, changes "
+          "included",
           [ad3.design.changes, max(np.abs(ad3.design.at(c, e) - ad.design.at(c, e)).max() for c in ad.names)],
           [5, 0], 1e-3)
     pv = ad.preview(skeleton=True)
@@ -368,26 +379,18 @@ def test_planar_rudder(tmp):
     path = planar_rudder_file(tmp)
     ad = XW.PlanarRudderAdapter(params=path)
     saved = ad.save_file(os.path.join(tmp, "planar_rudder_saved.txt"))
-    rec = ad.space_record()
-    js = ad.save_space(os.path.join(tmp, "planar_design_space.json"))
     ad2 = XW.PlanarRudderAdapter(params=saved)
-    ad2.load_space(js)
-    rudder_h = os.path.join(tmp, "rudder_h.json")
-    with open(rudder_h, "w") as fh:
-        json.dump({"geometry": "rudder", "space": {}}, fh)
     part = XV.rudder_part(ad)
     eta = np.linspace(0.0, 1.0, 41)
     v = ad.design.values(eta)
     th = np.deg2rad(v["pitch"])
     x_te = v["sweep"] + v["chord"] * (ad.params.ref_xc + (1.0 - ad.params.ref_xc) * np.cos(th))
     check("a rudder on the planar model: from a component file of kind rudder (none without one), Save set-up "
-          "writes kind rudder, its JSON set-up says rudder_planar (a rudder-h set-up refused), the vehicle's part "
-          "the wing's with its TE line's slope",
+          "writes kind rudder and loads back, the vehicle's part the wing's with its TE line's slope",
           [ad.title.startswith("Rudder"), refused(XW.PlanarRudderAdapter), XF.component_kind(saved) == "rudder",
-           rec["geometry"] == "rudder_planar", refused(ad2.load_space, rudder_h),
            max(abs(ad2.values[n] - ad.values[n]) for n in ad.values), len(part["loops"]) > 2,
            part["te_slope"] - np.polyfit(eta * ad.design.span, x_te, 1)[0], ad.out_dir.endswith("rudder_planar")],
-          [1, 1, 1, 1, 1, 0, 1, 0, 1], 1e-9)
+          [1, 1, 1, 0, 1, 0, 1], 1e-9)
     params = WM.read_params(path)
     forms = FC.best_wing_forms(params)
     setup, forms2 = FC.wing_setup(params, os.path.join(tmp, "set_up.txt"), "rudder", "set_up")
@@ -407,7 +410,7 @@ def test_vehicle():
     print("\nfins and wings on the hull (xgeom_vehicle.py)")
     import hull_modify as HM
     import xgeom_vehicle as XV
-    hp = HM.read_params(os.path.join(HERE, "suboff_hull_params.dat"))
+    hp = HM.suboff_params()                              # SUBOFF's stations from its equations
     hull = HM.fit_design(hp)
     parts = {"hull": {"design": hull, "lines": [], "problems": []}, "fin": XV.wing_part(FakeAdapter(FIN)),
              "wing": XV.wing_part(FakeAdapter(WING))}

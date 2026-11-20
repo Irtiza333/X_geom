@@ -1,11 +1,11 @@
 """
 xgeom_blade.py
 
-The propeller blade in the XGeom design tool (xgeom_tool.py): a blade parameter
-file (blade_modify.py) as the tool's variables, its live views and the CAD
-build. The settings are blade_control.py's.
+The propeller blade in the XGeom design tool (xgeom_tool.py): a blade's
+component file (blade_modify.py, xgeom_files.py) as the tool's variables, its
+live views and the CAD build. The settings are blade_control.py's.
 
-A blade always starts from a parameter file (the radial table and D, Z, the
+A blade always starts from a component file (the radial table and D, Z, the
 root r/R, the hub height, the section table). Its variables: the blade radius,
 hub radius and hub height (m), and each distribution (pitch, chord, thickness,
 camber, skew, rake) as a Bezier curve over r/R fitted to the file, of 1 or 2
@@ -18,24 +18,21 @@ segments (set_segments):
     the fractions d1, d2, the weights w23, w56 and the values v1, v4, v7.
 Each is a design variable or held. A change of either radius stretches the
 curves over the new span. A new form (set_segments) or order (set_order) is
-fitted to the parameter file while none of the curve's variables has changed,
-else to the curve's present shape. The parameter file's vary lines
-(blade_vary.read_vary) set the start: a distribution flagged N is the file's
-own (form 0, "file": its cubic spline, no variables; 1 or 2 segments make it a
-Bezier curve fitted to the file, its variables free), one flagged Y a Bezier
-curve whose variables are free, within the file's range when given; radius,
-hub radius and hub height flagged Y free. A file with no vary line: every curve
-fitted, blade_control.FREE free. A component file (xgeom_files.py) gives its
-design, variables (bounds, free flags) and settings exactly. load_params reads
-another component file or old parameter file; save_file writes the design, its
-variables and the settings as a component file (Save set-up); save_params
-writes the design as an old parameter file, with vary lines for it as it stands
-(Y: a curve or global with a free variable). set_sections sets the sections of the
+fitted to the file's table while none of the curve's variables has changed,
+else to the curve's present shape. A component file gives its design, variables
+(bounds, free flags) and settings exactly. A table file (no curve or var lines)
+starts as its vary lines say: a distribution flagged N is the file's own (form
+0, "file": its cubic spline, no variables; 1 or 2 segments make it a Bezier
+curve fitted to the file, its variables free), one flagged Y a Bezier curve
+whose variables are free, within the file's range when given; radius, hub
+radius and hub height flagged Y free; with no vary line every curve fitted,
+blade_control.FREE free. load_params reads another component file; save_file
+writes the design, its variables and the settings as one (Save set-up).
+set_sections sets the sections of the
 XCAD points file and the 3D sections tab (blade_modify.section_stations).
 set_blades sets the number of blades Z (2 to 7; the parameter file's by
-default): the clearance check, the propeller views, the CAD's hub sector, the
-parameter file the design is written as and the set-up follow it (it is a
-setting, not in the design vector). Blades closer than the clearance (they
+default): the clearance check, the propeller views, the CAD's hub sector and
+the set-up follow it (it is a setting, not in the design vector). Blades closer than the clearance (they
 interfere) are a warning, not a problem: the CAD is still built (the hub radius
 moves the root section, which may make room for them).
 
@@ -56,7 +53,6 @@ The adapter has the methods of xgeom_rudder.RudderAdapter that the tool uses.
 from __future__ import annotations
 
 import importlib.util
-import json
 import os
 import time
 
@@ -99,15 +95,15 @@ class BladeAdapter:
     # ---------------------------------------------------------------- the file
     def load_params(self, path):
         """Start from a component file (blade_modify.load_component: its design, variables and settings
-        exactly) or an old parameter file: its distributions fitted (blade_control's segments and orders) or
-        kept as the file has them (vary N); the variables of the parameters flagged Y free (blade_control.FREE
-        when the file has no vary line)."""
+        exactly; a table file's distributions fitted, blade_control's segments and orders, or kept as the file
+        has them, vary N, the variables of the parameters flagged Y free, blade_control.FREE when it has no vary
+        line)."""
         ld = BM.load_component(path, self.settings["orders"], self.settings["segments"], self.settings["free"])
         self.params, self.design = ld.params, ld.design
         self.meta = {n: {"lo": float(lo), "hi": float(hi), "free": n not in ld.space.fixed}
                      for n, (lo, hi) in zip(ld.space.all_names, ld.space.all_bounds)}
         self.settings.update(ld.settings)
-        self.file, self.legacy, self.notes, self.extra = os.path.abspath(path), ld.legacy, ld.notes, ld.extra
+        self.file, self.notes, self.extra = os.path.abspath(path), ld.notes, ld.extra
         self.file_blades = self.params.blades       # the file's Z (set_blades may change the one in use)
         self.as_fitted = set(BM.CURVES)             # curves still as the file has them (no variable changed)
         self._rebuild()
@@ -118,32 +114,8 @@ class BladeAdapter:
         (blade_modify.write_component), which load_params reads back exactly; it is the file in use then."""
         BM.write_component(path, self.params, self.design, self.free_space(), self._case_settings(),
                            os.path.splitext(os.path.basename(path))[0], self.notes, self.extra)
-        self.file, self.legacy = os.path.abspath(path), False
+        self.file = os.path.abspath(path)
         return path
-
-    def save_params(self, path):
-        """Write the design as a parameter file (read_params and load_params read it), with vary lines for the
-        design as it stands (vary_state)."""
-        BM.write_params(path, BM.design_params(self.design, self.params, vary=self.vary_state()),
-                        notes=(f"written by the design tool from {os.path.basename(self.params.path)}, "
-                               f"{time.strftime('%d %b %Y %H:%M')}",))
-        return path
-
-    def vary_state(self):
-        """Vary lines for the design as it stands: Y for a curve or global with a free variable (its range when
-        all its values share one), N for the others."""
-        out = {}
-        glob = self.design.hub_slots()
-        for n in BM.VARY_NAMES:
-            if n in BM.HUB_SLOTS and n not in glob:
-                continue
-            slots = [n] if n in glob else [s for s in self.space.all_names if s.startswith(n + ".")]
-            on = any(self.meta[s]["free"] for s in slots)
-            vals = slots if n in glob else [s for s in slots if s.split(".")[1][0] == "v"]
-            rng = {(self.meta[s]["lo"], self.meta[s]["hi"]) for s in vals}
-            lo, hi = next(iter(rng)) if on and len(rng) == 1 else (None, None)
-            out[n] = BM.Vary(on, lo, hi)
-        return out
 
     def _free0(self):
         """The parameters whose variables start free: the file's Y, else blade_control.FREE."""
@@ -532,41 +504,10 @@ class BladeAdapter:
         return BM.BladeSpace(self.params, self.design,
                              bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()}, fixed=fixed)
 
-    def space_record(self):
-        """The set-up as plain data (blade_modify.load_blade_space reads it back)."""
-        return BM.space_record(self.free_space(), self.design, self.params, self._case_settings())
-
     CASE_KEYS = ("clearance_mm", "sections", "tip_band", "tip_sections", "hub", "part")
 
     def _case_settings(self):
         return {k: self.settings[k] for k in self.CASE_KEYS}
-
-    def save_space(self, path):
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        with open(path, "w") as fh:
-            json.dump(self.space_record(), fh, indent=1)
-        return path
-
-    def load_space(self, path):
-        """Start from a saved set-up (<case>_design_space.json); its parameter
-        file is read again."""
-        with open(path) as fh:
-            rec = json.load(fh)
-        if rec.get("geometry") != "blade":
-            raise ValueError(f"{path} is not a blade design space")
-        params = BM.read_params(rec["params_file"])
-        self.file_blades = params.blades
-        if rec.get("globals", {}).get("blades") is not None:
-            params = BM.with_blades(params, rec["globals"]["blades"])
-        space, design = BM.BladeSpace.from_dict(params, rec["space"])
-        self.params, self.design, self._original = params, design, None
-        self.file, self.legacy, self.notes, self.extra = params.path, not BM.XF.is_component(params.path), [], {}
-        self.as_fitted = set()                      # a saved design: refits keep its curves' shapes
-        self.meta = {q["name"]: {"lo": q["lo"], "hi": q["hi"], "free": q["free"]} for q in rec["space"]["slots"]}
-        for k in self.CASE_KEYS:
-            if k in rec.get("settings", {}):
-                self.settings[k] = rec["settings"][k]
-        self._rebuild()
 
     def build_task(self, case, half=None, part=None):
         """A function that writes the case as the design is now (blade_modify.

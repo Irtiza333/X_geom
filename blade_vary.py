@@ -1,17 +1,22 @@
 """
 blade_vary.py
 
-The blade parameter file's vary lines (blade_modify.py): which parameters
-change, and the range of their values. One line per parameter, in the header:
+What changes in a blade's component file (blade_modify.py, xgeom_files.py): its
+vary lines, which parameters change and the range of their values, one line per
+parameter in the header:
 
     # vary  pitch       Y  0.6  1.4      Y: a design variable, its values in 0.6 .. 1.4 (the range is optional)
     # vary  thickness   N                N: kept as the file has it
 
-A name not listed is N. blade_modify.py reads them for the XGeom blade
-(blade_control.py, the design tool), Initial_sampling.py for the MSc pipeline
-(para_control from pitch and chord, their ranges as bounds). Standard library
-only: a pipeline folder needs this file and the parameter file, nothing else of
-XGeom.
+A name not listed is N. The vary lines are for hand-written files and table
+files (no var lines); a set-up the tool saves has var lines instead, one per
+variable with its free flag ('# var pitch.v1 1.24 0.6 1.4 Y'), and read_free
+takes what changes from those: a parameter with a free variable. blade_modify.py
+reads the vary lines through xgeom_files.py for the XGeom blade
+(blade_control.py, the design tool); Initial_sampling.py reads them here for the
+MSc pipeline (para_control from pitch and chord, their ranges as bounds), else
+the free var lines. Standard library only: a pipeline folder needs this file and
+the component file (msc_blade.txt), nothing else of XGeom.
 """
 
 from dataclasses import dataclass
@@ -64,3 +69,21 @@ def read_vary(path):
     if out:
         out = {n: out.get(n, Vary(False)) for n in VARY_NAMES}
     return out
+
+
+def read_free(path):
+    """{name: Vary} of a component file's '# var <name> <value> <low> <high> Y|N' lines, every VARY_NAMES: a
+    parameter is on (Y, no range) when one of its variables is free (pitch.v1, ... for a distribution); {} when
+    the file has no var line."""
+    on = {}
+    with open(path) as fh:
+        for line in fh:
+            s = line.strip()
+            parts = s[1:].split() if s.startswith("#") else []
+            if len(parts) != 6 or parts[0] != "var":
+                continue
+            name = parts[1].split(".")[0]
+            on[name] = on.get(name, False) or parts[5].upper() in ("Y", "YES", "1", "TRUE")
+    if not on:
+        return {}
+    return {n: Vary(on.get(n, False)) for n in VARY_NAMES}

@@ -1,47 +1,52 @@
 """
 wing_modify.py
 
-A wing or a fin from a parameter file, and its design space: the span, and each spanwise distribution as a
-Bezier curve over the span fraction eta, fitted to the file, whose control points are the design variables.
-The sections are a named airfoil (airfoils.py) scaled to t/c and f/c, with Bezier changes of its thickness and
+A wing or a fin from a component file (xgeom_files.py, kind wing or fin; the planar rudder: kind rudder;
+claude/xgeom-file-formats.md), and its design space: the span, and each spanwise distribution as a Bezier curve
+over the span fraction eta, fitted to the file's table, whose control points are the design variables. The
+sections are a named airfoil (airfoils.py) scaled to t/c and f/c, with Bezier changes of its thickness and
 camber line; lofted through the sections of the XCAD file (xcad_loft.py) they give the solid, its tip flat
-unless the component file gives it a tip cap (below).
+unless the file gives it a tip cap (below).
 
-Parameter file (.dat; '#' header, np.loadtxt reads the table):
+Component file ('#' header, np.loadtxt reads the table): the geometry, the settings (sections, change_points,
+half, cap_loops), each curve's form ('table' as the file has it, 'bezier1 <points>', 'bezier2'), every
+variable's value, bounds and free flag ('# var'), and the spanwise table. A table file has no curve or var
+lines (write_params writes one), only the geometry and the table:
 
-    # XGeom wing parameters                       (a fin: # XGeom fin parameters; the same format)
-    # span_mm     200
-    # airfoil     naca2412
-    # ref_xc      0.25
-    # eta  chord_mm  sweep_mm  rake_mm  pitch_deg  t/c  f/c
-    0.00000000  120.00000000  0.00000000  0.00000000  2.00000000  0.12000000  0.02000000
+    # XGeom component
+    # kind          wing                         (fin, rudder: the same layout)
+    # name          wing
+    # ---- geometry
+    # span_mm       200
+    # section       naca2412
+    # ref_xc        0.25
+    # ---- distributions over eta = y/span
+    #  eta  pitch_deg  chord_mm   t/c   f/c  sweep_mm  rake_mm
+      0.00000000  2.00000000  120.00000000  0.12000000  0.02000000  0.00000000  0.00000000
     ...
 
     span_mm     the span, from the root (eta 0) to the tip (eta 1), mm
-    airfoil     the section by name (airfoils.py: the UIUC database in airfoils/, else the NACA 4- and 5-digit
-                equations): the shapes of its thickness and its camber line
+    section     a coordinate file relative to the component file's folder (x y per line), else an airfoil by
+                name (airfoils.py: the UIUC database in airfoils/, else the NACA 4- and 5-digit equations): the
+                shapes of its thickness and its camber line
     ref_xc      the pitch axis: the point of the chord line this fraction of the chord behind the LE
                 (optional, default 0.25)
     camber_xc   for a symmetric airfoil, which has no camber line of its own: f/c scales the NACA 4-digit
                 camber line with its maximum this fraction of the chord behind the LE (optional, default 0.4)
     eta         the span fraction, rising from 0 (the root) to 1 (the tip)
+    pitch_deg   the section's pitch (twist) about the pitch axis, the nose towards +z positive
     chord_mm    the chord
+    t/c, f/c    the airfoil's thickness and camber line scaled to these maxima over the chord
     sweep_mm    x of the LE, aft positive (the sweep)
     rake_mm     z of the LE, positive towards the side the camber bulges to (the dihedral; negative: anhedral)
-    pitch_deg   the section's pitch (twist) about the pitch axis, the nose towards +z positive
-    t/c, f/c    the airfoil's thickness and camber line scaled to these maxima over the chord
     dt1 .. dtk, dc1 .. dck
                 optional, k columns each: the Bezier changes of the thickness and the camber line (below)
 
 sweep and rake count from the root's row: the root's LE (before its pitch) is the origin. Between the rows a
 distribution is the cubic spline through them: the file's shape, the reference the design is compared with.
-
-Component file (xgeom_files.py, kind rudder, fin or wing; claude/xgeom-file-formats.md): the same geometry
-('section': a coordinate file or an airfoil by name) and table, its columns in the common order eta pitch_deg
-chord_mm t/c f/c sweep_mm rake_mm (then dt1 .. dtk dc1 .. dck), with the settings (sections, change_points),
-each curve's form ('table' as the file has it, 'bezier1 <points>', 'bezier2') and every variable's value,
-bounds and free flag. load_component reads one exactly (or an old parameter file, fitted as below);
-write_component writes one (the design tool's Save set-up, write_case's <case>.txt).
+load_component reads a component file exactly (a table file: its curves fitted as below); write_component
+writes the design as one (the design tool's Save set-up, write_case's <case>.txt), write_params the table
+alone (a table file). Old parameter files (.dat) are not read (20 Nov 2026).
 
 Tip cap (18 Nov 2026, for BB2's stern plane): the geometry key 'cap' names a cap of tip_cap.py over the tip
 section, 'scaled' (ScaledCap: cap_k_le, cap_k_te, cap_b1, cap_b2, cap_p, cap_q; the cap's height a share of
@@ -81,7 +86,7 @@ at P4). Positions are fractions of the span, so a change of the span stretches t
 values (mm, deg, t/c, f/c) stay. The root values of sweep and rake are pinned at 0. Each change dt_k, dc_k has
 a curve of its own (zero where the file has none).
 
-    params = read_params("wing_params.dat")
+    params = read_params("wing.txt")                             # the geometry and the table
     design, residuals = fit_design(params)
     space = WingSpace(params, design, free=("chord", "pitch"))
     x0, bounds = space.to_vector(design), space.bounds         # for the optimiser
@@ -122,7 +127,6 @@ DESCRIPTIONS = {
     "camber": "the airfoil's maximum camber over the chord, f/c",
 }
 PINNED = ("sweep", "rake")        # root values 0: the root's LE is the origin
-GLOBALS = ("span_mm", "airfoil", "ref_xc", "camber_xc")
 REF_XC = 0.25                     # the pitch axis, fraction of the chord from the LE
 CAMBER_XC = 0.4                   # a symmetric airfoil's camber line: NACA 4-digit, its maximum here
 CHANGES = 3                       # change points (thickness and camber each) when the file has none
@@ -159,12 +163,13 @@ def describe_curve(name, changes=None):
 
 
 # --------------------------------------------------------------------------
-# The parameter file
+# The parameters (a component file's geometry and table)
 # --------------------------------------------------------------------------
 
 @dataclass
 class WingParams:
-    """A wing parameter file: the globals and the spanwise table."""
+    """A wing's, a fin's or a planar rudder's parameters (its file's geometry and table): the globals and the
+    spanwise table."""
     span: float                   # mm
     airfoil: str
     eta: np.ndarray               # rising, 0 .. 1
@@ -172,7 +177,7 @@ class WingParams:
     changes: int = 0              # change points in the file (0: none)
     ref_xc: float = REF_XC
     camber_xc: float = CAMBER_XC
-    kind: str = "wing"            # "wing" or "fin": the file's first line
+    kind: str = "wing"            # "rudder", "fin" or "wing": the file's kind
     path: str = ""                # the file it was read from ("" when made here)
     cap: object = None            # the tip cap: tip_cap.ScaledCap or CapParams, None for a flat tip
     tip_tilt: float = 0.0         # the tip section's tilt about the thickness axis through its LE, deg (0: flat)
@@ -192,75 +197,42 @@ class WingParams:
 
 
 def read_params(path):
-    """The WingParams of a parameter file (see the module docstring), or of a component file (xgeom_files.py:
-    its geometry and table; load_component gives its design and variables too)."""
-    if XF.is_component(path):
-        comp = XF.read_component(path)
-        if comp.kind not in XF.PLANAR:
-            raise ValueError(f"{path}: a {comp.kind} file, not a rudder's, a fin's or a wing's")
-        return _component_params(comp)
-    head, first = {}, ""
-    with open(path) as fh:
-        for i, line in enumerate(fh):
-            s = line.strip()
-            if i == 0:
-                first = s.lower()
-            if not s.startswith("#"):
-                continue
-            parts = s[1:].split(None, 1)
-            if len(parts) == 2 and parts[0] in GLOBALS:
-                head[parts[0]] = parts[1].strip()
-    missing = [k for k in ("span_mm", "airfoil") if k not in head]
-    if missing:
-        raise ValueError(f"{path}: the header misses {', '.join(missing)}")
-    tab = np.atleast_2d(np.loadtxt(path, comments="#"))
-    n = tab.shape[1]
-    if n < len(COLUMNS) or (n - len(COLUMNS)) % 2:
-        raise ValueError(f"{path}: the table needs {len(COLUMNS)} columns ({' '.join(COLUMNS)}), then as many "
-                         f"dt columns as dc columns; it has {n}")
-    k = (n - len(COLUMNS)) // 2
-    if k > MAX_CHANGES:
-        raise ValueError(f"{path}: at most {MAX_CHANGES} change points")
-    eta = tab[:, 0].copy()
-    if len(eta) < 2 or np.any(np.diff(eta) <= 0.0) or abs(eta[0]) > ROW_TOL or abs(eta[-1] - 1.0) > ROW_TOL:
-        raise ValueError(f"{path}: eta must rise from 0 (the root) to 1 (the tip), at least 2 rows")
-    eta[0], eta[-1] = 0.0, 1.0
-    span, ref, cxc = float(head["span_mm"]), float(head.get("ref_xc", REF_XC)), float(head.get("camber_xc", CAMBER_XC))
-    if span <= 0.0:
-        raise ValueError(f"{path}: the span must be positive")
-    if not 0.0 <= ref <= 1.0 or not 0.0 < cxc < 1.0:
-        raise ValueError(f"{path}: ref_xc lies in [0, 1], camber_xc in (0, 1)")
-    names = CURVES + change_names(k)
-    values = {c: tab[:, i + 1].copy() for i, c in enumerate(names)}
-    for c in PINNED:
-        values[c] -= values[c][0]
-    params = WingParams(span, head["airfoil"], eta, values, k, ref, cxc, "fin" if "fin" in first else "wing",
-                        os.path.abspath(path))
-    try:
-        base_shape(params.airfoil, params.camber_xc)       # the airfoil exists and has a thickness
-    except ValueError as exc:
-        raise ValueError(f"{path}: {exc}") from None
-    return params
+    """The WingParams of a component file of kind rudder, fin or wing (see the module docstring): its geometry and
+    its table (load_component gives its design and variables too)."""
+    comp = XF.read_component(path)
+    if comp.kind not in XF.PLANAR:
+        raise ValueError(f"{path}: a {comp.kind} file, not a rudder's, a fin's or a wing's")
+    return _component_params(comp)
 
 
-def write_params(path, params, notes=()):
-    """Write a parameter file (read_params reads it back): camber_xc when the airfoil is symmetric, the change
-    columns when the file has change points."""
-    names = params.names
-    cols = COLUMNS + tuple(names[len(CURVES):])
-    lines = [f"# XGeom {params.kind} parameters"]
-    lines += [f"# {n}" for n in notes]
-    lines += [f"# span_mm     {params.span:.10g}", f"# airfoil     {params.airfoil}",
-              f"# ref_xc      {params.ref_xc:.10g}"]
+def write_params(path, params, name=None, notes=(), kind=None):
+    """Write the parameters as a table file of kind (default params.kind), a component file with no curve or var
+    lines (read_params reads it back; load_component fits the curves to its table): the geometry (the span, the
+    section, the pitch axis, camber_xc for a symmetric section, the tip tilt and cap) and the table, with the dt
+    and dc columns of its change points."""
+    kind = kind or params.kind
+    comp = XF.Component(kind, name or os.path.splitext(os.path.basename(path))[0], list(notes))
+    comp.geometry = _geometry(params, os.path.dirname(os.path.abspath(path)), params.span)
+    order = list(XF.CURVE_COLUMNS[kind]) + list(change_names(params.changes))     # the table's order
+    comp.columns = XF.COLUMNS[kind] + tuple(change_names(params.changes))
+    comp.table = np.column_stack([params.eta] + [params.values[c] for c in order])
+    return XF.write_component(path, comp)
+
+
+def _geometry(params, folder, span):
+    """The geometry keys of a component file in folder: the span (mm), the section (a coordinate file relative to
+    folder, else the airfoil's name), the pitch axis and, for a symmetric section, camber_xc; the tip tilt and
+    the cap when params has them."""
+    g = {"span_mm": XF.num(span)}
+    own = os.path.isabs(params.airfoil) and os.path.isfile(params.airfoil)        # a coordinate file
+    g["section"] = XF.rel(params.airfoil, folder) if own else params.airfoil
+    g["ref_xc"] = XF.num(params.ref_xc)
     if base_shape(params.airfoil, params.camber_xc)[2]["symmetric"]:
-        lines.append(f"# camber_xc   {params.camber_xc:.10g}")
-    lines.append("# " + "  ".join(cols))
-    for i, e in enumerate(params.eta):
-        row = [e] + [params.values[c][i] for c in names]
-        lines.append("  ".join(f"{BM._clean(v):.8f}" for v in row))
-    with open(path, "w") as fh:
-        fh.write("\n".join(lines) + "\n")
-    return path
+        g["camber_xc"] = XF.num(params.camber_xc)
+    if params.tip_tilt > 0.0:
+        g["tip_tilt_deg"] = XF.num(params.tip_tilt)
+    g.update(cap_geometry(params.cap))
+    return g
 
 
 # --------------------------------------------------------------------------
@@ -932,32 +904,6 @@ class WingSpace:
         return space, space.design_of(vals)
 
 
-def space_record(space, design, params, settings=None, geometry=None):
-    """The set-up as plain data: what it is for (geometry: "wing" or "fin", default the parameter file's
-    kind), the parameter file (path and globals), the settings, the space with the design in it."""
-    return {"geometry": geometry or params.kind, "created": datetime.datetime.now().isoformat(timespec="seconds"),
-            "params_file": params.path,
-            "globals": {"span_mm": params.span, "airfoil": params.airfoil, "ref_xc": params.ref_xc,
-                        "camber_xc": params.camber_xc},
-            "settings": dict(settings or {}), "space": space.to_dict(design)}
-
-
-def load_wing_space(path):
-    """(space, design, record) of a set-up the design tool saved (<case>_design_space.json); the parameter
-    file is read again from the path the record names:
-
-        space, design, rec = load_wing_space("outputs/wing/gui_design_space.json")
-        x0, bounds = space.to_vector(design), space.bounds
-        d = space.to_design(x)
-        problems = design_problems(d, space.params)
-    """
-    with open(path) as fh:
-        rec = json.load(fh)
-    params = read_params(rec["params_file"])
-    space, design = WingSpace.from_dict(params, rec["space"])
-    return space, design, rec
-
-
 # --------------------------------------------------------------------------
 # The component file (xgeom_files.py)
 # --------------------------------------------------------------------------
@@ -1093,22 +1039,16 @@ def _component_space(comp, params, design, free=None):
 
 
 def load_component(path, orders=None, segments=None, free=None):
-    """A rudder, fin or wing from a component file (xgeom_files.py) or an old parameter file (read_params, its
-    curves fitted as fit_design fits them, the names in free free): an XF.Loaded with the parameters, the
-    design, the design space (every variable, the held ones fixed), the file's settings (SETTING_TYPES; an old
-    file has none), its name and notes. The kind is the file's (an old file: wing or fin).
+    """A rudder, fin or wing from a component file (xgeom_files.py): an XF.Loaded with the parameters, the design
+    (each curve as its var lines give it; a curve without them fitted to its column as fit_design fits it,
+    orders and segments, or as the table has it), the design space (every variable, the held ones fixed; a
+    variable without a var line free as the vary lines say, else as the names in free), the file's settings
+    (SETTING_TYPES), its name and notes. The kind is the file's.
 
         ld = load_component("fin.txt")
         x0, bounds = ld.space.to_vector(ld.design), ld.space.bounds
         d = ld.space.to_design(x)
     """
-    name = os.path.splitext(os.path.basename(path))[0]
-    if not XF.is_component(path):
-        params = read_params(path)
-        design, _ = fit_design(params, orders, segments)
-        notes, _ = XF.legacy_header(path, GLOBALS)
-        return XF.Loaded(params.kind, params, design, WingSpace(params, design, free=tuple(free or ())), {}, name,
-                         notes, {}, True)
     comp = XF.read_component(path)
     if comp.kind not in XF.PLANAR:
         raise ValueError(f"{path}: a {comp.kind} file, not a rudder's, a fin's or a wing's")
@@ -1117,7 +1057,7 @@ def load_component(path, orders=None, segments=None, free=None):
     space = _component_space(comp, params, design, free)
     settings = XF.typed_settings(comp, SETTING_TYPES)
     settings["change_points"] = design.changes
-    return XF.Loaded(comp.kind, params, design, space, settings, comp.name, list(comp.notes), {}, False)
+    return XF.Loaded(comp.kind, params, design, space, settings, comp.name, list(comp.notes), {})
 
 
 def write_component(path, params, design, space, settings=None, name=None, notes=(), kind=None):
@@ -1126,19 +1066,9 @@ def write_component(path, params, design, space, settings=None, name=None, notes
     symmetric section, camber_xc of params), the settings (sections; change_points, the design's), each curve's
     form, every variable of space (value, bounds, free) and the distributions at the parameter file's rows,
     with the dt and dc columns of the design's change points."""
-    folder = os.path.dirname(os.path.abspath(path))
     kind = kind or params.kind
     comp = XF.Component(kind, name or os.path.splitext(os.path.basename(path))[0], list(notes))
-    g = comp.geometry
-    g["span_mm"] = XF.num(design.span)
-    own = os.path.isabs(params.airfoil) and os.path.isfile(params.airfoil)        # a coordinate file
-    g["section"] = XF.rel(params.airfoil, folder) if own else params.airfoil
-    g["ref_xc"] = XF.num(params.ref_xc)
-    if base_shape(params.airfoil, params.camber_xc)[2]["symmetric"]:
-        g["camber_xc"] = XF.num(params.camber_xc)
-    if params.tip_tilt > 0.0:
-        g["tip_tilt_deg"] = XF.num(params.tip_tilt)
-    g.update(cap_geometry(params.cap))
+    comp.geometry = _geometry(params, os.path.dirname(os.path.abspath(path)), design.span)
     comp.settings = XF.settings_text({**(settings or {}), "change_points": design.changes}, SETTING_TYPES)
     order = list(XF.CURVE_COLUMNS[kind]) + list(change_names(design.changes))     # the table's order
     for c in order:

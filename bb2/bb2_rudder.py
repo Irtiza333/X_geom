@@ -34,7 +34,7 @@ Edges are measured from cuts: BB2's stern plane by planes s = const, the rudder 
 cut's largest x (X), the TE its smallest; each straight edge is the least-squares line over its straight part;
 its top is where the cuts leave that line by more than EDGE_TOL of the chord.
 
-Writes into the output folder (bb2_build.py's, with bb2_hull_params.dat and bb2_hull_hub.step): bb2_rudder.step/
+Writes into the output folder (bb2_build.py's, with bb2_hull_table.txt and bb2_hull_hub.step): bb2_rudder.step/
 .iges (the rudder with its TE square at 45 deg, with its root extension), bb2_rudder_compare.dat (one row per shape:
 BB2's stern plane, then the rudders of CASES), bb2_rudder_sections.dat (the cuts) and bb2_rudder_compare.png (the
 planforms in the stern plane's plane with x across, the distance map, cuts).
@@ -434,7 +434,7 @@ def main():
     x_iges, r_iges = B.hull_profile(hull_shell)
     x_fwd = S.hub_forward_x(hull_shell)
     x_pmb, _ = B.middle_body(hull_shell)
-    params = HM.read_params(os.path.join(out, "bb2_hull_params.dat"))
+    params = HM.read_params(os.path.join(out, "bb2_hull_table.txt"))
     x_shift = x_pmb + 1000.0 * (params.nose + params.middle)
     design = B.fit_hull(params, x_iges, r_iges, x_fwd, x_pmb, x_shift, verbose=False)
     radius = lambda x: design.radius("r", (x_shift - np.atleast_1d(np.asarray(x, dtype=float))) / 1000.0) * 1000.0

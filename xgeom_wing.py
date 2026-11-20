@@ -1,13 +1,13 @@
 """
 xgeom_wing.py
 
-The wing and the fin in the XGeom design tool (xgeom_tool.py): a wing parameter file (wing_modify.py) as the
-tool's variables, its live views and the CAD build. The two share all of it; each has its own parameter file
-and output folder (ROLES). Since 13 Nov 2026 the rudder too, as a planar lifting surface (PlanarRudderAdapter: a
+The wing and the fin in the XGeom design tool (xgeom_tool.py): a wing's component file (wing_modify.py,
+xgeom_files.py) as the tool's variables, its live views and the CAD build. The two share all of it; each has its
+own file and output folder (ROLES). Since 13 Nov 2026 the rudder too, as a planar lifting surface (PlanarRudderAdapter: a
 component file of kind rudder, such as BB2's stern plane, bb2/outputs/bb2_sternplane.txt), the Rudder slot's
 other model beside the modified-below-H one (xgeom_rudder.py); it has no default file.
 
-A wing or a fin starts from a parameter file: the span, the airfoil, the pitch axis and the spanwise table.
+A wing or a fin starts from a component file: the span, the airfoil, the pitch axis and the spanwise table.
 Its variables: the span (mm), and each distribution (chord, sweep, rake, pitch, thickness, camber) and each
 section change (dt1 .. dtk of the thickness, dc1 .. dck of the camber line) as a Bezier curve over the span
 fraction eta, fitted to the file, of 1 or 2 segments as the blade's (xgeom_blade.py), or as the table has it
@@ -16,9 +16,8 @@ pinned at 0: the root's LE is the origin. A change of the span stretches the cur
 staying. A new form or order is fitted to the parameter file while none of the curve's variables has changed,
 else to the curve's present shape. set_changes sets the number of change points along the chord (0 to 8): the
 changes are carried over, exactly when there are more of them. set_sections sets the sections of the XCAD file.
-load_params reads a component file (xgeom_files.py: its design, variables and settings exactly) or an old
-parameter file (fitted); save_file writes the design, its variables and the settings as a component file (Save
-set-up); save_params writes the design as an old parameter file.
+load_params reads a component file (its design, variables and settings exactly; a table file's curves fitted);
+save_file writes the design, its variables and the settings as one (Save set-up).
 
 The views are drawn as the rudder's, in the wing's own frame: x (or the curve's value) across and the span up.
 
@@ -27,7 +26,6 @@ The adapter has the methods of xgeom_rudder.RudderAdapter that the tool uses.
 
 from __future__ import annotations
 
-import json
 import os
 import time
 
@@ -44,7 +42,6 @@ FREE = ("chord", "pitch")                         # the curves whose variables s
 ROLES = {"wing": {"name": "Wing", "params": "wing.txt", "out_dir": os.path.join("outputs", "wing")},
          "fin": {"name": "Fin", "params": "fin.txt", "out_dir": os.path.join("outputs", "fin")},
          "rudder": {"name": "Rudder", "params": None, "out_dir": os.path.join("outputs", "rudder_planar")}}
-PLANAR_RUDDER_GEOMETRY = "rudder_planar"          # a planar rudder's JSON set-up (the rudder-h model's say rudder)
 TWO_SEGMENT_ROWS = (("v1", "P1 value (root)"), ("d1", "P2=P3 d1"), ("w23", "P2=P3 weight"), ("u4", "P4 position"),
                     ("v4", "P4 value"), ("d2", "P5=P6 d2"), ("w56", "P5=P6 weight"), ("v7", "P7 value (tip)"))
 TWO_SEGMENT_POINT = {"v1": 0, "d1": 1, "w23": 1, "u4": 3, "v4": 3, "d2": 4, "w56": 4, "v7": 6}
@@ -69,14 +66,14 @@ class WingAdapter:
 
     # ---------------------------------------------------------------- the file
     def load_params(self, path):
-        """Start from a component file (wing_modify.load_component: its design, variables and settings exactly)
-        or an old parameter file: its distributions fitted (1 segment), the variables of FREE free."""
+        """Start from a component file (wing_modify.load_component: its design, variables and settings exactly;
+        a table file's distributions fitted, 1 segment, the variables of FREE free)."""
         ld = WM.load_component(path, free=self.settings["free"])
         self.params, self.design = ld.params, ld.design
         self.meta = {n: {"lo": float(lo), "hi": float(hi), "free": n not in ld.space.fixed}
                      for n, (lo, hi) in zip(ld.space.all_names, ld.space.all_bounds)}
         self.settings.update({k: v for k, v in ld.settings.items() if k in self.CASE_KEYS})
-        self.file, self.legacy, self.notes = os.path.abspath(path), ld.legacy, ld.notes
+        self.file, self.notes = os.path.abspath(path), ld.notes
         self.as_fitted = set(self.design.names)     # curves still as the file has them (no variable changed)
         self._rebuild()
         self._original = None
@@ -87,14 +84,7 @@ class WingAdapter:
         then."""
         WM.write_component(path, self.params, self.design, self.free_space(), self._case_settings(),
                            os.path.splitext(os.path.basename(path))[0], self.notes, self.role)
-        self.file, self.legacy = os.path.abspath(path), False
-        return path
-
-    def save_params(self, path):
-        """Write the design as a parameter file (read_params and load_params read it)."""
-        WM.write_params(path, WM.design_params(self.design, self.params),
-                        notes=(f"written by the design tool from {os.path.basename(self.params.path)}, "
-                               f"{time.strftime('%d %b %Y %H:%M')}",))
+        self.file = os.path.abspath(path)
         return path
 
     @property
@@ -420,35 +410,6 @@ class WingAdapter:
 
     def _case_settings(self):
         return {k: self.settings[k] for k in self.CASE_KEYS}
-
-    def space_record(self):
-        """The set-up as plain data (wing_modify.load_wing_space reads it back)."""
-        geometry = PLANAR_RUDDER_GEOMETRY if self.role == "rudder" else self.role
-        return WM.space_record(self.free_space(), self.design, self.params, self._case_settings(), geometry)
-
-    def save_space(self, path):
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        with open(path, "w") as fh:
-            json.dump(self.space_record(), fh, indent=1)
-        return path
-
-    def load_space(self, path):
-        """Start from a saved set-up (<case>_design_space.json); its parameter file is read again."""
-        with open(path) as fh:
-            rec = json.load(fh)
-        ok = (PLANAR_RUDDER_GEOMETRY,) if self.role == "rudder" else ("wing", "fin")
-        if rec.get("geometry") not in ok:
-            raise ValueError(f"{path} is not a {' or '.join(ok)} design space")
-        params = WM.read_params(rec["params_file"])
-        space, design = WM.WingSpace.from_dict(params, rec["space"])
-        self.params, self.design, self._original = params, design, None
-        self.file, self.legacy, self.notes = params.path, not WM.XF.is_component(params.path), []
-        self.as_fitted = set()                      # a saved design: refits keep its curves' shapes
-        self.meta = {q["name"]: {"lo": q["lo"], "hi": q["hi"], "free": q["free"]} for q in rec["space"]["slots"]}
-        for k in self.CASE_KEYS:
-            if k in rec.get("settings", {}):
-                self.settings[k] = rec["settings"][k]
-        self._rebuild()
 
     def build_task(self, case, half=None):
         """A function that writes the case as the design is now (wing_modify.write_case: the component file,

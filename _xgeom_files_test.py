@@ -2,8 +2,9 @@
 _xgeom_files_test.py
 
 Self-check for the XGeom input files (xgeom_files.py): the component file's text (every kind, and what it
-refuses), each kind through its module (blade_modify, wing_modify, hull_modify: an old parameter file, its
-design written and read back exactly, rewrites identical, a hand-written file), and the assembly file.
+refuses, old parameter files among it), each kind through its module (blade_modify, wing_modify, hull_modify: a
+table file, its design written and read back exactly, rewrites identical, a hand-written file), and the
+assembly file.
 
     python _xgeom_files_test.py          the files and the modules
     python _xgeom_files_test.py --gui    also the window's Load ... and Save set-up ...
@@ -91,23 +92,43 @@ def test_text(tmp):
     check("written and read back: notes, geometry, table", [back.notes == comp.notes, back.geometry == comp.geometry,
                                                             float(np.abs(back.table - comp.table).max())],
           [1, 1, 0], 0)
-    check("first lines: a component file, its kind; an old parameter file's kind", [
-        XF.is_component(path), XF.component_kind(path) == "blade", XF.legacy_kind("msc_blade_params.dat") == "blade",
-        XF.legacy_kind("fin_params.dat") == "fin", XF.legacy_kind("suboff_hull_params.dat") == "hull",
-        XF.file_kind("wing_params.dat") == "wing", XF.file_kind(good) == "blade"], [1] * 7, 0)
+    old = {kind: text_file(tmp, f"old_{kind}.dat", [f"# XGeom {word} parameters", "# span_mm  200",
+                                                    "# r/R  P/D  c/D  t/c  f/c  skew_deg  rake/D", "0 1 2 3 4 5 6"])
+           for word, kind in (("propeller blade", "blade"), ("wing", "wing"), ("fin", "fin"), ("hull", "hull"))}
+    check("first lines: a component file, its kind; an old parameter file's kind (legacy_kind, file_kind)", [
+        XF.is_component(path), XF.component_kind(path) == "blade", XF.file_kind(good) == "blade"]
+        + [XF.legacy_kind(f) == k and XF.file_kind(f) == k and not XF.is_component(f) for k, f in old.items()],
+        [1] * 7, 0)
+    msgs = []
+    for k, f in old.items():
+        module = BM if k == "blade" else HM if k == "hull" else WM
+        for fn in (XF.read_component, XF.load, module.read_params, module.load_component):
+            try:
+                fn(f)
+                msgs.append("")
+            except ValueError as exc:
+                msgs.append(str(exc))
+    check("an old parameter file is refused by read_component, load and its module's read_params and "
+          "load_component, the message naming it", [m.startswith(f"{f}: an old ") and "parameter file" in m
+                                                    for f, m in zip([f for f in old.values() for _ in range(4)], msgs)],
+          [1] * 16, 0)
 
 
 def test_blade(tmp):
     print("\nthe blade (blade_modify)")
-    src = open("msc_blade_params.dat").read()
-    for n, flag in (("pitch", "Y  0.6  1.4"), ("chord", "Y"), ("skew", "Y"), ("radius", "Y")):
-        src = src.replace(f"# vary  {n:<11s} N", f"# vary  {n:<11s} {flag}")
-    old = text_file(tmp, "msc_y.dat", src.splitlines())
-    ld = BM.load_component(old, {"skew": 4}, {"skew": 1})
-    check("an old file: legacy, its curves' forms from its vary lines, the flagged ones free",
-          [ld.legacy, ld.design.curves["pitch"].segments, ld.design.curves["skew"].segments,
+    flags = {"pitch": BM.Vary(True, 0.6, 1.4), "chord": BM.Vary(True), "skew": BM.Vary(True), "radius": BM.Vary(True)}
+    table = BM.write_params(os.path.join(tmp, "msc_y.txt"), BM.msc_params(vary={n: flags.get(n, BM.Vary(False))
+                                                                                 for n in BM.VARY_NAMES}))
+    comp = XF.read_component(table)
+    ld = BM.load_component(table, {"skew": 4}, {"skew": 1})
+    check("a table file (write_params): no curve or var lines, its vary lines (not the cone's); its curves' forms "
+          "from them, the flagged ones free",
+          [not comp.curves and not comp.vars, len(comp.vary), comp.vary["pitch"] == (True, 0.6, 1.4),
+           ld.design.curves["pitch"].segments, ld.design.curves["skew"].segments,
            ld.design.curves["rake"].segments, "radius" in ld.space.names, "hub_radius" in ld.space.names,
-           ld.space.bounds[ld.space.names.index("pitch.v4")][1]], [1, 2, 1, 0, 1, 0, 1.4], 0)
+           ld.space.bounds[ld.space.names.index("pitch.v4")][1]], [1, 9, 1, 2, 1, 0, 1, 0, 1.4], 0)
+    again = BM.write_params(os.path.join(tmp, "msc_y2.txt"), BM.read_params(table), "msc_y")
+    check("a table file read and written again: the same file", filecmp.cmp(table, again, shallow=False), 1, 0)
     vals = ld.space.values(ld.design)
     vals.update({"pitch.v4": 1.05 * vals["pitch.v4"], "chord.u4": 0.55, "skew.v2": vals["skew.v2"] + 1.0,
                  "radius": 0.72, "hub_radius": 0.13})
@@ -123,7 +144,7 @@ def test_blade(tmp):
     check("... the forms, the free variables, the bounds, the settings, the name and notes",
           [[back.design.curves[c].segments for c in BM.CURVES] == [d.curves[c].segments for c in BM.CURVES],
            back.space.names == ld.space.names, float(np.abs(back.space.all_bounds - ld.space.all_bounds).max()),
-           back.settings == st, back.name == "blade", back.notes == ["changed"], back.legacy], [1, 1, 0, 1, 1, 1, 0], 0)
+           back.settings == st, back.name == "blade", back.notes == ["changed"]], [1, 1, 0, 1, 1, 1], 0)
     p2 = BM.write_component(os.path.join(tmp, "blade2.txt"), back.params, back.design, back.space, back.settings,
                             back.name, back.notes)
     check("written again from what was read: the same file", filecmp.cmp(p1, p2, shallow=False), 1, 0)
@@ -157,7 +178,7 @@ def test_blade(tmp):
                                                                                              h.space.names)
                                                                      if n.startswith("chord.v"))], [2, 0, 1, 1, 0.1],
           0)
-    bb2 = os.path.join("bb2", "outputs", "bb2_blade_params.dat")
+    bb2 = os.path.join("bb2", "outputs", "bb2_blade.txt")
     if os.path.exists(bb2):
         lb = BM.load_component(bb2)
         pb = BM.write_component(os.path.join(tmp, "bb2.txt"), lb.params, lb.design, lb.space, {}, "bb2", lb.notes,
@@ -170,7 +191,13 @@ def test_blade(tmp):
 
 def test_planar(tmp):
     print("\nthe rudder, the fin and the wing (wing_modify)")
-    for src, kind in (("wing_params.dat", "wing"), ("fin_params.dat", "fin"), ("fin_params.dat", "rudder")):
+    for sample, kind in (("wing.txt", "wing"), ("fin.txt", "fin"), ("fin.txt", "rudder")):
+        src = WM.write_params(os.path.join(tmp, f"{kind}_table.txt"), WM.read_params(sample))   # the sample's table
+        comp = XF.read_component(src)
+        check(f"{kind}: the table file of {sample}: no curve or var lines, its geometry and table",
+              [not comp.curves and not comp.vars, comp.geometry == {k: v for k, v in XF.read_component(sample)
+                                                                    .geometry.items()},
+               float(np.abs(comp.table - XF.read_component(sample).table).max())], [1, 1, 0], 0)
         ld = WM.load_component(src, free=("chord", "pitch"))
         vals = ld.space.values(ld.design)
         vals.update({"chord.v1": 1.1 * vals["chord.v1"], "span": 210.0, "dt1.v1": 0.004,
@@ -211,14 +238,15 @@ def test_planar(tmp):
 
 def test_hull(tmp):
     print("\nthe hull (hull_modify)")
-    for src in ("suboff_hull_params.dat", os.path.join("bb2", "outputs", "bb2_hull_params.dat")):
+    suboff = HM.write_params(os.path.join(tmp, "suboff_hull_table.txt"), HM.suboff_params())   # SUBOFF's stations
+    for src in (suboff, os.path.join("bb2", "outputs", "bb2_hull_table.txt")):
         if not os.path.exists(src):
             continue
         ld = HM.load_component(src)
         vals = ld.space.values(ld.design)
         vals.update({"nose": 1.05 * vals["nose"], "middle": 0.9 * vals["middle"], "tail_r.N2": 2.2})
         d = ld.space.design_of(vals)
-        name = os.path.basename(src)[:-len("_params.dat")]
+        name = os.path.basename(src)[:-len("_table.txt")]
         p1 = HM.write_component(os.path.join(tmp, f"{name}.txt"), ld.params, d, ld.space, name, ld.notes,
                                 settings={"half": True})
         back = HM.load_component(p1)
@@ -235,7 +263,7 @@ def test_hull(tmp):
               [back.params.x[0], back.params.x[-1] - (d.length - (d.cap if back.params.x[-1] < d.length else 0)),
                float(np.diff(back.params.x).min() > 0), back.notes == ld.notes,
                back.settings.get("half", False)], [0, 0, 1, 1, 1], 1e-6 * d.length)
-    ld = HM.load_component("suboff_hull_params.dat")
+    ld = HM.load_component(suboff)
     el = ld.space.values(ld.design)
     design = HM.HullDesign(ld.design.nose, ld.design.middle, ld.design.tail, ld.design.cap, ld.design.r,
                            ld.design.re, {**{k: c.copy() for k, c in ld.design.curves.items()},
@@ -259,9 +287,14 @@ def test_hull(tmp):
 def test_assembly(tmp):
     print("\nthe assembly file")
     asm = XF.Assembly("suboff", ["the example vehicle"], {"hull": "suboff_hull.txt", "blade": "msc_blade.txt"},
-                      {"prop_dx": "0", "rudders": "4", "rudder_rake": "none"}, {"samples": "30", "seed": "1"})
+                      {"prop_x": "1", "rudders": "4", "rudder_rake": "none"}, {"samples": "30", "seed": "1"})
     path = XF.write_assembly(os.path.join(tmp, "asm.txt"), asm)
     back = XF.read_assembly(path)
+    old_keys = os.path.join(tmp, "old.txt")             # the placement in m (prop_dx, rudder_dx) until 13 Nov 2026
+    with open(old_keys, "w") as fh:
+        fh.write("# XGeom assembly\n# hull  h.txt\n# prop_dx  0\n")
+    check("an assembly with the old placement keys (prop_dx, rudder_dx, in m) is refused, not misread: positions "
+          "are x/L now", refused(XF.read_assembly, old_keys), 1, 0)
     check("the assembly file: LF line endings on every platform", open(path, "rb").read().count(b"\r"), 0, 0)
     check("written and read back: name, notes, components, placement, run; the component paths resolved",
           [back.name == "suboff", back.notes == asm.notes, back.components == asm.components,
@@ -286,7 +319,7 @@ def test_examples():
             check(f"{path} is there", 0, 1, 0)
             continue
         ld = XF.load(path)
-        check(f"{path}: a {kind} component, read through its module", [ld.kind == kind, not ld.legacy], [1, 1], 0)
+        check(f"{path}: a {kind} component, read through its module", ld.kind == kind, 1, 0)
 
 
 def test_gui(tmp):
@@ -306,6 +339,19 @@ def test_gui(tmp):
             time.sleep(0.03)
     save, open_ = XT.filedialog.asksaveasfilename, XT.filedialog.askopenfilename
     try:
+        old = text_file(tmp, "old_blade.dat", ["# XGeom propeller blade parameters", "# diameter_m 1.4"])
+        js = text_file(tmp, "old_design_space.json", ['{"geometry": "blade", "params_file": "x.dat", "space": {}}'])
+        msgs = []
+        for fn in (lambda: XT.load_adapter("blade", old), lambda: XT.App(root, "blade", space=js),
+                   lambda: XT.App(root, "vehicle", space=[js])):
+            try:
+                fn()
+                msgs.append("")
+            except ValueError as exc:
+                msgs.append(str(exc))
+        check("the tool refuses an old parameter file (--file, Load ...) and a blade's old set-up JSON (--space), "
+              "saying why", ["an old blade parameter file" in msgs[0], "starts from its component file" in msgs[1],
+                             "starts from its component file" in msgs[2]], [1, 1, 1], 0)
         app = XT.App(root, "vehicle")
         settle()
         cases = (("blade", "radius", 0.69, "pitch.v1", "msc_blade.txt"),

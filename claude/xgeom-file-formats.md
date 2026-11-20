@@ -26,7 +26,9 @@ assembly. XGeom is the pre-optimization design step.
   the hull and the appendages are fixed (their CAD written once); each sample's CAD is the blade with its hub
   sector, as the mesh step takes it. Initial_sampling.py takes the assembly beside the MSc path, so a running
   campaign is unaffected; the infill reads the same variables and bounds from the assembly.
-- Old .dat parameter files still load; the JSON set-ups are replaced by the component files (the rudder-h
+- Component files only (20 Nov 2026, the user: "From now on it's just the new format"; until then the old .dat
+  parameter files loaded and `xgeom_files.py convert` converted them): an old parameter file is refused with a
+  message that names it, and the JSON set-ups of the blade, wing, fin and hull are not read (the rudder-h
   model keeps its JSON).
 - Case outputs: `<case>.txt` (the design as a component file) in place of `<case>_params.dat` and
   `<case>_design_space.json`.
@@ -67,7 +69,9 @@ Header lines:
 - `# curve <name> <form>`: `table` (the column as it is: the cubic spline through the rows, no variables),
   `bezier1 <points>`, `bezier2` (x_blade's form, P1 to P7), and for the hull `cst <order>`.
 - `# var <name> <value> <low> <high> <Y|N>`: one line per variable, Y free (values written to 12 figures).
-- `# vary <name> Y|N [low high]`: accepted in hand-written files (blade_vary.py), not written.
+- `# vary <name> Y|N [low high]` (blade_vary.py): Y free or N held, for the curves and globals without var
+  lines; hand-written, or written in a blade's table file that has them (below). A set-up has var lines
+  instead.
 - `# ---- <title>`: separators, ignored. The last `#` line before the table names the columns.
 
 Keys and columns:
@@ -79,6 +83,12 @@ Keys and columns:
 | hull | nose_m, middle_m, tail_m, cap_m, axisymmetric | | x_m r_m [rp_m] |
 
 Rules:
+- A table file is a component file with no curve or var lines: the geometry, optional vary lines and the table
+  (`write_params` of blade_modify, wing_modify and hull_modify writes one; `read_params` reads the geometry and
+  the table of any component file). Loaded, its curves are fitted to its table: the blade's as its vary lines
+  say (none: blade_control's forms, `FREE` free), the wing's and the fin's 1 segment (`xgeom_wing.FREE` free),
+  the hull's CST curves (the lengths and curves free). It holds reference data: the stations From CAD extracts
+  for the hull, the tables the BB2 scripts write.
 - The var lines define a Bezier curve exactly; its column is the curve at the rows, so Save and Load
   round-trip (a rewrite gives the same file). A column edited under its curve's var lines is refused with a
   message; delete the curve's var lines and it is fitted to the column (default bounds; free per vary lines,
@@ -135,9 +145,10 @@ Rules:
   write_assembly), so the same design gives byte-identical files on any machine, and a rewrite of a loaded
   file gives the same bytes (round-trip tested with filecmp in `_xgeom_files_test.py`).
 
-Code: `xgeom_files.py` (the text, `load` and `convert`); `load_component` and `write_component` in
-`blade_modify.py`, `wing_modify.py` and `hull_modify.py`. Old files: `python xgeom_files.py convert old.dat
-new.txt`. Examples in X_geom (the tool's defaults): `msc_blade.txt`, `wing.txt`, `fin.txt`, `suboff_hull.txt`.
+Code: `xgeom_files.py` (the text, `load`; `legacy_kind` and `file_kind` recognise an old parameter file so it
+is refused by name); `read_params`, `write_params` (a table file), `load_component` and `write_component` in
+`blade_modify.py`, `wing_modify.py` and `hull_modify.py`. Examples in X_geom (the tool's defaults):
+`msc_blade.txt`, `wing.txt`, `fin.txt`, `suboff_hull.txt`.
 
 ## Assembly file
 
@@ -180,8 +191,8 @@ new.txt`. Examples in X_geom (the tool's defaults): `msc_blade.txt`, `wing.txt`,
 
 ## GUI
 
-- The File box's Load ... reads a component file (or an old .dat) and sets the whole panel. Save set-up ...
-  writes the component file; the dialog opens on the file it came from (an old .dat gives a .txt beside it).
+- The File box's Load ... reads a component file and sets the whole panel. Save set-up ... writes the component
+  file; the dialog opens on the file it came from. `--space` takes the rudder-h model's JSON set-ups only.
 - From CAD ... (13 Nov 2026, `xgeom_from_cad.py`): in the File box of the blade and the hull and in the
   rudder's Set-up box. A STEP or IGES file of the component is extracted (blade_extraction.py, hull_extraction's
   stations, Rudder_geom_extraction.py with the per-section fits), every curve is fitted in each candidate form
@@ -193,12 +204,12 @@ new.txt`. Examples in X_geom (the tool's defaults): `msc_blade.txt`, `wing.txt`,
   range (`FIT_TIE`). The status line lists the forms and their errors. Changing points or segments afterwards
   refits the curve to the extracted file and the status line gives the new error. Files, in the component's
   output folder, the case named after the CAD file: blade `<case>.txt` (the six distributions as tables, the
-  reference) and `<case>_setup.txt` (the set-up; blade_control.FREE free); hull `<case>_params.dat` (the
-  stations) and `<case>.txt` (the set-up; lengths and curves free); rudder `<case>_extraction/` and
+  reference) and `<case>_setup.txt` (the set-up; blade_control.FREE free); hull `<case>_table.txt` (the
+  stations, a table file) and `<case>.txt` (the set-up; lengths and curves free); rudder `<case>_extraction/` and
   `<case>_design_space.json`. The run is off the GUI thread (a hull a few seconds, the BB2 propeller about a
   minute, the wind-tunnel rudder about two minutes). Needs OCC, as the extraction codes do.
 - `python xgeom_from_cad.py blade|hull|rudder <file> [--out DIR] [--case NAME]`: the same without the window;
-  for the blade an extracted `<case>.txt` and for the hull a `<case>_params.dat` give the set-up alone (no
+  for the blade an extracted `<case>.txt` and for the hull a table file `<case>_table.txt` give the set-up alone (no
   OCC needed). For a planar table (a WingParams) `best_wing_forms` and `wing_setup` do the same.
 - `python xgeom_from_cad.py rudder_planar <extraction folder> [--case NAME]` (18 Nov 2026; no OCC needed): a
   planar rudder's set-up from Rudder_geom_extraction's outputs (`planar_rudder_setup`): 21 rows to the top of
@@ -268,3 +279,16 @@ save), a `.gitattributes` (`*.txt text eol=lf`) so Windows checkouts keep them L
 without its `"written"` time stamp (an unchanged set-up saves to the same bytes; older set-ups still load). The
 examples above are the public ones (the MSc blade, SUBOFF). Eddie's interface rules are in
 `docs/keeping-interfaces-stable.md`, and `_xgeom_web_contract_test.py` runs before every change is handed over.
+
+20 Nov 2026, later: component files only (the user). The old parameter files and the old JSON set-ups of the
+blade, wing, fin and hull are gone from the repository and the outputs (`msc_blade_params.dat`,
+`wing_params.dat`, `fin_params.dat`, `suboff_hull_params.dat`, the tool's old `gui_params.dat` and
+`gui_design_space.json`); reading one gives `<path>: an old <kind> parameter file, which XGeom no longer reads
+(since 20 Nov 2026): it reads component files only`. Removed: `xgeom_files.convert` and its command line,
+`legacy_header`, `Loaded.legacy`; the old set-up JSON's functions `space_record`, `load_blade_space`,
+`load_wing_space`, `load_hull_space`; the adapters' `save_params`, `space_record`, `save_space`, `load_space`
+(the blade's, the wing's, the fin's, the hull's and the planar rudder's `rudder_planar` JSON; the rudder-h
+model's stay) and their `legacy` attribute. `write_params` now writes a table file (above). Kept for the web app: `legacy_kind` and `file_kind`. The hull's
+From CAD writes its stations as `<case>_table.txt`. `Initial_sampling.py` reads `msc_blade.txt`: its vary lines,
+else its free var lines (`blade_vary.read_free`: pitch or chord free when one of its variables is). For the web
+app: no key is new or changed; a table file may carry vary lines, which every XGeom's component reader takes.

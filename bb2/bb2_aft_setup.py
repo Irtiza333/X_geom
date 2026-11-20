@@ -11,7 +11,7 @@ hull     Its sections are circles (r the same all round within 0.002 mm), so the
          revolution: hull_modify without a nose (Ln 0: its front the flat cut at mid-length), the
          parallel middle body, the tail to the hub's forward end, where
          the radius is the propeller drawing's hub base (the hub is the propeller's: bb2_prop_setup.txt). The
-         station table bb2_hull_aft_params.dat (the profile in the plane through the axis at 45 deg, N_TAIL
+         station table bb2_hull_aft_table.txt (the profile in the plane through the axis at 45 deg, N_TAIL
          cosine-spaced stations along the tail) and the set-up bb2_hull.txt, the tail's CST order the one that
          fits best (xgeom_from_cad.hull_setup). Frame: the hull tool's x (m, aft from the cut) is
          (x_cut - x) / 1000 (x_cut the cut's x), its y is -y.
@@ -382,7 +382,7 @@ def main():
     t0 = time.time()
     hull, plane = parts(SOURCE)
     params, hf = aft_hull(hull)
-    pp = HM.write_params(os.path.join(out, "bb2_hull_aft_params.dat"), params)
+    pp = HM.write_params(os.path.join(out, "bb2_hull_aft_table.txt"), params)
     setup, orders = FC.hull_setup(pp, os.path.join(out, "bb2_hull.txt"), os.path.basename(pp))
     hd = HM.load_component(setup).design
     xr = np.linspace(hf["x_fwd"], hf["x_cut"], 3001)

@@ -1,25 +1,25 @@
 """
 blade_control.py
 
-A propeller blade from a component file (xgeom_files.py) or an old parameter
-file (blade_modify.py), built with the MSc blade code. Set the file, the
-settings and the designs below, then run
+A propeller blade from a component file (xgeom_files.py, blade_modify.py),
+built with the MSc blade code. Set the file, the settings and the designs below,
+then run
 
     python blade_control.py
 
-1. PARAMS is read (the radial table and the globals, see blade_modify). A
-   component file gives its curves and variables (bounds, free flags) exactly,
-   and its settings over those below. An old parameter file's
-   '# vary <name> Y|N [low high]' lines say what changes: each distribution
-   (pitch, chord, thickness, camber, skew, rake) flagged Y is fitted with a
-   Bezier curve over r/R of 1 or 2 segments (SEGMENTS) whose variables are
-   free, within low .. high when given; one flagged N stays exactly as the file
-   has it; radius, hub_radius, hub_height flagged Y are free too. The starting
-   design has the blade radius D/2, the hub radius root r/R x D/2 and the
-   file's hub height (hub_new.DEFAULT_HUB_HEIGHT when it gives none). A file
-   with no vary line: every distribution fitted, FREE below free.
-   Nothing flagged Y: only the original blade is written (case "original",
-   with its CAD); cases() is not used.
+1. PARAMS is read (the radial table and the globals, see blade_modify). Its
+   curves and variables (bounds, free flags) are taken exactly as its curve and
+   var lines give them, and its settings over those below. A table file (no
+   curve or var lines): its '# vary <name> Y|N [low high]' lines say what
+   changes: each distribution (pitch, chord, thickness, camber, skew, rake)
+   flagged Y is fitted with a Bezier curve over r/R of 1 or 2 segments
+   (SEGMENTS) whose variables are free, within low .. high when given; one
+   flagged N stays exactly as the file has it; radius, hub_radius, hub_height
+   flagged Y are free too. The starting design has the blade radius D/2, the hub
+   radius root r/R x D/2 and the file's hub height (hub_new.DEFAULT_HUB_HEIGHT
+   when it gives none). A table file with no vary line: every distribution
+   fitted, FREE below free. Nothing free: only the original blade is written
+   (case "original", with its CAD); cases() is not used.
 2. Each case in cases() is a design: change the curves (control values,
    positions, weights) or the blade's radius, hub radius and hub height to
    change the blade.
@@ -41,7 +41,7 @@ from dataclasses import dataclass
 import blade_modify as BM
 
 # ---------------- FILES ----------------------------------------------------------
-PARAMS = "msc_blade.txt"               # the blade's component file (or an old parameter file, .dat)
+PARAMS = "msc_blade.txt"               # the blade's component file
 OUT_DIR = "outputs/blade"
 
 
@@ -106,8 +106,9 @@ if __name__ == "__main__":
               f"({100 * rel:.2f} % of its range)")
     space = ld.space
     free = tuple(dict.fromkeys(n.split(".")[0] for n in space.names))
+    table = not BM.XF.read_component(PARAMS).vars and BM.vary_free(params) is None     # no var or vary line
     print("changed: " + (", ".join(free) if free else "nothing (no free variable): the original blade only")
-          + ("" if not ld.legacy or BM.vary_free(params) is not None else f" (no vary line in {PARAMS}: FREE)"))
+          + (f" (no var or vary line in {PARAMS}: FREE)" if table else ""))
     out = BM.outside_bounds(space, design)
     if out:
         print("note: the file's blade lies outside the ranges of " + ", ".join(out))

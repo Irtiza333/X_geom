@@ -2,8 +2,8 @@
 # The script supports two input paths:
 # 1) read existing control points from file
 # 2) generate N new blade designs using optimized Latin hypercube sampling
-# What changes (pitch, chord, both, or nothing: the original blade's CAD only) comes from the '# vary' lines of
-# the blade parameter file BLADE_PARAMS (see below).
+# What changes (pitch, chord, both, or nothing: the original blade's CAD only) comes from the blade's component
+# file BLADE_PARAMS: its '# vary' lines, else its free var lines (see below).
 
 import argparse
 import subprocess
@@ -17,7 +17,7 @@ from scipy.stats import qmc
 
 import para_control_bez_updated as bezier_constraints
 import para
-from blade_vary import read_vary
+from blade_vary import read_free, read_vary
 from pipeline_config import INFILL_ROUND, case_id, infill_paths, initial_sampling_paths
 from pipeline_io import append_design_row, clear_file, load_table, save_table, split_case_ids
 from X_CAD_new import X_CAD_from_design
@@ -118,15 +118,16 @@ from x_blade_new import R_VALUES as _R_VALUES
 # the clamped extrapolation below it as if it were design.
 R_FINE = np.linspace(float(_R_VALUES[0]), 0.998, 100)
 
-# What changes comes from the blade parameter file's '# vary <name> Y|N [low high]' lines (blade_vary.read_vary),
-# the file the XGeom tools read. pitch and chord Y or N give para_control (both 7, chord only 2, pitch only 3;
-# neither 0: no sampling, only the original blade's CAD, case ORIGINAL_CASE_ID in ORIGINAL_GEOMETRY_DIR). A range
-# on their line ('# vary pitch Y 0.6 1.3') bounds their values: pitch p1y and p7y and the cap of P4's pitch
-# (max_pitch, else 1.4); chord p1y and y4. The positions, fractions and weights keep the bounds above. Only the
-# flagged parameters' variables are sampled and written (pitch's 6, then chord's 5). The blade is x_blade_new's
-# (the MSc polynomials, which msc_blade_params.dat tabulates); other parameters flagged Y are not varied here. A
-# file with no vary line: both, with the bounds above, as before.
-BLADE_PARAMS = ROOT / "msc_blade_params.dat"
+# What changes comes from the blade's component file, the file the XGeom tools read: its '# vary <name> Y|N
+# [low high]' lines (blade_vary.read_vary), else its var lines (blade_vary.read_free: pitch or chord Y when one of
+# its variables is free, as the tool's Save set-up writes them). pitch and chord Y or N give para_control (both 7,
+# chord only 2, pitch only 3; neither 0: no sampling, only the original blade's CAD, case ORIGINAL_CASE_ID in
+# ORIGINAL_GEOMETRY_DIR). A range on a vary line ('# vary pitch Y 0.6 1.3') bounds their values: pitch p1y and p7y
+# and the cap of P4's pitch (max_pitch, else 1.4); chord p1y and y4. The positions, fractions and weights keep the
+# bounds above (a var line's bounds do too). Only the flagged parameters' variables are sampled and written
+# (pitch's 6, then chord's 5). The blade is x_blade_new's (the MSc polynomials, which msc_blade.txt tabulates);
+# other parameters flagged Y are not varied here. A file with no vary or var line: both, with the bounds above.
+BLADE_PARAMS = ROOT / "msc_blade.txt"
 ORIGINAL_CASE_ID = 0
 ORIGINAL_GEOMETRY_DIR = ROOT / "geometry" / "original"
 PITCH_VALUE_ROWS = (0, 5)        # pitch_bounds rows that are P/D values: p1y, p7y
@@ -134,16 +135,17 @@ CHORD_VALUE_ROWS = (0, 3)        # chord_bounds rows that are c/D values: p1y, y
 
 
 def sampling_setup(params_path=BLADE_PARAMS):
-    """What the parameter file's vary lines ask for: a dict with para_control, the pitch and chord bounds (their
-    value rows set by the file's ranges), max_pitch, which parameters are sampled, and notes to print."""
+    """What the component file asks for (its vary lines, else its free var lines): a dict with para_control, the
+    pitch and chord bounds (their value rows set by the vary lines' ranges), max_pitch, which parameters are
+    sampled, and notes to print."""
     p_bounds, c_bounds = pitch_bounds.copy(), chord_bounds.copy()
     out = {"pitch_bounds": p_bounds, "chord_bounds": c_bounds, "max_pitch": bezier_constraints.MAX_PITCH}
     vary = {}
     if Path(params_path).is_file():
-        vary = read_vary(params_path)
+        vary = read_vary(params_path) or read_free(params_path)
     if not vary:
         out.update(para_control=7, pitch=True, chord=True,
-                   notes=[f"{Path(params_path).name}: " + ("no vary line" if Path(params_path).is_file() else
+                   notes=[f"{Path(params_path).name}: " + ("no vary or var line" if Path(params_path).is_file() else
                                                           "not found") + "; pitch and chord both vary (para_control 7)"])
         return out
     pitch, chord = vary["pitch"], vary["chord"]

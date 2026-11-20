@@ -4,7 +4,7 @@ bb2_build.py
 BB2 with its propeller in the STP/IGES frame (mm, x towards the bow): one blade on the conic hub and
 cap of the propeller drawing, and the aft half of the hull, from bb2_sections.py's files.
 
-  blade    blade_modify reads bb2_blade_params.dat (every vary line N: the file's distributions); the surface is
+  blade    blade_modify reads bb2_blade.txt (every vary line N: the file's distributions); the surface is
            blade_surface_new.BladeSurface with the section shape of each r/R of bb2_section_tables.dat, cubic in
            r/R between them (SectionsBladeSurface); its root runs ROOT_EXT_M below r/R 0.2, inside the hub, so the
            hub cuts the root sections; tip_surfaces_new.build_drdc_grids and X_CAD_new.X_CAD (no hub) give the
@@ -30,7 +30,7 @@ Writes into the output folder (bb2_sections.py's): bb2_blade_hub.step/.iges, bb2
 bb2_hull_hub.step (the hull with the hub, no blade), bb2_vehicle.step/.iges (one blade), bb2_prop6.step/.iges and
 bb2_vehicle6.step/.iges (six blades), bb2_blade_sector.step/.iges (one blade on 1/6 of the hub, a solid),
 bb2_blade_sector_walls.step/.iges (its walls), bb2_hull_quadrant.iges, bb2_hull_hub_quadrant.iges,
-bb2_hull_params.dat (the hull tool's station table), bb2_build_check.png (side view, x across), and prints how far
+bb2_hull_table.txt (the hull tool's station table), bb2_build_check.png (side view, x across), and prints how far
 the blade lies from prop.stp's blade 1 at cylinder cuts (at the table's radii and between them) and the hull from
 hull.iges.
 
@@ -131,21 +131,12 @@ class SectionsBladeSurface(BladeSurface):
         return np.stack([s, ys], axis=-1)
 
 
-def header_value(path, key):
-    with open(path) as fh:
-        for line in fh:
-            parts = line[1:].split() if line.startswith("#") else []
-            if len(parts) >= 2 and parts[0] == key:
-                return parts[1]
-    raise ValueError(f"{path}: no '# {key}' line")
-
-
 def blade_surface(out_dir, root_extension=ROOT_EXT_M):
     """(SectionsBladeSurface, x0 mm, theta_ref rad) of the files in out_dir."""
-    path = os.path.join(out_dir, "bb2_blade_params.dat")
+    path = os.path.join(out_dir, "bb2_blade.txt")
     params = BM.read_params(path)
     design, _ = BM.fit_design(params)                         # every vary line N: the file's own splines
-    tables = S.read_tables(os.path.join(out_dir, header_value(path, "section_tables")))
+    tables = S.read_tables(params.tables_path())
     blade = SectionsBladeSurface(tables, *design.props(), d=design.diameter, r_root=design.r0,
                                  root_extension=root_extension, airfoil_path=params.section_path())
     return (blade,) + S.read_frame(path)
@@ -543,8 +534,7 @@ def main():
 
     # the hull
     params = hull_params(x_iges, r_iges, x_fwd, x_pmb, r_pmb, x_cut)
-    HM.write_params(os.path.join(out, "bb2_hull_params.dat"), params)
-    params = HM.read_params(os.path.join(out, "bb2_hull_params.dat"))
+    params = HM.read_params(HM.write_params(os.path.join(out, "bb2_hull_table.txt"), params))
     x_shift = x_pmb + 1000.0 * (params.nose + params.middle)
     design = fit_hull(params, x_iges, r_iges, x_fwd, x_pmb, x_shift)
     problems = HM.design_problems(design)

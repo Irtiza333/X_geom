@@ -35,8 +35,9 @@ Component file ('#' lines are the header, the rest is one table, which np.loadtx
             variables), bezier1 <points> (one Bezier from the root to the tip), bezier2 (two rational cubic
             segments, x_blade's form), cst <order> (a hull curve)
     var     one variable: its value, its bounds and whether it is free (a design variable) or held
-    vary    '<name> Y|N [low high]' (blade_vary.py), for hand-written files: the curves and globals with no var
-            lines are free (Y) or held (N), their values within low .. high when given
+    vary    '<name> Y|N [low high]' (blade_vary.py): the curves and globals with no var lines are free (Y) or
+            held (N), their values within low .. high when given; hand-written, or a blade's table file
+            (blade_modify.write_params) that has them
     ----    a separator line, ignored
 An unknown key is an error (free text goes on note lines). Geometry and settings values are kept as text here;
 the modules read them.
@@ -64,10 +65,12 @@ Assembly file:
     XF.write_component("copy.txt", comp)
     ld = XF.load("msc_blade.txt")                          # through blade_modify: params, design, space, ...
 
-An old parameter file (blade_modify, wing_modify, hull_modify .dat) still loads (load); convert writes it as a
-component file:
+A table file is a component file with no curve or var lines (blade_modify, wing_modify and hull_modify
+write_params write one): load_component fits the curves to its table.
 
-    python xgeom_files.py convert msc_blade_params.dat msc_blade.txt
+Only component files are read (20 Nov 2026). An old parameter file ('# XGeom <kind> parameters' first, .dat) is
+refused with a message that names it (legacy_kind); the old set-up JSONs of the blade, wing, fin and hull are no
+longer read either (the rudder modified below H keeps its JSON set-ups, rudder_modify.load_design_space).
 """
 
 from __future__ import annotations
@@ -93,7 +96,8 @@ GEOMETRY = {"blade": ("diameter_m", "blades", "root_r", "hub_height_m", "hub_bas
 SETTINGS = {"blade": ("sections", "tip_band", "tip_sections", "clearance_mm", "hub", "part"),
             **{k: ("sections", "change_points", "half", "cap_loops") for k in PLANAR},
             "hull": ("half",)}
-ALIASES = {"blade": {"section_table": "section", "airfoil": "section"},          # old files' keys, read as these
+ALIASES = {"blade": {"section_table": "section", "airfoil": "section"},          # the old parameter files' keys,
+                                                                                   # read as these
            **{k: {"airfoil": "section"} for k in PLANAR}, "hull": {}}
 COLUMNS = {"blade": ("r/R", "P/D", "c/D", "t/c", "f/c", "skew_deg", "rake/D"),
            **{k: ("eta", "pitch_deg", "chord_mm", "t/c", "f/c", "sweep_mm", "rake_mm") for k in PLANAR},
@@ -170,8 +174,8 @@ class Assembly:
 @dataclass
 class Loaded:
     """A component as a module reads it (load_component): its parameters (the table and the geometry), its
-    design and its design space (every variable, the held ones fixed), the file's settings (typed; an old
-    parameter file has none), name, notes and extra geometry keys (kept and written back)."""
+    design and its design space (every variable, the held ones fixed), the file's settings (typed), name, notes
+    and extra geometry keys (kept and written back)."""
     kind: str
     params: object
     design: object
@@ -180,7 +184,6 @@ class Loaded:
     name: str
     notes: list
     extra: dict
-    legacy: bool
 
 
 # --------------------------------------------------------------------------
@@ -300,21 +303,6 @@ def settings_text(settings, types):
     return out
 
 
-def legacy_header(path, keys, extra_keys=()):
-    """(notes, extra) of an old parameter file: its free-text '#' lines (not the first line, a key of keys, a
-    vary line, the vary lines' explanation or the column line) and the first word after each of extra_keys."""
-    head, _, _ = _lines(path)
-    notes, extra = [], {}
-    for _, s in head[1:-1]:
-        text = s.lstrip("#").strip()
-        parts = text.split()
-        if parts[0] in extra_keys and len(parts) > 1:
-            extra[parts[0]] = parts[1]
-        elif parts[0] not in keys and parts[0] != "vary" and not text.startswith("Y/N per parameter"):
-            notes.append(text)
-    return notes, extra
-
-
 def vars_of(space, design):
     """{variable: Var} of a design space with a design in it (blade_modify.BladeSpace, wing_modify.WingSpace or
     hull_modify.HullSpace: all_names, all_bounds, fixed, values)."""
@@ -361,7 +349,7 @@ def read_component(path):
     it cannot read."""
     head, data, lines = _lines(path)
     if not head or _norm(head[0][1]) != _norm(COMPONENT):
-        raise ValueError(f"{path}: not a component file (its first line is not '{COMPONENT}')")
+        raise not_component(path)
     if not data:
         raise ValueError(f"{path}: no table")
     col_no, col_line = head[-1]
@@ -514,6 +502,11 @@ def component_text(comp):
         for c, (form, k) in comp.curves.items():
             out.append(f"# curve  {c:<{w}s}  {form}" + (f" {k}" if k is not None else ""))
             out += [var_line(n) for n in groups[c]]
+    if comp.vary:
+        out.append("# ---- vary (Y: changes, its values within low .. high when given; N: kept as the table has it)")
+        w = max(len(n) for n in comp.vary)
+        out += [f"# vary   {n:<{w}s}  {yn(on)}" + (f"  {num(lo)}  {num(hi)}" if lo is not None else "")
+                for n, (on, lo, hi) in comp.vary.items()]
     out.append(f"# ---- {TITLES[comp.kind]}")
     d = DECIMALS[comp.kind]
     cells = [[f"{0.0 if abs(v) < 0.5 * 10.0 ** -d else v:.{d}f}" for v in row] for row in comp.table]
@@ -533,31 +526,40 @@ def write_component(path, comp):
 
 
 # --------------------------------------------------------------------------
-# Any component through its module; old parameter files
+# Any component through its module; old parameter files refused
 # --------------------------------------------------------------------------
 
 LEGACY = (("propeller blade", "blade"), ("wing", "wing"), ("fin", "fin"), ("hull", "hull"))
 
 
 def legacy_kind(path):
-    """The kind of an old parameter file ('# XGeom <kind> parameters' first), else None."""
+    """The kind of an old parameter file ('# XGeom <kind> parameters' first, which is no longer read), else
+    None."""
     first = _norm(first_line(path))
     if not first.startswith("# xgeom") or not first.endswith("parameters"):
         return None
     return next((kind for word, kind in LEGACY if word in first), None)
 
 
+def not_component(path):
+    """The error for a file that is not a component file; an old parameter file is named as one."""
+    old = legacy_kind(path)
+    if old:
+        return ValueError(f"{path}: an old {old} parameter file, which XGeom no longer reads (since 20 Nov 2026): "
+                          f"it reads component files only ('{COMPONENT}' first)")
+    return ValueError(f"{path}: not a component file (its first line is not '{COMPONENT}')")
+
+
 def file_kind(path):
-    """The kind of a component file or an old parameter file, else None."""
+    """The kind of a component file, or of an old parameter file (the tool then routes it to its component,
+    whose module refuses it), else None."""
     return component_kind(path) or legacy_kind(path)
 
 
 def load(path, **kw):
-    """The Loaded of a component file or an old parameter file, read by its kind's module (blade_modify,
-    wing_modify, hull_modify; kw go to its load_component)."""
-    kind = file_kind(path)
-    if kind is None:
-        raise ValueError(f"{path}: not a component file ('{COMPONENT}') or an old XGeom parameter file")
+    """The Loaded of a component file, read by its kind's module (blade_modify, wing_modify, hull_modify; kw go
+    to its load_component)."""
+    kind = read_component(path).kind
     if kind == "blade":
         import blade_modify as module
     elif kind == "hull":
@@ -565,33 +567,6 @@ def load(path, **kw):
     else:
         import wing_modify as module
     return module.load_component(path, **kw)
-
-
-def convert(path, out=None, name=None):
-    """Write an old parameter file (a blade's, a wing's, a fin's or a hull's) as a component file (default:
-    beside it, .txt), its curves fitted and free as the design tool starts them, the tool's settings; returns
-    the new file's path."""
-    kind = legacy_kind(path)
-    if kind is None:
-        raise ValueError(f"{path}: not an old XGeom parameter file")
-    out = out or os.path.splitext(path)[0] + ".txt"
-    name = name or os.path.splitext(os.path.basename(out))[0]
-    if kind == "blade":
-        import blade_control as BC
-        import blade_modify as BM
-        ld = BM.load_component(path, BC.ORDERS, BC.SEGMENTS, BC.FREE)
-        s = BC.settings
-        st = {"sections": s.sections, "tip_band": s.tip_band, "tip_sections": s.tip_sections,
-              "clearance_mm": s.clearance_mm, "hub": s.hub}
-        return BM.write_component(out, ld.params, ld.design, ld.space, st, name, ld.notes, ld.extra)
-    if kind == "hull":
-        import hull_modify as HM
-        ld = HM.load_component(path)
-        return HM.write_component(out, ld.params, ld.design, ld.space, name, ld.notes)
-    import wing_modify as WM
-    import xgeom_wing as XW
-    ld = WM.load_component(path, free=XW.FREE)
-    return WM.write_component(out, ld.params, ld.design, ld.space, {"sections": WM.SECTIONS}, name, ld.notes, kind)
 
 
 # --------------------------------------------------------------------------
@@ -655,10 +630,3 @@ def write_assembly(path, asm):
         fh.write(assembly_text(asm))
     return path
 
-
-if __name__ == "__main__":
-    import sys
-    if len(sys.argv) not in (3, 4) or sys.argv[1] != "convert":
-        print("python xgeom_files.py convert <old parameter file> [<component file>]")
-        sys.exit(1)
-    print(convert(sys.argv[2], sys.argv[3] if len(sys.argv) == 4 else None))

@@ -1,26 +1,24 @@
 """
 xgeom_hull.py
 
-The hull in the XGeom design tool (xgeom_tool.py): a hull parameter file (hull_modify.py) as the tool's
-variables, its live views and the CAD build.
+The hull in the XGeom design tool (xgeom_tool.py): a hull's component file (hull_modify.py, xgeom_files.py)
+as the tool's variables, its live views and the CAD build.
 
-A hull starts from a parameter file, a station table (the nose, middle-body, tail and cap lengths and the
+A hull starts from a component file, its station table (the nose, middle-body, tail and cap lengths and the
 half-height r at stations, with elliptical sections also the half-width r'); by default SUBOFF's
-(suboff_hull_params.dat, or SUBOFF's equations when that file is not there). Its variables (hull_modify.HullSpace):
+(suboff_hull.txt, or SUBOFF's equations when that file is not there). Its variables (hull_modify.HullSpace):
 the four lengths, the largest radius r* and the tail end's radius re (with elliptical sections also r'* and r'e),
 and each curve's exponent and free coefficients. The curves: nose r and tail r; with elliptical sections
-(set_elliptic) also nose r' and tail r', fitted to the parameter file's half-widths (an axisymmetric file: copies
-of the r curves). A new order (set_order) is fitted to the parameter file while none of the curve's variables has
-changed, else to the curve's present shape. load_params reads a component file (xgeom_files.py: its design and
-variables exactly; by default suboff_hull.txt) or an old parameter file (fitted); save_file writes the design and
-its variables as a component file (Save set-up); save_params writes the design as an old parameter file.
+(set_elliptic) also nose r' and tail r', fitted to the file's half-widths (an axisymmetric file: copies of the r
+curves). A new order (set_order) is fitted to the file's stations while none of the curve's variables has
+changed, else to the curve's present shape. load_params reads a component file (its design and variables
+exactly; a table file's curves fitted); save_file writes the design and its variables as one (Save set-up).
 
 The adapter has the methods of xgeom_rudder.RudderAdapter that the tool uses.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import time
 
@@ -49,24 +47,24 @@ class HullAdapter:
     def __init__(self, params=None):
         self.out_dir = HM.OUT_DIR
         self.settings = {"plot": True, "half": False}
-        self.load_params(params or (DEFAULT_FILE if os.path.exists(DEFAULT_FILE) else HM.SUBOFF_PARAMS))
+        self.load_params(params or DEFAULT_FILE)
 
     # ---------------------------------------------------------------- the file
     def load_params(self, path):
-        """Start from a component file (hull_modify.load_component: its design and variables exactly) or an old
-        parameter file: its curves fitted (order hull_modify.DEFAULT_ORDER), the lengths and the curves free
-        (hull_modify.DEFAULT_FREE), the radii and the cap held (SUBOFF's parameter file not there: SUBOFF's
-        equations)."""
+        """Start from a component file (hull_modify.load_component: its design and variables exactly; a table
+        file's curves fitted, order hull_modify.DEFAULT_ORDER, the lengths and the curves free,
+        hull_modify.DEFAULT_FREE, the radii and the cap held); DEFAULT_FILE when it is not there: SUBOFF's
+        equations, fitted the same way."""
         if os.path.exists(path):
             ld = HM.load_component(path)
             params, design, space, source = ld.params, ld.design, ld.space, os.path.basename(path)
-            self.file, self.legacy, self.notes = os.path.abspath(path), ld.legacy, ld.notes
+            self.file, self.notes = os.path.abspath(path), ld.notes
             self.settings["half"] = bool(ld.settings.get("half", self.settings.get("half", False)))
-        elif os.path.basename(path) == HM.SUBOFF_PARAMS:
+        elif os.path.basename(path) == DEFAULT_FILE:
             params, source = HM.suboff_params(), "SUBOFF's equations"
             design = HM.fit_design(params)
             space = HM.HullSpace(design)
-            self.file, self.legacy, self.notes = None, True, list(params.notes)
+            self.file, self.notes = None, list(params.notes)
         else:
             raise FileNotFoundError(path)
         self.params, self.source, self.design = params, source, design
@@ -81,13 +79,7 @@ class HullAdapter:
         HM.write_component(path, self.params, self.design, self.free_space(),
                            os.path.splitext(os.path.basename(path))[0], self.notes,
                            settings={"half": self.settings.get("half", False)})
-        self.file, self.legacy, self.source = os.path.abspath(path), False, os.path.basename(path)
-        return path
-
-    def save_params(self, path):
-        """Write the design as a parameter file (read_params and load_params read it)."""
-        HM.write_params(path, HM.design_params(self.design),
-                        notes=(f"written by the design tool from {self.source}, {time.strftime('%d %b %Y %H:%M')}",))
+        self.file, self.source = os.path.abspath(path), os.path.basename(path)
         return path
 
     @property
@@ -355,36 +347,6 @@ class HullAdapter:
         """The design space with the unticked variables held fixed: the one an optimiser gets."""
         fixed = {n: self.values[n] for n in self.space.all_names if not self.meta[n]["free"]}
         return HM.HullSpace(self.design, bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()}, fixed=fixed)
-
-    def space_record(self):
-        """The set-up as plain data (hull_modify.load_hull_space reads it back)."""
-        return HM.space_record(self.free_space(), self.design, self.params)
-
-    def save_space(self, path):
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        with open(path, "w") as fh:
-            json.dump(self.space_record(), fh, indent=1)
-        return path
-
-    def load_space(self, path):
-        """Start from a saved set-up (<case>_design_space.json): its design, bounds and free flags; its
-        parameter file is read again (none: SUBOFF's equations; not found: the design's own stations)."""
-        space, design, rec = HM.load_hull_space(path)
-        if rec.get("geometry") != "hull":
-            raise ValueError(f"{path} is not a hull design space")
-        pf = rec.get("params_file")
-        if pf and os.path.exists(pf):
-            self.params, self.source = HM.read_params(pf), os.path.basename(pf)
-        elif not pf:
-            self.params, self.source = HM.suboff_params(), "SUBOFF's equations"
-        else:
-            self.params, self.source = HM.design_params(design), f"{os.path.basename(path)} ({pf} not found)"
-        self.file = pf if pf and os.path.exists(pf) else None
-        self.legacy, self.notes = not (self.file and HM.XF.is_component(self.file)), list(self.params.notes)
-        self.design = design
-        self.as_fitted = set()                      # a saved design: new orders keep its curves' shapes
-        self.meta = {q["name"]: {"lo": q["lo"], "hi": q["hi"], "free": q["free"]} for q in rec["space"]["slots"]}
-        self._rebuild()
 
     def build_task(self, case, half=None):
         """A function that writes the case as the design is now (hull_modify.write_case: the component file,
