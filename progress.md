@@ -249,13 +249,13 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   merged `Initial_sampling.py` runs a round in infill mode (cloud, the CAD left out: cases 100 to 102, resumed
   without repeats). The GP script keeps its own copy of the bounds and 11 variables: ranges on the vary lines,
   or pitch or chord alone, are not yet seen by it.
-- BB2 (one-off, user, 22 Oct 2026; `bb2/`, the scripts take the input paths): the MARIN stock propeller S7371R cut
-  at 34 radii into `bb2/outputs/bb2_blade_params.dat` (blade_modify's format: D 5 m, Z 6, every vary line N), a
-  section table per r/R and one at r/R 0.7 (`bb2_sections.py`); one blade on the conic hub and cap of drawing F6
+- BB2 (one-off, user, 22 Oct 2026; `bb2/`, the scripts take the input paths): BB2's propeller cut
+  at 34 radii into `bb2/outputs/bb2_blade_params.dat` (blade_modify's format, every vary line N), a
+  section table per r/R and one at r/R 0.7 (`bb2_sections.py`); one blade on the conic hub and cap of the propeller drawing
   (the root runs 0.1 m into the hub, so the hub cuts the root sections) and the aft half of the hull rebuilt with
   `hull_modify` (tail order 5, within 0.96 mm of the IGES), fused into one valid solid (`bb2_build.py`). The blade
   takes the section shape per r/R (`SectionsBladeSurface`): within 0.9 mm of the original at 44 cuts; X_CAD_new's
-  single table is off by up to 23 mm at the root (the shape changes along the span). The outputs carry MARIN data.
+  single table is off by up to 23 mm at the root (the shape changes along the span). The outputs carry confidential data.
   Then (user, 22 Oct 2026): the six-blade propeller (`bb2_prop6`, `bb2_vehicle6`); quadrant IGES files with
   solids, the quadrant y >= 0, z >= 0 of hull.iges (hull, hub with six blades, vehicle); the wind-tunnel rudder as
   BB2's X stern (`bb2_rudder.py`): scaled 1:20 (the free fit gives 1:20.006) and placed by a fit of its LE, TE and
@@ -728,6 +728,26 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   docstring updated). No file format changed. Tests: tool 70 with the window (the CAD's two edges measured,
   a flat top, the ringing on plain and refined knots, one fraction, a pair, two lofts), wing 71, hull 65,
   modify 136; the web contract test passes.
+- Bookkeeping (20 Nov 2026; the user: the code base is growing; follow Eddie's interface guideline as far as it
+  does not compromise the tool). Eddie's two files are in the repository: `_xgeom_web_contract_test.py` at the
+  root (it was the untracked `_xgeom_web_contract_test 1.py`; it has to sit beside the modules) and his note as
+  `docs/keeping-interfaces-stable.md`. The contract test runs before every change is handed over (18 s on the
+  user's machine). His open requests 1 to 3: the samples `fin.txt`, `wing.txt` and `msc_blade.txt` re-saved as
+  the tool writes them (one default line each, `# cap_loops 40` or `# part sector`; the geometry and every
+  variable the same, each file a fixed point of open and save; the contract test's notes on them gone), a
+  `.gitattributes` (`*.txt text eol=lf`; the repository's .txt files are LF already, so nothing to
+  renormalize), and the rudder's set-up JSON without its `"written"` time stamp (`xgeom_rudder.space_record`;
+  an unchanged set-up saves to the same bytes; older set-ups still load, the key is ignored). Request 5: the
+  `bb2/` scripts' comments and docstrings no longer name the propeller or give BB2's dimensions (positions,
+  radii, angles, the drawing and report numbers; the method's spacings and tolerances kept), their plot titles
+  and output headers say "BB2's propeller", their code is unchanged (its constants still hold the drawing's
+  values); the propeller's name is also gone from `claude/xgeom-file-formats.md` (its examples are now the MSc
+  blade and SUBOFF) and from the 22 Oct entry above. Still open: 4 (the blade's root extension in preview()),
+  6 (para_control_bez_updated.py imports matplotlib.pyplot at the top, through x_blade_new), 7 (old assembly
+  files). New: `docs/module-map.md`, every module with what it does, where it lives (X_geom, the Rudder
+  folder), its self-checks and whether the web app imports it; `README.md` points to the docs. Tests: tool 71
+  with the window (an unchanged set-up saves to the same bytes), files 51, wing 71, blade 77, hull 65; the
+  contract test passes with one note (request 6).
 
 ## Next steps
 

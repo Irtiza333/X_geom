@@ -1,8 +1,8 @@
 """
 bb2_build.py
 
-BB2 with its stock propeller S7371R in the STP/IGES frame (mm, x towards the bow): one blade on the conic hub and
-cap of drawing F6, and the aft half of the hull, from bb2_sections.py's files.
+BB2 with its propeller in the STP/IGES frame (mm, x towards the bow): one blade on the conic hub and
+cap of the propeller drawing, and the aft half of the hull, from bb2_sections.py's files.
 
   blade    blade_modify reads bb2_blade_params.dat (every vary line N: the file's distributions); the surface is
            blade_surface_new.BladeSurface with the section shape of each r/R of bb2_section_tables.dat, cubic in
@@ -58,7 +58,7 @@ import vehicle_cad as VC                                   # noqa: E402
 import xcad_loft as XL                                     # noqa: E402
 from blade_surface_new import BladeSurface, CanonicalSectionFamily   # noqa: E402
 
-ROOT_EXT_M = 0.10            # the blade runs this far below its root (r/R 0.2) into the hub: to r = 400 mm
+ROOT_EXT_M = 0.10            # the blade runs this far below its root (r/R 0.2) into the hub
 N_V = 801                    # stations around a section behind SectionsBladeSurface's shapes
 NOSE_M = 3.0                 # the hull's dummy nose (cut away)
 NOSE_AHEAD_M = 1.0           # the middle body reaches this far ahead of the cut
@@ -487,7 +487,7 @@ def plot_check(path, blade, x0, theta_ref, x_iges, r_iges, design, x_shift, x_fw
     ax3.set_xlabel("x (mm)")
     ax3.set_ylabel("hull radius: hull_modify - hull.iges (mm)")
     ax3.grid(True, color="#e4e3df")
-    fig.suptitle("BB2 aft half with the S7371R blade on the conic hub: side view (r against x)")
+    fig.suptitle("BB2 aft half with its blade on the conic hub: side view (r against x)")
     fig.tight_layout()
     fig.savefig(path, dpi=110)
     return path

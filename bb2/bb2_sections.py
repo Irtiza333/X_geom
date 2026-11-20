@@ -1,7 +1,7 @@
 """
 bb2_sections.py
 
-The MARIN stock propeller S7371R of BB2 (prop.stp, full scale, mm) as XGeom blade input. Blade 1 is cut by
+BB2's propeller (prop.stp, full scale, mm) as XGeom blade input. Blade 1 is cut by
 cylinders about the shaft (x) at the radii RR. Per cut:
   nose-tail line   the two points of the cut farthest apart on the unrolled cylinder (s = r theta, x); the LE is
                    the upstream one (larger x)
@@ -12,7 +12,7 @@ cylinders about the shaft (x) at the radii RR. Per cut:
                    para.py's 26 stations; f/c and t/c their maxima over c'
   skew, rake       of the reference point 0.5 c' from the LE on the nose-tail line, inverted from para.py's
                    mapping: skew = theta_ref - theta (deg, theta_ref the root's), rake = x0 - x + r skew tan(phi)
-                   (x0 the generator line, F6: 31.4 mm model scale aft of the hub's forward end)
+                   (x0 the generator line, the drawing's distance GEN_L aft of the hub's forward end)
 
 Frames. The STP/IGES frame: mm, x the shaft axis towards the bow, theta = atan2(z, y); the propeller turns towards
 larger theta. The blade frame of para.py and BladeSurface (X_CAD_new's IGES, mm there): X downstream, the blade
@@ -48,7 +48,7 @@ import airfoils                                            # noqa: E402
 import xcad_loft as XL                                     # noqa: E402
 
 # --------------------------------------------------------------------------
-# The propeller and the hub (drawing F6, report 26053-7-SMB: model scale mm times the scale)
+# The propeller and the hub (the propeller drawing: model scale mm times the scale)
 # --------------------------------------------------------------------------
 D_MM = 5000.0
 R_MM = 0.5 * D_MM
@@ -61,7 +61,7 @@ HUB_L = 85.5 * SCALE                    # forward end to the cap's tip, mm
 GEN_L = 31.4 * SCALE                    # forward end to the generator line, mm
 P_TIP_MM = 226.09 * SCALE               # pitch at r/R 1 (the drawing's table)
 
-ROOT_RR = 0.2                           # the blade's root (its faces start at r = 500 mm)
+ROOT_RR = 0.2                           # the blade's root (where its faces start)
 ROOT_CUT_MM = 500.01                    # the root cut (a cut on the faces' own edge fails)
 BOUNDARY_RR = 0.975                     # the tip face starts there: cut just outside (BOUNDARY_CUT_MM)
 BOUNDARY_CUT_MM = 2437.55
@@ -380,19 +380,19 @@ def main():
     # files
     tables = [table_rows(s) for s in secs]
     with open(os.path.join(out, "bb2_sections_raw.dat"), "w") as fh:
-        fh.write(f"# MARIN S7371R (BB2) blade 1 cut by cylinders about x: x y z mm in {os.path.basename(prop_path)}'s "
+        fh.write(f"# BB2's propeller, blade 1 cut by cylinders about x: x y z mm in {os.path.basename(prop_path)}'s "
                  f"frame, one block per r/R\n")
         for rr, r, loop in zip(RR, r_mm, loops):
             fh.write(f"# r/R {rr:.6f}  r_mm {r:.3f}  points {len(loop)}\n")
             fh.write("\n".join(f"{q[0]:.5f} {q[1]:.5f} {q[2]:.5f}" for q in loop) + "\n")
     write_tables(os.path.join(out, "bb2_section_tables.dat"), RR, tables,
-                 "MARIN S7371R (BB2): para.py's section table of each cut (x/c over c' = nose-tail length / 1.005)")
+                 "BB2's propeller: para.py's section table of each cut (x/c over c' = nose-tail length / 1.005)")
     k_ref = int(np.argmin(np.abs(RR - REF_RR)))
     with open(os.path.join(out, "bb2_section_table.dat"), "w") as fh:
-        fh.write(table_text(tables[k_ref]).replace(TABLE_HEAD, TABLE_HEAD + f" (MARIN S7371R at r/R {REF_RR})"))
+        fh.write(table_text(tables[k_ref]).replace(TABLE_HEAD, TABLE_HEAD + f" (BB2's propeller at r/R {REF_RR})"))
     hub_height = np.ceil(2.02 * max(abs(v) for s in secs[:1] for v in _root_extent(s, x0)) / 100.0) / 10.0
     lines = ["# XGeom propeller blade parameters",
-             f"# MARIN stock propeller S7371R of BB2, cut from {os.path.basename(prop_path)} by bb2_sections.py",
+             f"# BB2's propeller, cut from {os.path.basename(prop_path)} by bb2_sections.py",
              "# c/D beyond r/R 0.9 is the measured chord over BladeSurface's tip taper sqrt(1 - t^3), t = (r/R - 0.9) "
              "/ 0.1; the row at r/R 1 is continued from the last cuts (P/D the drawing's)",
              f"# bb2_frame  x0_mm {x0:.4f}  theta_ref_deg {np.degrees(theta_ref):.8f}",
@@ -460,7 +460,7 @@ def plot_check(path, table):
         ax.set_xlabel("r/R")
         ax.set_ylabel(names[k])
         ax.grid(True, color="#e4e3df")
-    fig.suptitle("MARIN S7371R (BB2): the distributions of bb2_blade_params.dat (the cuts and the row at r/R 1)")
+    fig.suptitle("BB2's propeller: the distributions of bb2_blade_params.dat (the cuts and the row at r/R 1)")
     fig.tight_layout()
     fig.savefig(path, dpi=110)
     return path

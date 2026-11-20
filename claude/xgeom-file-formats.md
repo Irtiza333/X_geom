@@ -36,28 +36,29 @@ assembly. XGeom is the pre-optimization design step.
 ```
 # XGeom component
 # kind          blade
-# name          bb2_propeller
-# note          MARIN stock propeller S7371R of BB2
+# name          msc_blade
+# note          the MSc blade
 # ---- geometry
-# diameter_m    5
-# blades        6
-# root_r        0.2
-# hub_height_m  1
-# section       bb2_section_table.dat
+# diameter_m    1.4
+# blades        5
+# root_r        0.18
+# hub_height_m  0.625
+# section       airfoil_data_fixed.csv
 # ---- settings
 # sections      56
 # tip_band      0.93
 # tip_sections  14
 # clearance_mm  25
 # hub           Y
+# part          sector
 # ---- curves and variables
-# var    radius     2.5     2.25  2.75  N
+# var    radius     0.7     0.524  0.875  N
 # curve  pitch      bezier2
-# var    pitch.v1   1.2413  0.60  1.40  Y
+# var    pitch.v1   1.2414  0.60   1.40   Y
 # curve  skew       table
 # ---- distributions
 # r/R     P/D     c/D     t/c     f/c     skew_deg  rake/D
-  0.2000  1.2413  0.2452  0.2159  0.0304  0.2758    0.0000
+  0.1800  1.2414  0.2452  0.2159  0.0304  0.2758    0.0000
 ```
 
 Header lines:
@@ -142,14 +143,14 @@ new.txt`. Examples in X_geom (the tool's defaults): `msc_blade.txt`, `wing.txt`,
 
 ```
 # XGeom assembly
-# name           bb2
-# hull           bb2_hull.txt
-# blade          bb2_blade.txt
-# rudder         bb2_sternplane.txt
+# name           suboff
+# hull           suboff_hull.txt
+# blade          msc_blade.txt
+# rudder         outputs/wind_tunnel_rudder.txt
 # ---- placement
 # prop_x         1
-# prop_d         5
-# rudder_x       0.89819
+# prop_d         0.3
+# rudder_x       0.95
 # rudder_angle   45
 # rudders        4
 # rudder_scale   1
@@ -171,7 +172,8 @@ new.txt`. Examples in X_geom (the tool's defaults): `msc_blade.txt`, `wing.txt`,
   forward end, 0 to 2; 1 its base on the hull's end), `rudder_x` the rudders' root TE (with rudder_rake: where
   the TE line meets the hull), `fin_x` and `wing_x` the root LE, 0 to 1; `prop_d` stays in m. The keys before
   (prop_dx and rudder_dx, m from the hull's end) are refused, so an old file is not misread; fin_x and wing_x
-  kept their names but were m from the nose before. Above: BB2's aft half.
+  kept their names but were m from the nose before. Above: SUBOFF with the MSc blade and the wind-tunnel
+  rudder, an illustration (the values are not a worked-out placement).
 - The run's design vector is the components' free var lines, named `<kind>.<var>` (for example
   `blade.pitch.v1`), with the file values as the baseline. samples: round-0 designs; batch: designs per infill
   round.
@@ -259,3 +261,10 @@ files are unchanged.
 19 Nov 2026, later: a planar rudder's component file loads in the tool as the original of the rudder-h model
 (GUI, above), so the Rudder slot keeps one panel. The files themselves are unchanged (for the web app: nothing
 changes in reading or writing them).
+
+20 Nov 2026: the shipped samples re-saved as the tool writes them (`fin.txt` and `wing.txt` gain `# cap_loops
+40`, `msc_blade.txt` `# part sector`, the defaults; the geometry the same, each file a fixed point of open and
+save), a `.gitattributes` (`*.txt text eol=lf`) so Windows checkouts keep them LF, and the rudder's set-up JSON
+without its `"written"` time stamp (an unchanged set-up saves to the same bytes; older set-ups still load). The
+examples above are the public ones (the MSc blade, SUBOFF). Eddie's interface rules are in
+`docs/keeping-interfaces-stable.md`, and `_xgeom_web_contract_test.py` runs before every change is handed over.

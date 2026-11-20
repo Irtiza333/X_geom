@@ -429,8 +429,10 @@ class RudderAdapter:
         """The set-up as plain data: the design space (every variable with its
         value, bounds and free flag, the curves' orders and joins, the section
         degree), the settings and the input files. rudder_modify.
-        load_design_space reads it back for the optimiser."""
-        return {"geometry": "rudder", "written": time.strftime("%d %b %Y %H:%M"),
+        load_design_space reads it back for the optimiser. No time stamp (20 Nov
+        2026, Eddie's interface note: an unchanged set-up saves to the same
+        bytes); set-ups written before still carry "written", which nothing reads."""
+        return {"geometry": "rudder",
                 "settings": dict(self.settings, height_scale=self.orig.scale, span_mm=self.span),
                 "files": dict(self.files), "space": self.free_space().to_dict(self.design)}
 

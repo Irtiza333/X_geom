@@ -2,14 +2,14 @@
 bb2_rudder.py
 
 The wind-tunnel rudder (Wind_Tunnel_Rudder.stp, the XGeom project's original rudder) on BB2, placed by XGeom's
-rules, compared with BB2's own stern plane (the one in hull.iges, at 45 deg of drawing F3's X stern). The
-vehicles carry BB2's own stern planes (bb2_sternplanes.py): the rudder's planform differs from BB2's (its tip cut
-at 94.5 deg to its TE against BB2's 90.6, its LE converging on the TE at 12.1 deg against 11.6), so no placement
+rules, compared with BB2's own stern plane (the one in hull.iges, at 45 deg of the X stern). The
+vehicles carry BB2's own stern planes (bb2_sternplanes.py): the rudder's planform differs from BB2's (the angle
+of its tip cut to its TE, and how fast its LE converges on the TE), so no placement
 lines both up.
 
   scale      the rudder's planform fitted to BB2's stern plane: a similarity in the stern plane's plane (scale k,
              a turn about the thickness axis, a shift) taking its straight LE and TE onto BB2's lines and the
-             tops of its LE and TE onto BB2's (fit_similarity). The free fit gives 1:20.006, so SCALE = 20.
+             tops of its LE and TE onto BB2's (fit_similarity); SCALE is the free fit's scale, rounded.
   placement  the TE line square to the axis, as BB2's: the XGeom tool's rudder with a set TE rake
              (xgeom_vehicle.place_rudder, rake RAKE on the hull of bb2_build.py), its TE line meeting the hull where
              BB2's TE meets it;
@@ -18,7 +18,7 @@ lines both up.
              of the root chord, the rudder ROOT_LIFT_MM (vehicle_cad's 0.2 mm) off the hull along the extrusion.
   compare    BB2's stern plane against the rudder so placed, the rudder pitched to the hull (the XGeom tool's
              other rule: the root's LE and TE on the hull, the TE at the same x) and the best fit of the planform
-             (the first placement: the fitted similarity, its root taken 510 mm into the hull at the TE). Each
+             (the first placement: the fitted similarity, its root taken into the hull at the TE). Each
              above the hull (cut by the hull with the hub): where the LE and TE meet the hull, the tops of the
              straight edges, the lean of the edges, the root chord's angle to the axis, the volume, the area in
              the stern plane's plane; cuts at s = const; the distances of SAMPLES points spread evenly over BB2's

@@ -1,0 +1,3 @@
+# Component and assembly files (.txt) are LF on every platform: the tool writes them so, and an unchanged
+# design saves to the same bytes. This keeps Git on Windows from checking them out as CRLF.
+*.txt text eol=lf

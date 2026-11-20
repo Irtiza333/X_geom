@@ -9,9 +9,9 @@ bb2_build.py made them. The plane keeps its own tip: the cap is not flattened, t
 
 The stern plane of hull.iges (bb2_sternplane.step) is one imported B-rep whose patches do not follow the mesh
 blocking. It is sectioned here and lofted again: cuts normal to its span (the 45 deg direction, planes at
-constant s = (y + z) / sqrt(2)) from S0, about 130 mm under the hull at the trailing edge, up to the foot of
+constant s = (y + z) / sqrt(2)) from S0, under the hull at the trailing edge, up to the foot of
 the tip cap: 5 mm apart over the last 200 mm, 1 mm apart over the last 30, where the TE-tip corner's rounding
-sweeps the TE forward, and the last one at s = 6811.99, right under the end of the side faces at 6812. That
+sweeps the TE forward, and the last one at S_CAP, right under the end of the side faces. That
 one is the rim, where the straight wall ends and the cap's rounding begins. Above it the cap is resampled
 into rings: cuts normal to x at chord stations (1.2 mm apart near the two ends, where the cap rolls over the
 LE and TE lines within a few mm) give the cap's cross profile from its base, exactly on the rim's height, to
@@ -27,23 +27,22 @@ surface), and each resampled point is then dropped onto the surface itself: its 
 back into the cut's plane for a section.
 
 Each loop is laid out as xcad_loft expects (801 points, the LE first, the w < 0 side to the TE and back; the
-TE is a 15 mm round, and where it meets the sides the loop's points have to be about 2 mm apart for the
+TE is a round, and where it meets the sides the loop's points have to be about 2 mm apart for the
 smooth curve through them to hold the shape) in the frame (x, w, s), w along (0, 1, -1)/sqrt(2) so the triad
 is right-handed; loft_loops builds the solid there, and it is turned to the STP frame after: the LE and TE
-strips wrapping their edges (the LE strip as wide as loft_loops finds the LE's rounding, about 190 mm to each
-side of the LE, 1.5 times the nose's rounding; the TE strip, since 20 Nov 2026, as wide as the tip patch's TE
-edge needs to be as long as its LE edge, the 15 mm round inside it; until then about 22 mm, the round itself),
-the central pressure and suction panels, the tip patch, and the flat root; six faces. The strips' top edges
-rise at loft_loops' slope of 1.5 in the side view, which puts the tip patch's corners about 146 mm under the
-top of the LE line (with the round-wide TE strip, 7 mm under the top of the TE line). Below s = 2920 the
-plane's buried root is chopped by its sloping root face, so the sections there are synthesized instead: the
-straight taper continued, a linear fit per loop point over the full sections at s = 2920 to 3720 (which lie
-within 0.1 mm of it). The chop sits 150 mm or more inside the hull, so wherever the synthetic root differs
-from the solid the difference is buried; against the true sections near the TE, exposed down to s = 1975, it
-stays within about 0.25 mm. The rebuilt plane's part outside the hull (cut by bb2_hull_hub.step) is compared
-with the original's: the volumes, cuts over the exposed span and across the cap, the tip's two ends
-included (the largest distance per cut printed), and the tip patch point by point (its distance from the
-original).
+strips wrapping their edges (the LE strip as wide as loft_loops finds the LE's rounding, 1.5 times the nose's
+rounding; the TE strip, since 20 Nov 2026, as wide as the tip patch's TE edge needs to be as long as its LE
+edge, the TE's round inside it; until then the round itself), the central pressure and suction panels, the
+tip patch, and the flat root; six faces. The strips' top edges rise at loft_loops' slope of 1.5 in the side
+view, which puts the tip patch's corners under the tops of the LE and TE lines by 1.5 times their distance
+from them along the chord. Below S_FULL the plane's buried root is chopped by its sloping root face, so the
+sections there are synthesized instead: the straight taper continued, a linear fit per loop point over the
+full sections FIT_S (which lie within 0.1 mm of it). The chop sits well inside the hull, so wherever the
+synthetic root differs from the solid the difference is buried; against the true sections near the TE,
+exposed lower down, it stays within about 0.25 mm. The rebuilt plane's part outside the hull (cut by
+bb2_hull_hub.step) is compared with the original's: the volumes, cuts over the exposed span and across the
+cap, the tip's two ends included (the largest distance per cut printed), and the tip patch point by point (its
+distance from the original).
 
 The set-up files are then written as bb2_sternplanes.py writes them, with the lofted plane in place of the
 imported one (the same names, so they replace the 22 Oct files): bb2_vehicle_rudders and
@@ -75,19 +74,19 @@ E_SPAN = SP.E_SPAN                                         # the span direction 
 E_THICK = np.array([0.0, 1.0, -1.0]) / np.sqrt(2.0)        # thickness, w ((x, w, s) right-handed)
 FRAME = np.column_stack((np.array([1.0, 0.0, 0.0]), E_THICK, E_SPAN))     # (x, w, s) -> the STP frame: m x
 S0 = 1850.0                                                # the loft's root, mm along the span (inside the hull)
-S_FULL = 2920.0                                            # the chop ends at 2918: full sections above
+S_FULL = 2920.0                                            # the chop ends just under it: full sections above
 FIT_S = np.arange(2920.0, 3721.0, 80.0)                    # the root taper's fit runs over sections here
 S_CAP = 6811.99                                            # the rim, the last section: the side faces end
-                                                           # at 6812, the wall is straight up to there
+                                                           # just above it, the wall is straight up to there
 S_BAND = 6811.5                                            # the sections under the rim are counted down
 N_FLATS = 112                                              # from here: N_FLATS from S0 up to the band,
 BAND_MM = 200.0                                            # the band: sections 5 mm apart, and
 FINE_MM = 30.0                                             # 1 mm apart over its last FINE_MM: the TE-tip
-                                                           # corner's rounding (s 6787 on) turns the TE line
-                                                           # forward within 25 mm, and the patches' rows of
+                                                           # corner's rounding turns the TE line forward
+                                                           # there, and the patches' rows of
                                                            # poles are as close as the sections allow
 N_PTS = 801                                                # points per loop (the LE first, the TE in the
-                                                           # middle): about 2 mm apart where the TE's 15 mm
+                                                           # middle): about 2 mm apart where the TE's
                                                            # round meets the sides (201 left 0.15 mm there)
 N_CUT = 4000                                               # points per edge of a span cut's polyline
 N_POLES = 60                                               # poles along a section between the strips, before

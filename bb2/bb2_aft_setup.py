@@ -5,28 +5,28 @@ BB2's aft half as XGeom set-up files (13 Nov 2026; the user: "the hull and the r
 only build the aft half of the sub for now, so just the hull aft half, rudder and propeller ... now just extract
 the correct aft hull, rudder set up text files"; the rudder as a planar rudder component, the user's choice). From
 the quarter IGES BB2_H3_DRDC_Q2R_quarter_hull_half_upstream.iges: the hull's aft half with the hub (y >= 0,
-z >= 0, x 44 to 35078 mm) and one stern plane at 45 deg; mm, x towards the bow.
+z >= 0) and one stern plane at 45 deg; mm, x towards the bow.
 
 hull     Its sections are circles (r the same all round within 0.002 mm), so the aft half is a body of
-         revolution: hull_modify without a nose (Ln 0: its front the flat cut at mid-length, x 35077.9), the
-         parallel middle body to x 22202.5 (r* 4799.81 mm), the tail to the hub's forward end at x 1929.9, where
-         the radius is drawing F6's hub base 797.22 mm (the hub is the propeller's: bb2_prop_setup.txt). The
+         revolution: hull_modify without a nose (Ln 0: its front the flat cut at mid-length), the
+         parallel middle body, the tail to the hub's forward end, where
+         the radius is the propeller drawing's hub base (the hub is the propeller's: bb2_prop_setup.txt). The
          station table bb2_hull_aft_params.dat (the profile in the plane through the axis at 45 deg, N_TAIL
          cosine-spaced stations along the tail) and the set-up bb2_hull.txt, the tail's CST order the one that
          fits best (xgeom_from_cad.hull_setup). Frame: the hull tool's x (m, aft from the cut) is
-         (35077.9 - x) / 1000, its y is -y.
+         (x_cut - x) / 1000 (x_cut the cut's x), its y is -y.
 rudder   The stern plane as a planar rudder (wing_modify, kind rudder), from its sections normal to its span in
          its 45 deg plane, s = (y + z) / sqrt(2) (bb2_sternplane_loft.flat_loop: the LE and the TE on the plane
          of symmetry; the sections are symmetric to 1e-5 of the chord). The root (eta 0) where its LE line
-         meets the hull, s 3061.4: the root section lies outside the hull, its LE on it, and the vehicle extends
-         it to the hull along the TE line (XGeom's TE rake 0; BB2's TE is square to the axis within 0.13 deg).
-         The tip (eta 1) at the foot of the rounded cap, S_TIP 6811.5 (the side faces end at 6812); the TE
-         turns forward into the cap's rounding over the last 20 mm, so the tip row is the section at S_LAST
+         meets the hull: the root section lies outside the hull, its LE on it, and the vehicle extends
+         it to the hull along the TE line (XGeom's TE rake 0; BB2's TE is square to the axis).
+         The tip (eta 1) at the foot of the rounded cap, S_TIP (just under the end of the side faces); the TE
+         turns forward into the cap's rounding just under it, so the tip row is the section at S_LAST
          with the LE and TE lines carried on. Per row: chord, sweep (the LE aft of the root's), rake 0, pitch
          0, camber 0; the thickness over the chord fitted by least squares as t/c times the section shape plus
          the changes dt1 .. dtk (wing_modify's Bernstein changes, zero at the LE and the TE). The section
          shape: the mean over the rows of the thickness over its maximum, written as
-         bb2_sternplane_section.dat (Selig x y; its blunt TE's round kept; NACA 0016-like, 16.1 % at x/c 0.30);
+         bb2_sternplane_section.dat (Selig x y; its blunt TE's round kept);
          k the number of change points with the least error (xgeom_from_cad.pick). Each distribution in the
          form that fits best (xgeom_from_cad.wing_setup). Frame: the rudder's x (mm) aft from the root's LE,
          y the span from the root, z along (0, 1, -1) / sqrt(2).
@@ -38,7 +38,7 @@ cap      (18 Nov 2026; the user: loading the set-up gave a flat top, not BB2's r
          the superellipse |w|/w0 = (1 - (h/H)^q)^(1/p); six numbers, fitted by least squares on the
          point-to-profile distances (tip_cap.fit_scaled) and written as the set-up's cap lines. The tool's
          CAD then carries the cap (xcad_loft's tip patch over the cap loops write_case appends); the planar
-         tip's chord runs 14 mm past the cap's TE end (the TE line carried on), where the model's cap shrinks
+         tip's chord runs a little past the cap's TE end (the TE line carried on), where the model's cap shrinks
          to nothing with the section.
 check    bb2_aft_setup_check.png: the hull's profile against the IGES, the planform and sections rebuilt from the
          rudder's set-up against the CAD's; bb2_cap_check.png: the cap's cross-sections, the IGES against the
@@ -71,7 +71,7 @@ import xgeom_from_cad as FC                                # noqa: E402
 N_TAIL = 201                 # stations along the tail
 N_ROWS = 21                  # rows of the rudder's table, evenly along its span
 N_X = 201                    # chord fractions where the thickness is fitted (cosine spacing)
-S_TIP = 6811.5               # the planar tip: the foot of the rounded cap (the side faces end at 6812)
+S_TIP = 6811.5               # the planar tip: the foot of the rounded cap (just under the end of the side faces)
 S_LAST = 6790.0              # the last section before the TE turns into the cap's rounding
 CAP_STATIONS = 48            # chord fractions (cosine-spaced) where the cap's cross-sections are cut and fitted
 CAP_PLOT = (0.02, 0.1, 0.3, 0.6, 0.9, 0.98)     # the ones drawn in bb2_cap_check.png
@@ -107,7 +107,7 @@ def aft_hull(hull):
     r = np.r_[r_pmb / 1000.0, rt]
     note = (f"BB2's aft half from {os.path.basename(SOURCE)} by bb2_aft_setup.py: no nose (the front the flat cut at "
             f"mid-length, IGES x {x_cut:.4f} mm), the middle body to x {x_pmb:.4f}, the tail to the hub's forward end "
-            f"at x {x_fwd:.4f} (r {S.HUB_R_FWD:g} mm, drawing F6's hub base); a body of revolution; IGES x = "
+            f"at x {x_fwd:.4f} (r {S.HUB_R_FWD:g} mm, the drawing's hub base); a body of revolution; IGES x = "
             f"{x_cut:.4f} - 1000 x_m, y = -y")
     params = HM.HullParams(0.0, lm, lt, 0.0, x, r, r.copy(), True, None, [note])
     return params, {"x_cut": x_cut, "x_pmb": x_pmb, "x_fwd": x_fwd, "xi": xi, "ri": ri}

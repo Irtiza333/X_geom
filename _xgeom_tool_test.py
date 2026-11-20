@@ -486,6 +486,14 @@ def test_adapter():
                   [space3.names == ad.free_space().names,
                    np.abs(space3.to_vector(design3) - ad.free_space().to_vector(ad.design)).max(),
                    np.abs(space3.bounds - ad.free_space().bounds).max()], [1, 0, 0], 1e-12)
+            with open(setup, "rb") as fh:
+                first = fh.read()
+            time.sleep(1.1)                                   # a stamp to the second would differ (the key is checked too)
+            again = ad.save_space(os.path.join(tmp, "setup_again.json"))
+            with open(again, "rb") as fh:
+                second = fh.read()
+            check("an unchanged set-up saves to the same bytes (no time stamp in it)",
+                  [first == second, b'"written"' in first], [1, 0], 0)
             space = ad2.free_space()
             check("the optimiser's space leaves the held slots out", ["P3x.v2" in space.names, len(space)],
                   [0, n_free], 0)
