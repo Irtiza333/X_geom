@@ -4,7 +4,9 @@ _xgeom_wing_test.py
 Self-check for the wing and the fin in XGeom: the component file and its fitted curves (wing_modify.py), the
 sections (the airfoil, its Bezier changes, the pitch), the design space, the case files and the loft, the
 design tool's adapters (xgeom_wing.py), the fins and the wing pair on the hull (xgeom_vehicle.py) and in the
-vehicle's CAD (vehicle_cad.py); with --gui the window (xgeom_tool.py).
+vehicle's CAD (vehicle_cad.py), the blended wing body (kind bwb, bwb_glider.txt: every curve flat at the centre
+line, the smooth 2-segment form, its whole and half CAD); with --gui the window (xgeom_tool.py; the Hull slot's
+two bodies).
 
     python _xgeom_wing_test.py          model, adapters, placement; with OCC the loft and the vehicle's CAD
     python _xgeom_wing_test.py --gui    also the window
@@ -23,6 +25,9 @@ import xcad_loft as XL
 _FAILED = []
 HERE = os.path.dirname(os.path.abspath(__file__))
 WING, FIN = os.path.join(HERE, "wing.txt"), os.path.join(HERE, "fin.txt")      # the samples (read_params: the table)
+BWB = os.path.join(HERE, "bwb_glider.txt")      # the blended wing body's sample (Ye, Wang and Pan's underwater glider)
+GLIDER = {"eta": np.array([0, 50, 90, 150, 190, 275, 500.0]) / 500.0, "chord": [350, 310, 235, 165, 130, 88, 30.0],
+          "sweep": [0, 20, 55, 95, 120, 175, 320.0], "thickness": [0.22, 0.17, 0.08, 0.08, 0.08, 0.08, 0.08]}
 
 
 def check(name, got, want, tol):
@@ -626,6 +631,69 @@ def test_gui(tmp):
         check("CAD wing: the case and " + ("the loft's STEP" if occ else "no CAD without OCC (red)"),
               [os.path.exists(os.path.join(tmp, "gui_wing", "gui_test_xcad_m.dat")), ok, bool(app.step) == occ],
               [1, 1, 1], 0)
+        if os.path.exists(BWB):                            # the Hull slot's two bodies (20 Nov 2026)
+            app.switch("hull")
+            settle()
+            hull_ad = app.ad
+            first = (type(app.ad).__name__, app.vbody.get(), app.build_btn.cget("text"))
+            app.vbody.set("bwb")
+            app.on_body()
+            settle()
+            names = [r.name for r in app.rows]
+            second = (type(app.ad).__name__, app.vbody.get(), app.build_btn.cget("text"), "span" in names,
+                      "chord.u3" in names, "rake.v1" not in names)
+            app.book.select(1)
+            app.update_views()
+            settle()
+            mirrored = len(app.view3.col["mirror"].get_segments())
+            app.book.select(XT.VEHICLE_TAB)
+            app.update_views()
+            settle()
+            note = (app.status.cget("background") == XT.STATUS["warn"][0],
+                    "cylindrical hull" in app.viewv.text.get_text(),
+                    max(len(c.get_segments()) for c in app.viewv.col.values()))
+            app.on_vehicle_build()
+            refused_v = app._job is None and app.status.cget("background") == XT.STATUS["error"][0]
+            app.book.select(0)
+            settle()
+            app.ad.out_dir = os.path.join(tmp, "gui_bwb")
+            app.on_build("hull")
+            t0 = time.time()
+            while app._job is not None and time.time() - t0 < 300:
+                settle(2)
+            built = (app.status.cget("background") == XT.STATUS["ok" if occ else "error"][0],
+                     os.path.exists(os.path.join(tmp, "gui_bwb", "gui_test_xcad_m.dat")),
+                     (not occ) or "whole body, 1 solid valid" in app.status.cget("text"))
+            bwb_ad = app.ad
+            app.vbody.set("hull")
+            app.on_body()
+            settle()
+            back = (app.ad is hull_ad, app.build_btn.cget("text"))
+            ask = XT.filedialog.askopenfilename
+            XT.filedialog.askopenfilename = lambda **kw: BWB
+            try:
+                app.on_load_params()                       # a bwb file in the Hull slot: the blended wing body
+                settle()
+            finally:
+                XT.filedialog.askopenfilename = ask
+            loaded = (type(app.ad).__name__, app.vbody.get(), app.ad is not bwb_ad, app.bodies.get("hull") is hull_ad)
+            app.vbody.set("hull")
+            app.on_body()
+            app.book.select(XT.VEHICLE_TAB)
+            app.update_views()
+            settle()
+            again = app.status.cget("background") == XT.STATUS["ok"][0]
+            check("the Hull slot's Body box: the cylindrical hull, then the blended wing body (its panel: the "
+                  "half-span, a smooth curve's P3, no tied C1; 'CAD BWB'), its 3D sections with the other half; the "
+                  "Vehicle tab asks for the cylindrical hull (amber, nothing drawn) and Vehicle CAD is refused; CAD "
+                  "BWB builds the whole body; back to the same cylindrical hull; Load of a bwb file switches the "
+                  "slot to it; the vehicle on the hull again",
+                  [first == ("HullAdapter", "hull", "CAD hull"),
+                   second == ("BwbAdapter", "bwb", "CAD BWB", True, True, True), mirrored == 40, note[0], note[1],
+                   note[2] == 1, refused_v, all(built), back == (True, "CAD hull"),
+                   loaded == ("BwbAdapter", "bwb", True, True), again], [1] * 11, 0)
+        else:
+            print("       the Hull slot's blended wing body: skipped, bwb_glider.txt is not here")
         settle()
         root.destroy()
         root = tk.Tk()
@@ -637,6 +705,98 @@ def test_gui(tmp):
         root.destroy()
     finally:
         os.chdir(cwd)
+
+
+def test_bwb(tmp):
+    print("\nthe blended wing body (kind bwb: the sample glider, every curve flat at the centre line)")
+    import re
+    import xgeom_wing as XW
+    if not os.path.exists(BWB):
+        print("       skipped: bwb_glider.txt is not here")
+        return
+    ld = WM.load_component(BWB)
+    d, p = ld.design, ld.params
+    again = os.path.join(tmp, "bwb_again.txt")
+    WM.write_component(again, p, d, ld.space, ld.settings, ld.name, ld.notes, "bwb")
+    with open(BWB, "rb") as fa, open(again, "rb") as fb:
+        same = fa.read() == fb.read()
+    err = {c: float(np.abs(d.at(c, GLIDER["eta"]) - np.array(GLIDER[c])).max()) for c in ("chord", "sweep", "thickness")}
+    check("the sample glider (Ye, Wang and Pan 2021): kind bwb, flat; saved again byte for byte; chord, LE and t/c as "
+          "2 smooth segments within 2.5 mm, 0.5 mm and 0.0025 of the paper's seven sections; 29 of 62 variables free",
+          [ld.kind == "bwb", d.flat, p.flat, same, [d.curves[c].segments for c in ("chord", "sweep", "thickness")]
+           == [3, 3, 3], err["chord"] < 2.5, err["sweep"] < 0.5, err["thickness"] < 0.0025, len(ld.space.names),
+           len(ld.space.all_names)], [1, 1, 1, 1, 1, 1, 1, 1, 29, 62], 0)
+
+    full = WM.WingSpace(p, d)                                     # every variable, random within its bounds
+    rng = np.random.default_rng(20261120)
+    worst, ahead = 0.0, True
+    for _ in range(6):
+        lo, hi = full.all_bounds[:, 0], full.all_bounds[:, 1]
+        dd = full.design_of(dict(zip(full.all_names, lo + rng.random(len(lo)) * (hi - lo))))
+        for c in dd.names:                                        # flat: the first two control points level
+            cp = dd.ctrl(c)
+            worst = max(worst, abs(cp[1, 1] - cp[0, 1]) / max(float(np.ptp(cp[:, 1])), 1e-9))
+            ahead = ahead and cp[1, 0] > cp[0, 0]
+    check("every curve flat at the centre line, any variable anywhere in its bounds (6 random designs, every curve: "
+          "its first two control points level, the second ahead of the first); no C1 value of a 1-segment curve "
+          "among the variables",
+          [worst < 1e-12, ahead, not any(n.endswith(".v1") and full.forms[n.split(".")[0]][0] == 1
+                                         for n in full.all_names if "." in n)], [1, 1, 1], 0)
+
+    with open(BWB) as fh:
+        text = fh.read()
+    bez2 = os.path.join(tmp, "bwb_bezier2.txt")
+    with open(bez2, "w") as fh:
+        fh.write(re.sub(r"(# curve\s+chord\s+)smooth2", r"\1bezier2", text))
+    tied = os.path.join(tmp, "bwb_tied.txt")
+    with open(tied, "w") as fh:
+        fh.write(re.sub(r"(# var\s+pitch\.v0[^\n]*\n)", r"\1# var    pitch.v1  0  -2  2  N\n", text))
+    eta = np.linspace(0.0, 1.0, 41)
+    check("refused: a bwb file with a bezier2 curve (not flat at the centre line), a var line for a 1-segment "
+          "curve's C1 (tied to C0), a 2-segment fit flat at the root",
+          [refused(WM.load_component, bez2), refused(WM.load_component, tied),
+           refused(WM.fit_curve_to, eta, np.cos(eta), "chord", 2, None, True)], [1, 1, 1], 0)
+
+    ad = XW.BwbAdapter(BWB)
+    ad.out_dir = os.path.join(tmp, "bwb")
+    ad.set_segments("pitch", 3)
+    ad.set("pitch.v6", -1.5)
+    ad.set("pitch.v3", -0.5)
+    ad.set_segments("thickness", 0)
+    tc = ad.design.at("thickness", np.r_[0.0, 1.0e-7, np.linspace(0.0, 1.0, 2001)])
+    saved = ad.save_file(os.path.join(tmp, "bwb_saved.txt"))
+    back = WM.load_component(saved)
+    ee = np.linspace(0.0, 1.0, 101)
+    diff = max(float(np.abs(back.design.at(c, ee) - ad.design.at(c, ee)).max()) for c in back.design.names)
+    rows = ad.curve_rows("rake")
+    check("the adapter: 2 smooth segments for the pitch (its tip -1.5 deg) saved and read back exactly; t/c as the "
+          "table has it (the monotone cubic through the rows and their mirror image): flat at the centre line, "
+          "never under its lowest row; 2 segments refused; the rake's C0 pinned and C1 tied (rows)",
+          [back.kind == "bwb", diff < 1e-9, abs(ad.design.at("pitch", 1.0) + 1.5) < 1e-9,
+           abs(tc[1] - tc[0]) < 1e-9, tc[2:].min() >= p.values["thickness"].min() - 1e-12,
+           refused(ad.set_segments, "chord", 2), [r.kind for r in rows[:4]] == ["pinned", "var", "pinned", "var"]],
+          [1, 1, 1, 1, 1, 1, 1], 0)
+
+    b = WM.body_properties(d, p)
+    check("from the sections: both halves 2.587 L, the centroid on the centre line at x 154.4 mm, wetted area "
+          "0.278 m^2 (shares of those)",
+          [b["volume_mm3"] / 2.5865e6, b["centroid_mm"][0] / 154.38, 1.0 + b["centroid_mm"][1],
+           b["wetted_mm2"] / 2.7793e5], [1, 1, 1, 1], 1e-3)
+    if not XL.occ_available():
+        print("       the CAD skipped: no pythonocc-core or cadquery-ocp here")
+        return
+    res = WM.write_case(os.path.join(tmp, "bwb_case"), "glider", d, p, ld.space, cad=True, settings=ld.settings,
+                        plot=False)
+    w, lr = res["whole"], res["loft"]
+    half = WM.write_cad(os.path.join(tmp, "bwb_case"), "glider_half", res["paths"]["xcad_m.dat"], half=True,
+                        mirror=True)
+    check("the CAD: the half lofted (6 faces, no step eased, within 0.03 mm of the sections) and fused with its "
+          "mirror image into one valid solid, within 0.3 % of the sections' volume, centroid on the centre line; with "
+          "half the half alone, half the volume",
+          [lr.valid, lr.faces, len(lr.steps), lr.v_error < 0.03, w["solids"], w["valid"],
+           abs(w["volume"] / b["volume_mm3"] - 1.0) < 3e-3, abs(w["centroid"][1]) < 1e-6, half["loft"].valid,
+           "whole" not in half, abs(2.0 * half["loft"].volume / w["volume"] - 1.0) < 1e-6],
+          [1, 6, 0, 1, 1, 1, 1, 1, 1, 1, 1], 0)
 
 
 def test_cap(tmp):
@@ -820,6 +980,7 @@ def main():
             test_cap(tmp)
             test_tilt(tmp)
             test_planar_original(tmp)
+            test_bwb(tmp)
             test_vehicle()
             test_vehicle_cad(tmp)
             if "--gui" in sys.argv:

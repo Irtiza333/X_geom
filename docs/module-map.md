@@ -19,12 +19,12 @@ Vehicle tab. Each component is an adapter class that the window drives through t
 
 | Module | What it does | Where | Tests |
 | --- | --- | --- | --- |
-| `xgeom_tool.py` | The window (Tk + matplotlib): component switcher, panels, sliders, views, build, Save CAD, From CAD, the Vehicle tab | both | tool, wing, hull, blade, files |
+| `xgeom_tool.py` | The window (Tk + matplotlib): component switcher, panels, sliders, views, build, Save CAD, From CAD, the Vehicle tab; the Hull slot's two bodies (the cylindrical hull, the blended wing body) | both | tool, wing, hull, blade, files |
 | `xgeom_common.py` | What the adapters share: the panel's row spec, the colours, the fit of a 3D box to its panel (no Tk) | both | through the adapters |
 | `xgeom_rudder.py` | The rudder modified below H: rudder_modify's design space as variables, views, set-ups, the XCAD build (one loft; two when not tangent at H) | both, web | tool, wing, hull, contract |
 | `xgeom_blade.py` | The propeller blade: a blade file as variables, views, the CAD build (whole, half, 1/Z sector) | X_geom, web | blade, hull, contract |
 | `xgeom_hull.py` | The hull: a hull file as variables, views, the CAD build | X_geom, web | hull, wing, contract |
-| `xgeom_wing.py` | The wing and the fin (and the planar rudder's own model): a wing file as variables, views, the CAD build | X_geom, web | wing, contract |
+| `xgeom_wing.py` | The wing and the fin (and the planar rudder's own model), and the blended wing body (`BwbAdapter`, the Hull slot's other body: mirrored views, the whole or half CAD): a wing file as variables, views, the CAD build | X_geom, web | wing, contract |
 | `xgeom_vehicle.py` | The Vehicle tab: the propeller, rudders, fins and wings placed on the hull (positions as x/L), `assemble()` | X_geom, web | hull, wing, files, contract |
 | `xgeom_files.py` | The component and assembly files: read and write (an old `.dat` parameter file is refused, named as one) | X_geom, web | files, wing, contract |
 | `xgeom_from_cad.py` | From CAD: a set-up from a STEP or IGES file (extraction and fits per component); a planar rudder's file as the original modified below H | both (the Rudder copy is older) | tool, wing, hull, blade |
@@ -38,7 +38,7 @@ Vehicle tab. Each component is an adapter class that the window drives through t
 | `modify_control.py` | The rudder model's settings (input files, H bounds, strips, tip drop) and example cases; run it to write cases without the window | both, web | tool, wing |
 | `bezier_section.py` | The Bezier half-section of any degree with its rounded TE (numpy only) | both, web | modify |
 | `tip_cap.py` | The rudder's tip cap: its model, fit and loops (numpy and scipy only) | both, web | tip_cap, wing |
-| `wing_modify.py` | Wings, fins and the planar rudder: the six distributions over the span, sections, tilted tip, cap, design space, component files | X_geom, web | wing, files, contract |
+| `wing_modify.py` | Wings, fins, the planar rudder and the blended wing body (kind bwb: every curve flat at the centre line, the smooth 2-segment form, the whole body mirrored and fused): the six distributions over the span, sections, tilted tip, cap, design space, component files | X_geom, web | wing, files, contract |
 | `blade_modify.py` | The propeller blade's design space: the distributions as Bezier curves over r/R, the blade surface, its CAD | X_geom, web | blade, files, contract |
 | `blade_control.py` | A blade from a component file, built with the MSc blade code | X_geom, web | through blade_modify |
 | `blade_sections.py` | Blades whose section shape changes along the span (one section table per radius) | X_geom, web | blade |
@@ -53,7 +53,7 @@ Vehicle tab. Each component is an adapter class that the window drives through t
 | Module | What it does | Where | Tests |
 | --- | --- | --- | --- |
 | `xcad_loft.py` | The solid through section loops (XCAD files): four patches along the span, the tip patch over the cap, the flat root; two lofts joined at a section (`loft_split`); half bodies; STEP and IGES | both | tool, wing, hull, hull_modify, hull_eq |
-| `temp_rudder_cad.py` | A stopgap: the CAD of a file of modified sections, with the original sections above them | both | none |
+| `temp_rudder_cad.py` | A stopgap: the CAD of a file of modified sections with the original above them, as two lofts joined at H (the modified part, the unmodified part); sections of any number of points put onto the original's layout | both | tool |
 | `X_CAD_new.py` | The MSc blade's CAD by the DRDC five-surface method (supersedes `X_CAD.py`) | X_geom | tip_new |
 | `X_CAD.py` | The original loft-and-cap blade CAD, kept | X_geom | none |
 | `cad_worker.py` | One CAD case in a subprocess, so a pythonocc hang stops only that case | X_geom | none |
@@ -131,8 +131,8 @@ suites without OCC; the cloud runs them with cadquery-ocp under Xvfb).
 
 | Short name | File | Covers | Where |
 | --- | --- | --- | --- |
-| tool | `_xgeom_tool_test.py` (`--gui`) | xcad_loft, the rudder adapter, the window | both |
-| wing | `_xgeom_wing_test.py` (`--gui`) | wing_modify, xgeom_wing, the planar rudder and its conversion, fins and wings on the vehicle | X_geom |
+| tool | `_xgeom_tool_test.py` (`--gui`) | xcad_loft, the rudder adapter, temp_rudder_cad, the window | both |
+| wing | `_xgeom_wing_test.py` (`--gui`) | wing_modify, xgeom_wing, the planar rudder and its conversion, fins and wings on the vehicle, the blended wing body (and the Hull slot's Body box) | X_geom |
 | hull | `_xgeom_hull_test.py` (`--gui`) | xgeom_hull, the vehicle, the Vehicle CAD | X_geom |
 | blade | `_xgeom_blade_test.py` (`--gui`) | blade_modify and its files, extraction, sections, hub, Initial_sampling | X_geom |
 | files | `_xgeom_files_test.py` (`--gui`) | the component and assembly files | X_geom |
@@ -160,8 +160,9 @@ unrelated to XGeom).
   `keeping-interfaces-stable.md`. `progress.md`: the work log.
 - `Bezier code/` and `Alternate truncation/`: the user's earlier Bezier and truncation work, kept for reference;
   the tool imports none of it.
-- At the root: the component samples `fin.txt`, `wing.txt`, `suboff_hull.txt`, `msc_blade.txt` (what the tool
-  writes, LF; the only file format since 20 Nov 2026), `airfoil_data_fixed.csv` (the MSc blade's sections),
+- At the root: the component samples `fin.txt`, `wing.txt`, `suboff_hull.txt`, `msc_blade.txt`, `bwb_glider.txt`
+  (the blended wing body: Ye, Wang and Pan's underwater glider) (what the tool writes, LF; the only file format
+  since 20 Nov 2026), `airfoil_data_fixed.csv` (the MSc blade's sections),
   the wind-tunnel rudder's CAD (`Wind_Tunnel_Rudder.stp`, `.igs`, `.stl`), `XGeom_plan.pdf`.
 
 On the user's machine but not in the repository: copies named `*-1.py` (`blade_modify-1.py`,

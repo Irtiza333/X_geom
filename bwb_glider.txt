@@ -1,0 +1,101 @@
+# XGeom component
+# kind          bwb
+# name          bwb_glider
+# note          The blended-wing-body underwater glider of Ye, Wang and Pan (2021, J. Northwestern Polytechnical
+# note          University 39(1) 85-92, doi 10.1051/jnwpu/20213910085), Table 1: its seven key sections XF1 to XF7
+# note          (NACA 0022, 0017, then 0008), the span position l and the LE's x d from XF1's LE. Span 1 m, centre chord
+# note          350 mm; both halves 2.64 L as the paper's displacement volume (0.00264 m^3). No twist, dihedral or camber
+# note          given (symmetric sections). The paper's sections: l 0 50 90 150 190 275 500 mm, c 350 310 235 165 130 88
+# note          30 mm, d 0 20 55 95 120 175 320 mm.
+# ---- geometry
+# span_mm       500
+# section       naca0012
+# ref_xc        0.25
+# camber_xc     0.4
+# ---- settings
+# sections      41
+# change_points 3
+# ---- curves (table | bezier1 <points> | smooth2) and variables (value, low, high, free Y or held N)
+# var    span                         500               250               750  N
+# curve  pitch         bezier1 4
+# var    pitch.d1          0.333333333333              0.01              0.99  N
+# var    pitch.d2                     0.5              0.01              0.99  N
+# var    pitch.v0                       0                -2                 2  N
+# var    pitch.v2                       0                -2                 2  N
+# var    pitch.v3                       0                -2                 2  N
+# curve  chord         smooth2
+# var    chord.v0           349.101879871                 0               520  Y
+# var    chord.d1          0.471687339435              0.01              0.99  Y
+# var    chord.d2          0.817204025787              0.01              0.99  Y
+# var    chord.v2           236.065543762                 0               520  Y
+# var    chord.u3          0.189714290994              0.02              0.98  Y
+# var    chord.v3           226.233311911                 0               520  Y
+# var    chord.d4          0.152844328216              0.01              0.99  Y
+# var    chord.d5         0.0579743695835              0.01              0.99  Y
+# var    chord.v5           88.1795192421                 0               520  Y
+# var    chord.v6           27.8438741488                 0               520  Y
+# curve  thickness     smooth2
+# var    thickness.v0      0.218353708847                 0               0.3  Y
+# var    thickness.d1      0.572661326081              0.01              0.99  Y
+# var    thickness.d2                0.99              0.01              0.99  Y
+# var    thickness.v2     0.0820990851446                 0               0.3  Y
+# var    thickness.u3      0.163310857666              0.02              0.98  Y
+# var    thickness.v3     0.0818456262596                 0               0.3  Y
+# var    thickness.d4                0.01              0.01              0.99  Y
+# var    thickness.d5                0.01              0.01              0.99  Y
+# var    thickness.v5     0.0804426304841                 0               0.3  Y
+# var    thickness.v6     0.0799337680857                 0               0.3  Y
+# curve  camber        bezier1 4
+# var    camber.d1         0.333333333333              0.01              0.99  N
+# var    camber.d2                    0.5              0.01              0.99  N
+# var    camber.v0                      0             -0.02              0.02  N
+# var    camber.v2                      0             -0.02              0.02  N
+# var    camber.v3                      0             -0.02              0.02  N
+# curve  sweep         smooth2
+# var    sweep.d1          0.251818282948              0.01              0.99  Y
+# var    sweep.d2          0.667970283813              0.01              0.99  Y
+# var    sweep.v2           20.1801687866              -170               490  Y
+# var    sweep.u3          0.150418505439              0.02              0.98  Y
+# var    sweep.v3           41.5558602174              -170               490  Y
+# var    sweep.d4         0.0424124411364              0.01              0.99  Y
+# var    sweep.d5                    0.01              0.01              0.99  Y
+# var    sweep.v5           58.7070806444              -170               490  Y
+# var    sweep.v6           320.329817345              -170               490  Y
+# curve  rake          bezier1 4
+# var    rake.d1           0.333333333333              0.01              0.99  N
+# var    rake.d2                      0.5              0.01              0.99  N
+# var    rake.v2                        0               -50                50  N
+# var    rake.v3                        0               -50                50  N
+# curve  dt1           bezier1 3
+# var    dt1.d1                       0.5              0.01              0.99  N
+# var    dt1.v0                         0             -0.02              0.02  N
+# var    dt1.v2                         0             -0.02              0.02  N
+# curve  dt2           bezier1 3
+# var    dt2.d1                       0.5              0.01              0.99  N
+# var    dt2.v0                         0             -0.02              0.02  N
+# var    dt2.v2                         0             -0.02              0.02  N
+# curve  dt3           bezier1 3
+# var    dt3.d1                       0.5              0.01              0.99  N
+# var    dt3.v0                         0             -0.02              0.02  N
+# var    dt3.v2                         0             -0.02              0.02  N
+# curve  dc1           bezier1 3
+# var    dc1.d1                       0.5              0.01              0.99  N
+# var    dc1.v0                         0             -0.02              0.02  N
+# var    dc1.v2                         0             -0.02              0.02  N
+# curve  dc2           bezier1 3
+# var    dc2.d1                       0.5              0.01              0.99  N
+# var    dc2.v0                         0             -0.02              0.02  N
+# var    dc2.v2                         0             -0.02              0.02  N
+# curve  dc3           bezier1 3
+# var    dc3.d1                       0.5              0.01              0.99  N
+# var    dc3.v0                         0             -0.02              0.02  N
+# var    dc3.v2                         0             -0.02              0.02  N
+# ---- distributions over eta = y/span from the centre line
+#        eta   pitch_deg      chord_mm         t/c         f/c      sweep_mm     rake_mm         dt1         dt2         dt3         dc1         dc2         dc3
+  0.00000000  0.00000000  349.10187987  0.21835371  0.00000000    0.00000000  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000
+  0.10000000  0.00000000  308.80428452  0.16808628  0.00000000   20.19521632  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000
+  0.18000000  0.00000000  234.30923433  0.08038320  0.00000000   55.14310781  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000
+  0.30000000  0.00000000  164.04654400  0.07993808  0.00000000   94.83244630  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000
+  0.38000000  0.00000000  130.94978353  0.07996236  0.00000000  120.43015915  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000
+  0.55000000  0.00000000   87.29934547  0.08002675  0.00000000  174.90615774  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000
+  1.00000000  0.00000000   27.84387415  0.07993377  0.00000000  320.32981734  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000

@@ -1880,11 +1880,16 @@ def _strip_widths(levels, chord_root, fr):
     if fr is None:
         r_le = typical(_edge_rounding(lo, 0.0, LE_WINDOW * min(lo.s_te, lo.S - lo.s_te)) for lo in levels)
         r_te = typical(_edge_rounding(lo, lo.s_te, 0.07 * chord_root, TE_DROP) for lo in levels)
-        w_le = LE_MARGIN * r_le if r_le > 0.0 else 0.07 * chord_root
-        w_te = TE_MARGIN * r_te if r_te > 0.0 else 0.07 * chord_root
+        # an edge without a rounding: 0.07 of the root chord, at most what the narrowest section has room for
+        # (_row_arcs' limit; a blended wing body's tip chord is a tenth of its centre chord, 20 Nov 2026)
+        room = 0.999 * 0.45 * min(min(lo.s_te, lo.S - lo.s_te) for lo in levels)
+        w_le = LE_MARGIN * r_le if r_le > 0.0 else min(0.07 * chord_root, room)
+        w_te = TE_MARGIN * r_te if r_te > 0.0 else min(0.07 * chord_root, room)
         te_round = r_te > 0.0
         note = (f"the strips {w_le:.6g} mm wide about the LE and {w_te:.6g} mm about the TE (their "
-                f"rounding: {r_le:.4g} and {r_te:.4g} mm)")
+                f"rounding: {r_le:.4g} and {r_te:.4g} mm"
+                + ("; without one, as wide as the narrowest section has room for"
+                   if min(0.07 * chord_root, room) == room and (r_le <= 0.0 or r_te <= 0.0) else "") + ")")
     else:
         w_le, w_te = float(fr[0]) * chord_root, float(fr[-1]) * chord_root
         if fr.size == 1:
@@ -2018,7 +2023,9 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
                 the next (the one where modified sections meet the original
                 ones; _ease_flats): "both" (the loops under it and over it,
                 so that the surface tilts alike on both sides), "below" (the
-                loops under it; those above are kept as they are) or "above"
+                loops under it; those above are kept as they are), "above",
+                or None (none: designed sections without steps, whose steep
+                stretches are no step, as a blended wing body's blend)
     widths      None, or the strips' reach (LE, TE) in mm, used as given in
                 place of strip_frac's (loft_split gives its two lofts the
                 whole stack's, so they meet on the same seams)
@@ -2030,8 +2037,8 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
                 need it, _strip_knots), or the knots used as given
                 (loft_split gives its lower loft its upper loft's)
     """
-    if ease not in ("both", "below", "above"):
-        raise ValueError('ease is "both", "below" or "above"')
+    if ease not in ("both", "below", "above", None):
+        raise ValueError('ease is "both", "below", "above" or None')
     t0 = time.time()
     loops = [np.asarray(lp, dtype=float).copy() for lp in loops]
     if len(loops) < 2:
@@ -2072,7 +2079,7 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
 
     # a step between horizontal loops is taken out of them first: no smooth surface follows one
     given = loops
-    eased, steps = _ease_flats(loops[:k], z_axis, v_poles, SPAN_TOL * span, ease)
+    eased, steps = _ease_flats(loops[:k], z_axis, v_poles, SPAN_TOL * span, ease) if ease else (loops[:k], [])
     if steps:
         loops = eased + loops[k:]
 

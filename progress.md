@@ -785,12 +785,70 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   changed; the contract test passes (its one note as before). Tests: files 60 with the window (old files
   refused by name, table files, the tool's refusals), blade 82 with the window and the CAD, wing 71, hull 65,
   hull_modify 17, tool 71 with the window; Initial_sampling's checks run with OCC stubbed (the CAD left out).
+- `temp_rudder_cad.py` (20 Nov 2026; the user: the new five patches, always two lofts, the modified part and the
+  unmodified part, and sections of any number of points). Always two lofts: `xcad_loft.loft_split` at the top
+  modified section, H (it had been one `loft_loops` through every loop): the modified sections up to H, and the
+  section at H with the original's loops above it (its horizontal sections more than half its section spacing above
+  H, the tilted tip section and the cap), each lofted with the five patches, the same strips and the same knots
+  across them, sewn with the flat root into one solid of 10 faces; the surface may turn at H as the modified sections
+  do. Any number of points: each modified section is put onto the original's layout at its height (`Layout`: the arc
+  fractions of each side of the original's horizontal sections, interpolated by height, taken on the section's own
+  smooth curve, `xcad_loft._SmoothLoop`), the LE first and the TE, the point farthest from the LE, at the original's
+  TE index (99); a section given the other way round is turned round, an open one closed, repeated points dropped,
+  and one already on the layout comes back unchanged. Before, a section of another point count was spaced on cosine
+  arcs, which is not the original's layout (cosine in x): the wind-tunnel rudder's sections below 80 mm given at 121
+  points read as a step of 3.58 mm at H, eased over 178 mm of the span, the solid up to 0.125 mm off the original
+  (582,894 mm^3 against 583,363), and loops given the other way round gave a broken solid. Now: valid, 10 faces,
+  583,363 mm^3, within 0.017 mm of the original (as closely as 121 points describe the TE's round: 151 points 0.005
+  mm, 260 points 0.003 mm); at 200 points the same as one loft (0.0000 mm near H). A design from the tool (the LE
+  moved, not tangent at H, 80 mm; the tool lofts it as two parts too): its modified sections through the script give
+  the tool's solid (605,404 mm^3, the same distances to the points), and at 121 points within 0.017 mm. Refused with
+  a message: a modified file with sections that are not horizontal (how many, and the first), fewer than two sections
+  or two at one height, nothing of the original above H (and `loft_split` refuses a joint too close to the tip).
+  Tests: tool 73 with the window (`test_temp_cad`: a 121-point section onto the layout within 0.03 mm, its LE and TE
+  exact; the original's own section kept; a reversed and an open loop give the same points; a file of 121-point
+  sections without '#' lines, some reversed, some open: valid, 10 faces, joined at its 80th section, no step). In
+  X_geom and the Rudder folder (byte-identical).
+- **Blended wing body** (20 Nov 2026; the user: the last component, mostly the wing's parametrization, mirrored in
+  the 3D sections and the CAD; camber, pitch, rake and thickness all in; his choices: a published underwater glider
+  as the first example, standalone first (the Vehicle tab later), always smooth across the centre line; then the Hull
+  tab offers two bodies, the cylindrical hull or the blended wing body). Kind `bwb` (`xgeom_files`: in PLANAR, its
+  forms table, bezier1 and the new `smooth2`, code 3): the wing's file and model over the half-span (`span_mm`), eta
+  0 the centre line. Every curve is flat there, so the body and its mirror image meet without a crease
+  (`WingDesign.flat`, `WingParams.flat`): a 1-segment curve has C1 at C0's value (its v1 no variable: `slot_keys`,
+  `curve_from_slots`), `SmoothTwoSegmentCurve` (smooth2) is two cubics joined C1 at a free joint u3, flat at the root
+  by its form (keys v0 d1 d2 v2 u3 v3 d4 d5 v5 v6; `fit_smooth_two`, `fit_flat_curve`); bezier2 is refused; a table
+  curve is `even_spline` (PCHIP through the rows and their mirror image: flat at 0, no overshoot). The example
+  (`bwb_glider.txt`): Ye, Wang and Pan (2021, J. Northwestern Polytechnical Univ. 39(1) 85-92), Table 1's seven
+  sections (NACA 0022, 0017, then 0008; span 1 m, centre chord 350 mm; the paper's 2.64 L is the sections' areas
+  taken linearly between them); chord, LE and t/c smooth2 within 2.2 mm, 0.43 mm and 0.0019 of the paper's rows (one
+  segment flat at 0 misses t/c by 0.034 with 4 points and 0.009 with 5: it drops from 0.22 to 0.08 by eta 0.18 and
+  stays); camber, pitch and rake held at 0 (symmetric sections; a test design with 2 % camber, 3 deg wash-out, 45 mm
+  dihedral and a reflexed centre body builds as well). The CAD (`write_cad(mirror=True)`): the half lofted with
+  `ease=None` and a row of poles per section, then fused with its mirror image (`mirror_fused`): one valid solid,
+  2.590 L (the sections 2.587 L), within 0.022 mm of the design's sections, 12 s; with half the half alone.
+  `body_properties`: planform, volume, wetted area and centroid from the sections. Shared `xcad_loft.py` (also in the
+  Rudder folder): an edge without a rounding gets a strip of 0.07 of the root chord, at most what the narrowest
+  section has room for (24 mm did not fit the glider's 30 mm tip; unchanged wherever it fitted), and
+  `loft_loops(ease=None)` (with the easing the blend read as a 3.6 mm step and the CAD sat 1.3 mm off, 2 % short;
+  with 30 rows of poles for 41 sections 0.31 mm off). The tool: the Hull slot's Body box (`BODIES`: the cylindrical
+  hull or the blended wing body, each keeping its state; Load ... or `--file` of either's file puts the slot on it),
+  `xgeom_wing.BwbAdapter` (the wing's panel over the half-span, the smooth rows, C1 tied; planform, front view, 3D
+  view and 3D sections with the other half; CAD BWB the whole body or the half; the report gives the volume, wetted
+  area and centroid); the Vehicle tab places its parts on the cylindrical hull only and says so (`VehicleView.note`),
+  Vehicle CAD refused meanwhile. For the web app: a new kind and form (additive); `BwbAdapter` has the wing's
+  methods, with `segment_options` (0, 1, 3), `segment_text(n)`, `name`, `short`, `half_text` and
+  `preview()["mirror"]`; `xgeom_vehicle.VehicleView.note`; WingDesign's field `flat` (default False). Tests: wing 78
+  with the window (the sample, flatness of random designs, refusals, smooth2 saved and read back, the table form, the
+  body's numbers, the CAD whole and half, the Hull slot's Body box and CAD BWB), hull 65, tool 73, blade 79 and files
+  60 with the window; the contract test passes. Project doc `claude/bwb.md`.
 
 ## Next steps
 
 - Wings and fins: the tips (next; user, 8 Oct 2026), then a check on the user's machine of the wing, the fin and
   the vehicle with them (pythonocc-core).
-- Vehicle: the placement is not loaded back yet (the set-up JSON records it); blended wing bodies later.
+- Vehicle: the placement is not loaded back yet (the set-up JSON records it); the blended wing body
+  in the Vehicle tab (the propeller and fins placed on it) later.
 - Review the blade in the tool: default segments, orders and free variables (`blade_control.py`); camber and
   rake fit poorly as 2 segments.
 - Propeller: `Initial_sampling.py` and the pipeline still build the cylinder hub's DRDC files; a conic hub there

@@ -654,6 +654,12 @@ class VehicleView:
         self.box = None
         keep_fitted(fig, ax, lambda: self.box)
 
+    def note(self, text):
+        """Nothing to draw (the Hull slot holds another body): the lines cleared, the text shown."""
+        for c in self.col.values():
+            c.set_segments([np.zeros((2, 3))])
+        self.text.set_text(text)
+
     def update(self, parts, pl, current=None):
         segs, info = assemble(parts, pl)
         d = parts["hull"]["design"]

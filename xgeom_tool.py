@@ -17,6 +17,8 @@ shows the solid.
                                             the same)
     python xgeom_tool.py hull               the hull of suboff_hull.txt
     python xgeom_tool.py hull --file my_hull.txt
+    python xgeom_tool.py hull --file bwb_glider.txt
+                                            the Hull slot's other body, the blended wing body
     python xgeom_tool.py wing               the wing of wing.txt (fin: fin.txt)
     python xgeom_tool.py fin --file my_fin.txt
     python xgeom_tool.py vehicle --file my_hull.txt --file my_blade.txt
@@ -183,6 +185,18 @@ Left panel (hull)
               and its control values; the two control points at the middle body
               are pinned (r* with zero slope there). A new number of control
               points refits the curve as for the blade.
+Left panel (hull): Body
+              the Hull slot holds one of two bodies (20 Nov 2026): the cylindrical
+              hull (above) or the blended wing body (xgeom_wing.BwbAdapter, kind
+              bwb, bwb_glider.txt to start with: the wing's panel below over the
+              half-span from the centre line, every curve flat there, the views
+              and the 3D sections with the other half mirrored; CAD BWB writes the
+              whole body, the half and its mirror image fused, or with the half
+              switch the half alone). Each keeps its state while the other is
+              shown; Load ... (or --file) of either body's file puts the slot on
+              it. The Vehicle tab places its parts on the cylindrical hull only:
+              with the blended wing body in the slot it says so (the blended wing
+              body's vehicle comes later).
 Left panel (wing, fin)
     File      the wing's (or fin's) component file (the span, the section by name
               or as a coordinate file, the pitch axis, the settings, each curve's
@@ -312,6 +326,8 @@ ADAPTERS = {"rudder": ("xgeom_rudder", "RudderAdapter"), "blade": ("xgeom_blade"
 PLANAR_RUDDER = ("xgeom_wing", "PlanarRudderAdapter")   # a planar rudder's model (13 Nov 2026; BB2's stern plane):
                                                          # the tool loads its files as the original of the model
                                                          # modified below H since 19 Nov (rudder_from_planar)
+BODIES = {"hull": ("xgeom_hull", "HullAdapter"), "bwb": ("xgeom_wing", "BwbAdapter")}   # the Hull slot's two
+BODY_NAMES = {"hull": "cylindrical hull", "bwb": "blended wing body"}                   # bodies (20 Nov 2026)
 VEHICLE = ("hull", "blade", "rudder", "fin", "wing")   # the vehicle's components, in the switcher's order
 NAMES = {"hull": "Hull", "blade": "Propeller", "rudder": "Rudder", "fin": "Fin", "wing": "Wing"}
 COUNTS = ("rudders", "fins", "wings")              # the Vehicle tab's whole numbers
@@ -350,8 +366,26 @@ def load_adapter(name, params=None, progress=None):
     if name == "rudder" and planar_rudder_file(params):
         import xgeom_from_cad as FC
         return FC.rudder_from_planar(params, progress=progress or (lambda text: None))["adapter"]
-    module, cls = ADAPTERS[name]
+    if name == "hull" and body_of_file(params) == "bwb":           # the Hull slot's other body
+        name = "bwb"
+    module, cls = BODIES[name] if name == "bwb" else ADAPTERS[name]
     return getattr(importlib.import_module(module), cls)(**({"params": params} if params else {}))
+
+
+def body_of_file(path):
+    """The Hull slot's body a component file is for: 'bwb' (kind bwb, a blended wing body), else 'hull'."""
+    if not path or str(path).lower().endswith(".json") or not os.path.isfile(path):
+        return "hull"
+    import xgeom_files as XF
+    try:
+        return "bwb" if XF.component_kind(path) == "bwb" else "hull"
+    except (OSError, ValueError):
+        return "hull"
+
+
+def body_of(ad):
+    """Which body an adapter in the Hull slot is: 'bwb' (the blended wing body) or 'hull' (the cylindrical one)."""
+    return "bwb" if getattr(ad, "role", None) == "bwb" else "hull"
 
 
 def available(name):
@@ -488,6 +522,7 @@ class App:
         for key, paths in (("params", params), ("space", space)):
             for path in ([paths] if isinstance(paths, str) else list(paths or [])):
                 kind = file_kind(path) if self.vehicle else adapter_name
+                kind = "hull" if kind == "bwb" else kind              # the blended wing body: the Hull slot's
                 if kind not in self.start:
                     raise ValueError(f"{path}: not a set-up or component file of " + ", ".join(self.kinds))
                 if key == "space" and kind != "rudder":       # the old JSON set-ups of the others (20 Nov 2026)
@@ -495,6 +530,7 @@ class App:
                                      f"from its component file (--file)")
                 self.start[kind][key] = path
         self.adapters, self.errors, self.frames, self.picked, self._vcache = {}, {}, {}, {}, {}
+        self.bodies = {}                                    # the Hull slot's body not shown: body -> its adapter
         self.kind, self.ad, self.placement, self._vinfo = None, None, None, None
         self.curve = tk.StringVar()
         self.rows = []
@@ -548,6 +584,39 @@ class App:
         if self.kind == kind:
             self.kind = None                                # switch() shows the slot afresh
             self.switch(kind)
+
+    def on_body(self):
+        """The Hull slot's Body box: the cylindrical hull or the blended wing body (BODIES); each keeps its state
+        while the other is shown; the blended wing body starts from bwb_glider.txt the first time."""
+        want = self.vbody.get()
+        ad = self.adapters.get("hull")
+        have = body_of(ad)
+        if want == have:
+            return
+        try:
+            new = self.bodies.get(want)
+            if new is None:
+                self.say(f"loading the {BODY_NAMES[want]} ...", busy=True)
+                self.root.update_idletasks()
+                module, cls = BODIES[want]
+                new = getattr(importlib.import_module(module), cls)()
+        except Exception as exc:
+            traceback.print_exc()
+            self.vbody.set(have)
+            self.say(f"{BODY_NAMES[want]}: not loaded: {type(exc).__name__}: {exc}", error=True)
+            return
+        self.bodies.pop(want, None)
+        self.bodies[have] = ad
+        self.replace_adapter("hull", new)
+        self._note = (f"the Hull slot holds the {BODY_NAMES[want]}" +
+                      ("; the Vehicle tab places the parts on the cylindrical hull (the blended wing body's vehicle "
+                       "comes later)" if want == "bwb" and self.vehicle else ""))
+        self.say(self._note)
+
+    def _noun(self, kind):
+        """What the slot holds, for the labels: the component's name (the blended wing body: BWB)."""
+        ad = self.adapters.get(kind)
+        return getattr(ad, "short", None) or NAMES.get(kind, kind).lower()
 
     def _frames(self, kind):
         """A component's Design and 3D sections figures, made when it is first shown."""
@@ -736,10 +805,14 @@ class App:
             ttk.Label(top, text="segments").pack(side="left", padx=(4, 2))
             self.nseg = tk.IntVar(value=nseg)
             for n in getattr(ad, "segment_options", (1, 2)):
-                ttk.Radiobutton(top, text=str(n) if n else "table", value=n, variable=self.nseg,
+                text = ad.segment_text(n) if hasattr(ad, "segment_text") else str(n) if n else "table"
+                ttk.Radiobutton(top, text=text, value=n, variable=self.nseg,
                                 command=self.on_segments).pack(side="left")
         if nseg == 2:
             ttk.Label(top, text="P1 .. P7: P2 = P3 and P5 = P6 at P4's value (zero slope at P4)",
+                      foreground=INK2).pack(side="left", padx=8)
+        elif nseg == 3:
+            ttk.Label(top, text="P0 .. P6: two cubics joined smoothly at P3, flat at the centre line",
                       foreground=INK2).pack(side="left", padx=8)
         elif nseg == 1:
             lo, hi = getattr(ad, "order_range", (1, 12))
@@ -786,8 +859,9 @@ class App:
         ttk.Button(row, text="OCC viewer", command=self.open_occ_viewer).pack(side="left")
         if "half" in getattr(ad, "settings", {}):
             self.vhalf = tk.BooleanVar(value=bool(ad.settings.get("half", False)))
-            ttk.Checkbutton(box, text="half body: the CAD cut at the plane of symmetry (for CFD on half the "
-                                      "domain; the Vehicle CAD always uses full bodies)",
+            ttk.Checkbutton(box, text=getattr(ad, "half_text", None) or
+                            "half body: the CAD cut at the plane of symmetry (for CFD on half the domain; the "
+                            "Vehicle CAD always uses full bodies)",
                             variable=self.vhalf, command=self.on_half).pack(anchor="w", padx=4, pady=(0, 3))
         if getattr(ad, "parts", None):                               # the blade: what the CAD writes
             row = ttk.Frame(box)
@@ -878,7 +952,8 @@ class App:
         msg = self.guard(lambda: self.ad.set_segments(c, n))
         self.after_change(structure=True)
         if msg is not None:
-            self._note = f"{c}: " + (msg if n == 0 else f"{n} segment{'s' if n == 2 else ''}, {msg}")
+            what = {2: "2 segments", 3: "2 smooth segments"}.get(n, f"{n} segment")
+            self._note = f"{c}: " + (msg if n == 0 else f"{what}, {msg}")
 
     def on_tangent(self):
         c = self.curve.get()
@@ -1013,7 +1088,7 @@ class App:
             new = {k: int(float(sb.get())) if k in COUNTS else float(sb.get()) for k, sb in self.vset.items()}
         except (ValueError, tk.TclError):
             new = None
-        L = self.adapters["hull"].design.length if "hull" in self.adapters else float("inf")
+        L = getattr(self.adapters["hull"].design, "length", float("inf")) if "hull" in self.adapters else float("inf")
         if new is not None and "rudder_rake" in new and not self.vrake.get():
             new["rudder_rake"] = None                                 # pitched to the hull's slope
         problem = None if new is None else self._xv().placement_problem(new, L)
@@ -1129,6 +1204,14 @@ class App:
         if "hull" not in self.adapters:
             self.say("the vehicle needs the hull: " + self.errors.get("hull", "not loaded"), error=True)
             return
+        if body_of(self.adapters["hull"]) == "bwb":
+            self.viewv.note("The Vehicle tab places the propeller, the rudders, the fins and the wings on the "
+                            "cylindrical hull:\npick it in the Hull panel's Body box (the blended wing body's "
+                            "vehicle comes later).")
+            self.canvasv.draw_idle()
+            self.say("vehicle: the Hull slot holds the blended wing body; the vehicle is placed on the cylindrical "
+                     "hull (the Hull panel's Body box)", warn=True)
+            return
         parts = {k: self._vehicle_part(k) for k in self.kinds if k in self.adapters}
         if self.placement is None:
             self.placement = XV.default_placement(parts)
@@ -1154,7 +1237,7 @@ class App:
     def build_label(self, kind):
         """The build button's text: the component's (in the vehicle with its name)."""
         ad = self.adapters[kind]
-        return f"{ad.build_label} {NAMES[kind].lower()}" if self.vehicle else ad.build_label
+        return f"{ad.build_label} {self._noun(kind)}" if self.vehicle else ad.build_label
 
     def on_build(self, kind=None, save_to=None):
         """The left panel's build button, made for one component (kind): that component writes its case and
@@ -1196,6 +1279,10 @@ class App:
                     self._adapter(k)
             if "hull" not in self.adapters:
                 raise RuntimeError("the vehicle needs the hull: " + self.errors.get("hull", "not loaded"))
+            if body_of(self.adapters["hull"]) == "bwb":
+                self.say(f"{label}: the vehicle is placed on the cylindrical hull; the Hull slot holds the blended "
+                         f"wing body (pick the cylindrical hull in the Hull panel's Body box)", error=True)
+                return
             parts = {k: self._vehicle_part(k) for k in self.kinds if k in self.adapters}
             if self.placement is None:
                 self.placement = XV.default_placement(parts)
@@ -1249,11 +1336,15 @@ class App:
         kind = kind or self.kind
         if self._job is not None or (kind != "vehicle" and kind not in self.adapters):
             return
+        if kind == "vehicle" and body_of(self.adapters.get("hull")) == "bwb":
+            self.say("Save vehicle CAD: the vehicle is placed on the cylindrical hull; the Hull slot holds the "
+                     "blended wing body (pick the cylindrical hull in the Hull panel's Body box)", error=True)
+            return
         import xcad_loft as XL
         case = self.case.get().strip() or "gui"
         vehicle = kind == "vehicle"
         start = self.save_dir or os.path.abspath(VEHICLE_DIR if vehicle else self.adapters[kind].out_dir)
-        name = "the vehicle" if vehicle else f"the {NAMES.get(kind, kind).lower()}"
+        name = "the vehicle" if vehicle else f"the {(getattr(self.adapters[kind], 'name', None) or NAMES.get(kind, kind)).lower()}"
         path = filedialog.asksaveasfilename(title=f"Save the CAD of {name}", defaultextension=".step",
                                             initialdir=start if os.path.isdir(start) else HERE,
                                             initialfile=f"{case}_vehicle.step" if vehicle else f"{case}.step",
@@ -1381,8 +1472,9 @@ class App:
                 self.say(f"set-up saved: {os.path.abspath(path)}")
             return
         folder, name = self.save_target()
-        path = filedialog.asksaveasfilename(title=f"Save the {NAMES.get(self.kind, self.kind).lower()}'s set-up as a "
-                                                  f"component file", initialdir=folder, initialfile=name,
+        what = (getattr(self.ad, "name", None) or NAMES.get(self.kind, self.kind)).lower()
+        path = filedialog.asksaveasfilename(title=f"Save the {what}'s set-up as a component file",
+                                            initialdir=folder, initialfile=name,
                                             defaultextension=".txt",
                                             filetypes=[("component files", "*.txt"), ("all files", "*")])
         if path and self.guard(lambda: self.ad.save_file(path)):
@@ -1400,6 +1492,22 @@ class App:
                                           + [("all files", "*")])
         if path and rudder and planar_rudder_file(path):  # a planar rudder: the original modified below H
             self._load_planar_rudder(path)
+            return
+        if path and self.kind == "hull" and body_of_file(path) != body_of(self.ad):    # the Hull slot's other body
+            want, have = body_of_file(path), body_of(self.ad)
+
+            def other():
+                module, cls = BODIES[want]
+                new = getattr(importlib.import_module(module), cls)(params=path)
+                self.bodies.pop(want, None)
+                self.bodies[have] = self.ad
+                self.replace_adapter("hull", new)
+                return True
+            self.say(f"reading {os.path.basename(path)} ...")
+            self.root.update_idletasks()
+            if self.guard(other):
+                self._note = f"loaded {path}: the {BODY_NAMES[want]} in the Hull slot"
+                self.say(self._note)
             return
         if path and rudder and path.lower().endswith(".json"):
             def back():                                  # the modified-below-H model from its set-up
@@ -1632,7 +1740,9 @@ def file_box(app, path, info):
                                                         "extracted and fitted (the form with the least error), "
                                                         "the set-up saved" if from_cad else "")
                         + ("; the rudder on the planar model: a set-up of the model modified below H "
-                           "(<case>_design_space.json) puts it back on that one" if app.kind == "rudder" else ""),
+                           "(<case>_design_space.json) puts it back on that one" if app.kind == "rudder" else "")
+                        + ("; a cylindrical hull's or a blended wing body's file (kind hull, bwb) puts the slot on "
+                           "that body" if app.kind == "hull" else ""),
               foreground=INK2, wraplength=470 if not from_cad else 380).pack(side="left", padx=6)
 
 
@@ -1710,10 +1820,31 @@ def blade_panel(app):
         app._pick(grid, i // 3, i % 3, c, f"{c}  {BM.UNITS[c]}")
 
 
+def body_box(app):
+    """The Hull slot's first box: its body, the cylindrical hull (xgeom_hull) or the blended wing body (xgeom_wing,
+    kind bwb; 20 Nov 2026), each keeping its state while the other is shown."""
+    box = ttk.LabelFrame(app.panel, text="Body")
+    box.pack(fill="x", padx=6, pady=4)
+    row = ttk.Frame(box)
+    row.pack(fill="x", pady=2)
+    body = body_of(app.ad)
+    app.vbody = tk.StringVar(value=body)
+    for b, (module, _) in BODIES.items():
+        if importlib.util.find_spec(module) is not None:
+            ttk.Radiobutton(row, text=BODY_NAMES[b], value=b, variable=app.vbody,
+                            command=app.on_body).pack(side="left", padx=4)
+    ttk.Label(row, text=("a body of revolution, or with elliptical sections: stations along x, the nose and the tail "
+                         "as CST curves" if body == "hull" else
+                         "the wing's model over the half-span from the centre line, mirrored; every curve flat at the "
+                         "centre line"), foreground=INK2, wraplength=330, justify="left").pack(side="left", padx=8)
+
+
 def hull_panel(app):
-    """The hull's boxes: the file, the body (lengths, radii, elliptical sections) and the curves."""
+    """The hull's boxes: the body choice, the file, the body (lengths, radii, elliptical sections) and the
+    curves."""
     ad = app.ad
     p = ad.params
+    body_box(app)
     file_box(app, ad.file or "(SUBOFF's equations: suboff_hull.txt is not here)",
              f"L {p.length:g} m: nose {p.nose:g}, middle {p.middle:g}, tail {p.tail:g}, cap {p.cap:g} m; "
              f"{len(p.x)} stations, " + ("axisymmetric" if p.axisymmetric else "elliptical sections (r and r')"))
@@ -1741,19 +1872,22 @@ def hull_panel(app):
 
 
 def wing_panel(app):
-    """The wing's (or the fin's) boxes: the file, the span and the sections, the distributions and the section
-    changes."""
+    """The wing's (or the fin's, the planar rudder's, the blended wing body's) boxes: the file, the span and the
+    sections, the distributions and the section changes; in the Hull slot the body choice first."""
     import airfoils
     import wing_modify as WM
     ad = app.ad
     p = ad.params
+    if app.kind == "hull":
+        body_box(app)
     symmetric = WM.base_shape(p.airfoil, p.camber_xc)[2]["symmetric"]
-    file_box(app, ad.file, f"span {p.span:g} mm, {len(p.eta)} rows, pitch axis at {p.ref_xc:g} of the chord; airfoil "
-                           f"{airfoils.describe(p.airfoil)}"
+    file_box(app, ad.file, (f"half-span {p.span:g} mm (from the centre line), " if p.flat else f"span {p.span:g} mm, ")
+             + f"{len(p.eta)} rows, pitch axis at {p.ref_xc:g} of the chord; airfoil {airfoils.describe(p.airfoil)}"
                            + (f" (symmetric: f/c scales the NACA 4-digit camber line, its maximum at {p.camber_xc:g} c)"
                               if symmetric else "") + (f"; {p.changes} change points" if p.changes else ""))
 
-    box = ttk.LabelFrame(app.panel, text="Span and sections (the curves stretch over the span)")
+    box = ttk.LabelFrame(app.panel, text="Half-span and sections (the curves stretch over the half-span)" if p.flat
+                         else "Span and sections (the curves stretch over the span)")
     box.pack(fill="x", padx=6, pady=4)
     app._header(box)
     specs = ad.global_rows()

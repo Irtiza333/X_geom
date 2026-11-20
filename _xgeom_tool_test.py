@@ -4,8 +4,9 @@ _xgeom_tool_test.py
 Self-check for the design tool: the CAD loft (xcad_loft.py: one loft, and
 two joined at a section, loft_split) and Save CAD's files, the rudder adapter
 (xgeom_rudder.py: its tangent switches, and the two lofts of a design not
-tangent at H) and, with --gui, the window itself (xgeom_tool.py, Save CAD
-included).
+tangent at H), temp_rudder_cad.py (sections of any number of points on the
+original's layout, its two lofts) and, with --gui, the window itself
+(xgeom_tool.py, Save CAD included).
 
     python _xgeom_tool_test.py          loft and adapter
     python _xgeom_tool_test.py --gui    also open the tool for a moment
@@ -827,6 +828,61 @@ def test_from_cad():
         os.chdir(cwd)
 
 
+def test_temp_cad():
+    print("\ntemp_rudder_cad.py: modified sections of any number of points, two lofts")
+    original = os.path.join(HERE, "outputs", "sections_xcad_with_cap_y0_y200_m.dat")
+    if not os.path.exists(original):
+        print("       skipped: no outputs/sections_xcad_with_cap_y0_y200_m.dat here")
+        return
+    import temp_rudder_cad as TC
+    orig = TC.read_sections(original)
+    flats = [s for s in orig if TC.is_flat(s)]
+    below = [s for s in flats if s[0, 2] <= 80.0]
+    layout = TC.Layout(flats, len(flats[0]))
+
+    def spaced(s, n):                                    # the section's smooth curve at n points, cosine arcs
+        sl = XL._SmoothLoop(s, (len(s) + 1) // 2 - 1)
+        u = lambda k: 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, k)))
+        q = np.vstack((sl.at(u((n + 1) // 2) * sl.s_te),
+                       sl.at(sl.s_te + u(n - (n + 1) // 2 + 1) * (sl.S - sl.s_te))[1:]))
+        q[:, 2] = s[0, 2]
+        return q
+
+    s0 = below[40]
+    q = spaced(s0, 121)
+    on, how = layout.onto(q)
+    back, how0 = layout.onto(s0)
+    rev, how_r = layout.onto(np.vstack((q[:1], q[1:-1][::-1], q[:1])))
+    opened, _ = layout.onto(q[:-1])
+    check("a section of 121 points goes onto the original's layout at its height (200 points, the LE first, the "
+          "TE at index 99): within 0.03 mm of the original's points there; the original's own section comes back "
+          "unchanged; the other side first is turned round, an open loop closed, to the same points",
+          [len(on), how == "resampled", np.abs(on[0] - s0[0]).max(), np.abs(on[99] - s0[99]).max() < 1e-6,
+           np.linalg.norm(on - s0, axis=1).max() < 0.03, how0 == "kept", np.abs(back - s0).max(),
+           how_r == "turned round", np.abs(rev - on).max(), np.abs(opened - on).max()],
+          [200, 1, 0, 1, 1, 1, 0, 1, 0, 0], 1e-9)
+    if not XL.occ_available():
+        print("       the two lofts skipped: no pythonocc-core or cadquery-ocp here")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "mixed_m.dat")
+        with open(path, "w") as fh:            # 121 points, no '#' lines, every third reversed, every other open
+            for k, s in enumerate(below):
+                lp = spaced(s, 121)
+                if k % 3 == 0:
+                    lp = np.vstack((lp[:1], lp[1:-1][::-1], lp[:1]))
+                lp = lp[:-1] if k % 2 else lp
+                fh.write("\n".join(f"{x / 1000:.8f} {y / 1000:.8f} {z / 1000:.8f}" for x, y, z in lp) + "\n")
+        t0 = time.time()
+        res, line = TC.build(path, original)
+        print(f"       {line}; {res.faces} faces, volume {res.volume:.1f} mm^3, {time.time() - t0:.0f} s")
+        check("two lofts joined at the top modified section (loop 80): one valid closed solid, nine patches and "
+              "the root; no step at H (a change of layout there read as a 3.6 mm step before 20 Nov 2026), the "
+              "patches on the loops",
+              [res.valid, res.free_edges, res.faces, res.joint, len(res.steps), res.v_error < 0.01],
+              [1, 0, 10, 80, 0, 1], 0)
+
+
 def wait_job(app, root, limit=600.0):
     """Let the window run until its build (or save) is done."""
     t0 = time.time()
@@ -841,6 +897,7 @@ def main():
     test_adapter()
     test_span()
     test_from_cad()
+    test_temp_cad()
     if "--gui" in sys.argv:
         test_gui()
     print()

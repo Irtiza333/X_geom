@@ -1,7 +1,7 @@
 # XGeom input files
 
 The standard input and output files of the XGeom tool: one layout for every component (propeller blade,
-rudder, fin, wing, hull) and an assembly file that places the components and defines an optimization run.
+rudder, fin, wing, blended wing body, hull) and an assembly file that places the components and defines an optimization run.
 The GUI loads the files and writes them back (Save set-up); Initial_sampling.py and the infill read the
 assembly. XGeom is the pre-optimization design step.
 
@@ -67,7 +67,8 @@ Header lines:
 - `# XGeom component` first; `# kind`, `# name`, `# note` (free text, repeatable).
 - Geometry and settings keys, per kind (below). An unknown key is an error.
 - `# curve <name> <form>`: `table` (the column as it is: the cubic spline through the rows, no variables),
-  `bezier1 <points>`, `bezier2` (x_blade's form, P1 to P7), and for the hull `cst <order>`.
+  `bezier1 <points>`, `bezier2` (x_blade's form, P1 to P7), `smooth2` (a blended wing body's: two cubic
+  segments joined smoothly, flat at the centre line, P0 to P6), and for the hull `cst <order>`.
 - `# var <name> <value> <low> <high> <Y|N>`: one line per variable, Y free (values written to 12 figures).
 - `# vary <name> Y|N [low high]` (blade_vary.py): Y free or N held, for the curves and globals without var
   lines; hand-written, or written in a blade's table file that has them (below). A set-up has var lines
@@ -79,7 +80,7 @@ Keys and columns:
 | kind | geometry | settings | columns |
 |---|---|---|---|
 | blade | diameter_m, blades, root_r, hub_height_m, hub_base_m, hub_top_m, hub_x_m, section, section_tables | sections, tip_band, tip_sections, clearance_mm, hub, part | r/R P/D c/D t/c f/c skew_deg rake/D |
-| rudder, fin, wing | span_mm, section, ref_xc, camber_xc, tip_tilt_deg, cap and its keys (below) | sections, change_points, half, cap_loops | eta pitch_deg chord_mm t/c f/c sweep_mm rake_mm [dt1 .. dtk dc1 .. dck] |
+| rudder, fin, wing, bwb | span_mm, section, ref_xc, camber_xc, tip_tilt_deg, cap and its keys (below) | sections, change_points, half, cap_loops | eta pitch_deg chord_mm t/c f/c sweep_mm rake_mm [dt1 .. dtk dc1 .. dck] |
 | hull | nose_m, middle_m, tail_m, cap_m, axisymmetric | | x_m r_m [rp_m] |
 
 Rules:
@@ -134,6 +135,14 @@ Rules:
   (default 40) is how many closed loops over the cap the XCAD file gets after the sections, at the heights
   0.995 (1 - (1 - k/n)^2) of the cap; the loft's tip patch covers them (xcad_loft.py). BB2's
   `bb2/outputs/bb2_sternplane.txt` carries `cap scaled` fitted to the IGES (bb2_aft_setup.py; `claude/bb2.md`).
+- kind `bwb` (a blended wing body, 20 Nov 2026; the sample `bwb_glider.txt`, the underwater glider of Ye, Wang
+  and Pan 2021): the wing's layout over the half-span, `span_mm` the half-span, eta 0 the centre line. Every
+  curve is flat at the centre line: forms `table` (the monotone cubic through the rows and their mirror image),
+  `bezier1` (its C1 at C0's value: no var line `<curve>.v1`) and `smooth2` (var lines `v0 d1 d2 v2 u3 v3 d4 d5
+  v5 v6`: P1 at P0's value, P3 the joint at u3, P4's value from the slope at P3; each d places a point in the
+  stretch left before its segment's end); `bezier2` is refused. `half` Y: the CAD is the half on one side of the
+  centre line (else the whole body, the half fused with its mirror image). The tool shows it in the Hull slot,
+  beside the cylindrical hull.
 - `tip_tilt_deg` (rudder, fin, wing; 18 Nov 2026, for the wind-tunnel rudder): the tip section tilted about the
   thickness axis through its LE, the TE end raised, by 0 (a flat tip; the default) up to 45 deg. The horizontal
   sections then run from the root to half a step under the tip's LE (k / (n - 1/2) of the span, the
@@ -148,7 +157,7 @@ Rules:
 Code: `xgeom_files.py` (the text, `load`; `legacy_kind` and `file_kind` recognise an old parameter file so it
 is refused by name); `read_params`, `write_params` (a table file), `load_component` and `write_component` in
 `blade_modify.py`, `wing_modify.py` and `hull_modify.py`. Examples in X_geom (the tool's defaults):
-`msc_blade.txt`, `wing.txt`, `fin.txt`, `suboff_hull.txt`.
+`msc_blade.txt`, `wing.txt`, `fin.txt`, `suboff_hull.txt`, `bwb_glider.txt`.
 
 ## Assembly file
 
@@ -292,3 +301,9 @@ model's stay) and their `legacy` attribute. `write_params` now writes a table fi
 From CAD writes its stations as `<case>_table.txt`. `Initial_sampling.py` reads `msc_blade.txt`: its vary lines,
 else its free var lines (`blade_vary.read_free`: pitch or chord free when one of its variables is). For the web
 app: no key is new or changed; a table file may carry vary lines, which every XGeom's component reader takes.
+
+20 Nov 2026, later: the blended wing body, kind `bwb` (above), with its curve form `smooth2`; the tool's Hull slot
+holds the cylindrical hull or the blended wing body (its Body box). For the web app: a new kind and a new form,
+both additive (other files read and write as before); its adapter `xgeom_wing.BwbAdapter` has the wing's
+methods, with `segment_options` (0, 1, 3) (3: smooth2) and `segment_text(n)` for the buttons' text, and
+`preview()["mirror"]` (True: draw the body with its mirror image, y to -y).

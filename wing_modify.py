@@ -1,8 +1,8 @@
 """
 wing_modify.py
 
-A wing or a fin from a component file (xgeom_files.py, kind wing or fin; the planar rudder: kind rudder;
-claude/xgeom-file-formats.md), and its design space: the span, and each spanwise distribution as a Bezier curve
+A wing or a fin from a component file (xgeom_files.py, kind wing or fin; the planar rudder: kind rudder; the
+blended wing body: kind bwb; claude/xgeom-file-formats.md), and its design space: the span, and each spanwise distribution as a Bezier curve
 over the span fraction eta, fitted to the file's table, whose control points are the design variables. The
 sections are a named airfoil (airfoils.py) scaled to t/c and f/c, with Bezier changes of its thickness and
 camber line; lofted through the sections of the XCAD file (xcad_loft.py) they give the solid, its tip flat
@@ -57,6 +57,18 @@ CAP_LOOPS) closed loops over the cap to the XCAD file, pinched to the tip sectio
 CAP_TOP (1 - (1 - k/n)^2) of the cap (the extraction's spacing), and xcad_loft's tip patch covers them; without
 the key the tip is flat. The cap's parameters are held (not design variables yet).
 
+Blended wing body (kind bwb, 20 Nov 2026; the sample bwb_glider.txt, the underwater glider of Ye, Wang and Pan
+2021): the same file and model over the half-span from the centre line (eta 0) to the tip, span_mm the half-span.
+Every curve is flat at the centre line, so the body and its mirror image meet without a crease (WingDesign.flat,
+WingParams.flat): a 1-segment curve has C1 at C0's value (its v1 no variable; slot_keys, curve_from_slots), and
+the form smooth2 (SmoothTwoSegmentCurve) is two cubic segments joined smoothly at a free joint P3 (the slopes
+match there; the body's end, where the blend runs into the outer wing), flat at the root by its form; bezier2
+(zero slope at its joint, not at the root) is refused. A curve as the table has it is the monotone cubic through
+the rows and their mirror image (even_spline: flat at 0, no overshoot where t/c drops onto a constant). The XCAD
+file holds the half; write_cad(mirror=True) lofts it (ease None, a row of poles per section: the steep blend is no
+step) and fuses it with its mirror image into the whole body, or with half the half alone. body_properties gives
+the planform, volume, wetted area and centroid from the sections (both halves).
+
 Tilted tip (18 Nov 2026, for the wind-tunnel rudder): the geometry key 'tip_tilt_deg' (0 to TILT_MAX, default 0)
 tilts the tip section about the thickness axis through its LE, the TE end raised: the tip section is then the cut
 of the body, carried on past the tip along each distribution's tangent there, by the plane through the tip's LE
@@ -107,13 +119,14 @@ from functools import lru_cache
 
 import numpy as np
 from scipy.interpolate import CubicSpline, PchipInterpolator
+from scipy.optimize import least_squares
 
 import blade_modify as BM
 import tip_cap as TC
 import xgeom_files as XF
 from blade_modify import BladeCurve, FileCurve, TwoSegmentCurve, curve_at, fit_form
 from replica_funcs import bernstein
-from rudder_modify import fit_values
+from rudder_modify import Bezier, fit_values, law_basis
 
 CURVES = ("chord", "sweep", "rake", "pitch", "thickness", "camber")
 COLUMNS = ("eta", "chord_mm", "sweep_mm", "rake_mm", "pitch_deg", "t/c", "f/c")
@@ -127,6 +140,7 @@ DESCRIPTIONS = {
     "camber": "the airfoil's maximum camber over the chord, f/c",
 }
 PINNED = ("sweep", "rake")        # root values 0: the root's LE is the origin
+FLAT_KINDS = ("bwb",)             # every curve flat at the root: a blended wing body's root is its centre line
 REF_XC = 0.25                     # the pitch axis, fraction of the chord from the LE
 CAMBER_XC = 0.4                   # a symmetric airfoil's camber line: NACA 4-digit, its maximum here
 CHANGES = 3                       # change points (thickness and camber each) when the file has none
@@ -186,14 +200,30 @@ class WingParams:
     def names(self):
         return CURVES + change_names(self.changes)
 
+    @property
+    def flat(self):
+        """Is every curve flat at the root (a blended wing body: the root is its centre line)?"""
+        return self.kind in FLAT_KINDS
+
     def spline(self, name):
-        """The file's distribution between its rows (cubic spline, linear beyond the ends); 0 for a change
-        the file has none of."""
+        """The file's distribution between its rows (cubic spline, linear beyond the ends; a blended wing body's:
+        even_spline, flat at the centre line); 0 for a change the file has none of."""
         if name not in self.values:
             return lambda e: np.zeros(np.shape(e)) if np.ndim(e) else np.float64(0.0)
+        if self.flat:
+            return even_spline(self.eta, self.values[name])
         if len(self.eta) == 2:
             return lambda e: np.interp(e, self.eta, self.values[name])
         return BM._extended(CubicSpline(self.eta, self.values[name]), 0.0, 1.0)
+
+
+def even_spline(eta, v, r0=0.0, r1=1.0):
+    """A blended wing body's distribution between its rows (the first at r0, the centre line): the monotone cubic
+    (PCHIP) through the rows and their mirror image about r0, so flat there, without overshoot between the rows (a
+    cubic spline rings where t/c drops onto a constant); linear beyond r1, the tip."""
+    eta, v = np.asarray(eta, dtype=float), np.asarray(v, dtype=float)
+    e, w = np.r_[2.0 * r0 - eta[:0:-1], eta], np.r_[v[:0:-1], v]
+    return BM._extended(PchipInterpolator(e, w), r0, r1)
 
 
 def read_params(path):
@@ -584,9 +614,11 @@ def tip_loops(design, params, m=POINTS, n=CAP_LOOPS, top=CAP_TOP):
 @dataclass
 class WingDesign:
     """A wing: its span (mm) and one curve per distribution over eta, from the root (0) to the tip (1), the
-    change curves dt1 .. dtk, dc1 .. dck included."""
+    change curves dt1 .. dtk, dc1 .. dck included. flat: every curve flat at the root (a blended wing body, whose
+    root is its centre line: a 1-segment curve's C1 at C0's value, a smooth 2-segment curve by its form)."""
     span: float
     curves: dict
+    flat: bool = False
 
     @property
     def changes(self):
@@ -613,11 +645,230 @@ class WingDesign:
         return {c: self.at(c, eta) for c in self.names}
 
 
+class EvenFileCurve(FileCurve):
+    """A blended wing body's distribution as its file has it (form 0, 'table'): even_spline through the rows, flat
+    at the centre line. No design variables."""
+
+    def scaled(self, f):
+        return EvenFileCurve(np.array(self.r, dtype=float), np.asarray(self.v, dtype=float) * f)
+
+    def prop(self, r0, r1):
+        return even_spline(self.radii(r0, r1), self.v, r0, r1)
+
+
+SMOOTH_U_BOUNDS = (0.02, 0.98)     # a smooth 2-segment curve's joint u3, in the fit and the design space
+
+
+@dataclass
+class SmoothTwoSegmentCurve:
+    """2 cubic Bezier segments joined smoothly at a joint P3 (C1: the slopes match there, their value free), flat
+    at the root (a blended wing body's centre line), in the (eta, value) plane:
+
+        P0 = (0, v0)       the root
+        P1 = (u1, v0)      u1 = d1 u3: P0 and P1 at one value, zero slope at the root
+        P2 = (u2, v2)      u2 = u1 + d2 (u3 - u1)
+        P3 = (u3, v3)      the joint, 0 < u3 < 1 (the body's end: the blend runs into the outer wing)
+        P4 = (u4, v4)      u4 = u3 + d4 (1 - u3), v4 on the line P2 P3: the slopes match at P3
+        P5 = (u5, v5)      u5 = u4 + d5 (1 - u4)
+        P6 = (1, v6)       the tip
+
+    Each d places a point in the stretch left before its segment's end, as the 1-segment curve's d do. Its design
+    variables (keys), from the root to the tip: v0, d1, d2, v2, u3, v3, d4, d5, v5, v6 (form smooth2)."""
+    v0: float
+    d1: float
+    d2: float
+    v2: float
+    u3: float
+    v3: float
+    d4: float
+    d5: float
+    v5: float
+    v6: float
+    segments = 3                   # the form's code (xgeom_files.SEGMENTS: smooth2); 2 segments
+    order = 3
+    KEYS = ("v0", "d1", "d2", "v2", "u3", "v3", "d4", "d5", "v5", "v6")
+    POINT = {"v0": 0, "d1": 1, "d2": 2, "v2": 2, "u3": 3, "v3": 3, "d4": 4, "d5": 5, "v5": 5, "v6": 6}
+
+    @classmethod
+    def keys_of(cls, order=3):
+        return list(cls.KEYS)
+
+    def keys(self):
+        return list(self.KEYS)
+
+    def get(self, key):
+        return float(getattr(self, key))
+
+    @classmethod
+    def from_keys(cls, vals, order=3):
+        q = {k: float(vals[k]) for k in cls.KEYS}
+        q["u3"] = min(max(q["u3"], SMOOTH_U_BOUNDS[0]), SMOOTH_U_BOUNDS[1])
+        for k in ("d1", "d2", "d4", "d5"):
+            q[k] = min(max(q[k], BM.D_BOUNDS[0]), BM.D_BOUNDS[1])
+        return cls(**q)
+
+    def key(self):
+        return (3,) + tuple(float(getattr(self, k)) for k in self.KEYS)
+
+    def positions(self):
+        """u0 .. u6 of P0 .. P6, fractions of the span."""
+        u3 = self.u3
+        u1 = self.d1 * u3
+        u2 = u1 + self.d2 * (u3 - u1)
+        u4 = u3 + self.d4 * (1.0 - u3)
+        u5 = u4 + self.d5 * (1.0 - u4)
+        return np.array([0.0, u1, u2, u3, u4, u5, 1.0])
+
+    @property
+    def v4(self):
+        u = self.positions()
+        return self.v3 + (self.v3 - self.v2) * (u[4] - u[3]) / (u[3] - u[2])
+
+    @property
+    def v(self):
+        """The control values v0 .. v6 (v1 = v0, v4 from the slope at P3)."""
+        return np.array([self.v0, self.v0, self.v2, self.v3, self.v4, self.v5, self.v6])
+
+    def ctrl(self, r0, r1):
+        """P0 .. P6 (r, value)."""
+        return np.column_stack((r0 + self.positions() * (r1 - r0), self.v))
+
+    def weights(self):
+        return np.ones(7)
+
+    def beziers(self, r0, r1):
+        p = self.ctrl(r0, r1)
+        return [Bezier(p[:4]), Bezier(p[3:])]
+
+    def scaled(self, f):
+        return dataclasses.replace(self, v0=self.v0 * f, v2=self.v2 * f, v3=self.v3 * f, v5=self.v5 * f,
+                                   v6=self.v6 * f)
+
+
+CURVE_TYPES = {**BM.CURVE_TYPES, 3: SmoothTwoSegmentCurve}
+FORM_LABELS = {0: "as the table has it", 1: "1 segment", 2: "2 segments", 3: "2 smooth segments"}
+
+
 def zero_curve(segments=1, order=CHANGE_ORDER):
-    """A curve that is 0 along the whole span: evenly placed control points (1 segment), P4 at mid-span (2)."""
+    """A curve that is 0 along the whole span: evenly placed control points (1 segment), P4 at mid-span (2), the
+    joint at mid-span (smooth 2 segments)."""
     if int(segments) == 2:
         return TwoSegmentCurve(0.0, 0.5, 1.0, 0.5, 0.0, 0.5, 1.0, 0.0)
+    if int(segments) == 3:
+        return SmoothTwoSegmentCurve(0.0, 1.0 / 3.0, 0.5, 0.0, 0.5, 0.0, 1.0 / 3.0, 0.5, 0.0, 0.0)
     return BladeCurve(np.linspace(0.0, 1.0, int(order) + 1), np.zeros(int(order) + 1))
+
+
+def slot_keys(seg, order, name, flat=False):
+    """The keys of a curve of form (seg, order) that are design variables: all but the root value of sweep and
+    rake (pinned at 0: the root's LE is the origin) and, flat at the root (a blended wing body), a 1-segment
+    curve's C1 value (tied to C0's)."""
+    if not seg:
+        return []
+    pin = "v1" if seg == 2 else "v0"
+    return [k for k in CURVE_TYPES[seg].keys_of(order)
+            if not (name in PINNED and k == pin) and not (flat and seg == 1 and k == "v1")]
+
+
+def curve_from_slots(seg, order, name, flat, get):
+    """The curve of form (seg, order) from its design variables, get(key) for each of slot_keys: the pinned root
+    at 0, a flat 1-segment curve's C1 at C0's value."""
+    cls = CURVE_TYPES[seg]
+    own = set(slot_keys(seg, order, name, flat))
+    vals = {k: float(get(k)) if k in own else 0.0 for k in cls.keys_of(order)}
+    if flat and seg == 1:
+        vals["v1"] = vals["v0"]
+    return cls.from_keys(vals, order)
+
+
+def _flat_basis(u, eta, pinned):
+    """The values' basis of a 1-segment curve at positions u, flat at the root (C1 at C0's value: their columns
+    summed; pinned: both at 0, their column dropped)."""
+    a = law_basis(u, eta)
+    a = np.column_stack((a[:, 0] + a[:, 1], a[:, 2:]))
+    return a[:, 1:] if pinned else a
+
+
+def _flat_values(vals, pinned):
+    """All the control values of a flat 1-segment curve from those _flat_basis solves for."""
+    vals = np.r_[0.0, vals] if pinned else np.asarray(vals, dtype=float)
+    return np.r_[vals[0], vals]
+
+
+def fit_flat_curve(eta, v, order, pinned=False):
+    """A 1-segment curve of the order, flat at the root (C1 at C0's value), through the data (eta, v): the
+    positions by least squares from four starts (as blade_modify.fit_curve), the values by linear least squares
+    (pinned: the root's at 0). Returns (curve, residuals at the data)."""
+    eta, v = np.asarray(eta, dtype=float), np.asarray(v, dtype=float)
+    order = int(order)
+    if order < 1:
+        raise ValueError("a curve needs at least 2 control points")
+
+    def solve(u):
+        a = _flat_basis(u, eta, pinned)
+        vals = np.linalg.lstsq(a, v, rcond=None)[0] if a.shape[1] else np.zeros(0)
+        return _flat_values(vals, pinned), (a @ vals if a.shape[1] else np.zeros(len(eta))) - v
+    k = np.arange(order + 1) / order
+    best = None
+    for u0 in (k, 0.5 * (1.0 - np.cos(np.pi * k)), np.sin(0.5 * np.pi * k), 1.0 - np.cos(0.5 * np.pi * k)):
+        d0 = np.clip(BM.fractions_from_positions(u0), BM.D_BOUNDS[0], BM.D_BOUNDS[1])
+        if order > 1:
+            sol = least_squares(lambda d: solve(BM.positions_from_fractions(d))[1], d0, bounds=BM.D_BOUNDS,
+                                xtol=1e-12, ftol=1e-12, gtol=1e-12, max_nfev=200 * order)
+            d0 = np.clip(sol.x, BM.D_BOUNDS[0] + 1e-9, BM.D_BOUNDS[1] - 1e-9)
+        u = BM.positions_from_fractions(d0)
+        vals, res = solve(u)
+        if best is None or res @ res < best[2] @ best[2]:
+            best = (u, vals, res)
+    return BladeCurve(best[0], best[1]), best[2]
+
+
+def _smooth_basis(p, eta, pinned):
+    """The values' basis of a smooth 2-segment curve with positions p = (d1, d2, u3, d4, d5) at eta: columns v0,
+    v2, v3, v5, v6 (pinned: v0 at 0, its column dropped)."""
+    cu = SmoothTwoSegmentCurve(0.0, p[0], p[1], 0.0, p[2], 0.0, p[3], p[4], 0.0, 0.0)
+    u = cu.positions()
+    a = np.zeros((len(eta), 5))
+    m = eta <= u[3]
+    if m.any():
+        b = law_basis(u[:4], eta[m])
+        a[m, 0], a[m, 1], a[m, 2] = b[:, 0] + b[:, 1], b[:, 2], b[:, 3]
+    if (~m).any():
+        b = law_basis(u[3:], eta[~m])
+        k = (u[4] - u[3]) / (u[3] - u[2])                  # v4 = v3 + k (v3 - v2)
+        a[~m, 2] = b[:, 0] + (1.0 + k) * b[:, 1]
+        a[~m, 1] = -k * b[:, 1]
+        a[~m, 3], a[~m, 4] = b[:, 2], b[:, 3]
+    return a[:, 1:] if pinned else a
+
+
+def fit_smooth_two(eta, v, pinned=False):
+    """A smooth 2-segment curve through the data (eta, v): the positions (d1, d2, u3, d4, d5) by bounded least
+    squares from a few starts (the joint where the data leaves the line through its ends most, at a quarter and
+    at mid-span), the values by linear least squares at every step (pinned: the root's at 0). Returns (curve,
+    residuals at the data)."""
+    eta, v = np.asarray(eta, dtype=float), np.asarray(v, dtype=float)
+    lo = [BM.D_BOUNDS[0], BM.D_BOUNDS[0], SMOOTH_U_BOUNDS[0], BM.D_BOUNDS[0], BM.D_BOUNDS[0]]
+    hi = [BM.D_BOUNDS[1], BM.D_BOUNDS[1], SMOOTH_U_BOUNDS[1], BM.D_BOUNDS[1], BM.D_BOUNDS[1]]
+
+    def solve(p):
+        a = _smooth_basis(p, eta, pinned)
+        vals = np.linalg.lstsq(a, v, rcond=None)[0]
+        return vals, a @ vals - v
+    i = int(np.argmax(np.abs(v - np.interp(eta, [eta[0], eta[-1]], [v[0], v[-1]]))))
+    u_ext = float(np.clip(eta[i], 0.1, 0.9))
+    best = None
+    for u0 in sorted({round(u_ext, 3), 0.25, 0.5}):
+        for dd in (0.5, 0.3):
+            sol = least_squares(lambda p: solve(p)[1], [0.5, 0.5, u0, dd, 0.5], bounds=(lo, hi), xtol=1e-12,
+                                ftol=1e-12, gtol=1e-12, max_nfev=2000)
+            vals, res = solve(sol.x)
+            if best is None or res @ res < best[2] @ best[2]:
+                best = (sol.x, vals, res)
+    p, vals, res = best
+    v0, v2, v3, v5, v6 = np.r_[0.0, vals] if pinned else vals
+    d1, d2, u3, d4, d5 = (float(q) for q in p)
+    return SmoothTwoSegmentCurve(float(v0), d1, d2, float(v2), u3, float(v3), d4, d5, float(v5), float(v6)), res
 
 
 def pinned_key(curve):
@@ -642,14 +893,31 @@ def fit_stations(params):
     return np.unique(np.r_[params.eta, np.linspace(0.0, 1.0, N_FIT)])
 
 
-def fit_curve_to(eta, v, name, segments=DEFAULT_SEGMENTS, order=None):
+def fit_curve_to(eta, v, name, segments=DEFAULT_SEGMENTS, order=None, flat=False):
     """A curve of the form (segments, order) through the data (eta, v): blade_modify.fit_form, the root
-    pinned at 0 for sweep and rake; a curve that is 0 along the span when the data is."""
+    pinned at 0 for sweep and rake; a curve that is 0 along the span when the data is. flat (a blended wing
+    body): flat at the root, 1 segment (fit_flat_curve) or smooth 2 segments (segments 3, fit_smooth_two); the
+    2-segment form with zero slope at P4 is refused (it cannot be flat at the root)."""
     if order is None:
         order = DEFAULT_ORDER if name in CURVES else CHANGE_ORDER
     v = np.asarray(v, dtype=float)
+    seg = int(segments)
+    if flat and seg == 2:
+        raise ValueError(f"{name}: a blended wing body's curves are flat at the centre line: 1 segment or 2 smooth "
+                         f"ones (smooth2), not the 2-segment form with zero slope at P4 (bezier2)")
     if np.all(np.abs(v) <= 1e-12):
         return zero_curve(segments, order)
+    pinned = name in PINNED
+    if seg == 3:
+        return fit_smooth_two(eta, v, pinned)[0]
+    if flat:
+        u = np.linspace(0.0, 1.0, int(order) + 1)          # evenly placed: exact for a polynomial of the order
+        a = _flat_basis(u, np.asarray(eta, dtype=float), pinned)
+        if a.shape[1]:
+            vals = np.linalg.lstsq(a, v, rcond=None)[0]
+            if np.abs(a @ vals - v).max() <= 1e-9 * max(float(np.ptp(v)), float(np.abs(v).max())):
+                return BladeCurve(u, _flat_values(vals, pinned))
+        return fit_flat_curve(eta, v, order, pinned)[0]
     cu = None
     if int(segments) == 1:                       # evenly placed control points: exact for a polynomial of the order
         u = np.linspace(0.0, 1.0, int(order) + 1)
@@ -675,29 +943,31 @@ def fit_design(params, orders=None, segments=None, changes=None):
     for c in CURVES + change_names(k):
         seg = int(segments.get(c, DEFAULT_SEGMENTS))
         curves[c] = file_curve(params, c) if seg == 0 else fit_curve_to(eta, params.spline(c)(eta), c, seg,
-                                                                         orders.get(c))
-    design = WingDesign(float(params.span), curves)
+                                                                         orders.get(c), params.flat)
+    design = WingDesign(float(params.span), curves, params.flat)
     res = {c: design.at(c, params.eta) - params.spline(c)(params.eta) for c in design.names}
     return design, res
 
 
 def refit_curve(design, name, order=None, segments=None, n_samples=None):
-    """The design with curve `name` fitted again to its present shape: in another form (segments 1 or 2) or,
-    1 segment, at another order (default: the curve's own, DEFAULT_ORDER coming from 2 segments)."""
+    """The design with curve `name` fitted again to its present shape: in another form (segments 1 or 2, 3 the
+    smooth 2 segments) or, 1 segment, at another order (default: the curve's own, DEFAULT_ORDER coming from 2
+    segments); flat at the root when the design is."""
     cur = design.curves[name]
     seg = cur.segments if segments is None else int(segments)
     if order is None:
         order = cur.order if cur.segments == 1 else (DEFAULT_ORDER if name in CURVES else CHANGE_ORDER)
-    eta = np.linspace(0.0, 1.0, n_samples or (121 if seg == 2 else 401))
+    eta = np.linspace(0.0, 1.0, n_samples or (121 if seg in (2, 3) else 401))
     out = design.copy()
-    out.curves[name] = fit_curve_to(eta, design.at(name, eta), name, seg, order)
+    out.curves[name] = fit_curve_to(eta, design.at(name, eta), name, seg, order, design.flat)
     return out
 
 
 def file_curve(params, name):
     """The distribution as the parameter file has it (form 0, 'table'): the cubic spline through its rows (a
-    change the file has none of: 0)."""
-    return FileCurve(np.array(params.eta, dtype=float), np.asarray(params.spline(name)(params.eta), dtype=float))
+    blended wing body's: even_spline, flat at the centre line; a change the file has none of: 0)."""
+    cls = EvenFileCurve if params.flat else FileCurve
+    return cls(np.array(params.eta, dtype=float), np.asarray(params.spline(name)(params.eta), dtype=float))
 
 
 def refit_to_file(params, design, name, segments, order=None):
@@ -706,7 +976,7 @@ def refit_to_file(params, design, name, segments, order=None):
     eta = fit_stations(params)
     out = design.copy()
     out.curves[name] = (file_curve(params, name) if int(segments) == 0 else
-                        fit_curve_to(eta, params.spline(name)(eta), name, segments, order))
+                        fit_curve_to(eta, params.spline(name)(eta), name, segments, order, params.flat))
     return out
 
 
@@ -722,12 +992,12 @@ def with_changes(design, k, segments=1, order=CHANGE_ORDER, n_eta=41, n_x=201):
         return design.copy()
     eta, x = np.linspace(0.0, 1.0, n_eta), np.linspace(0.0, 1.0, n_x)
     b0, b1 = change_basis(x, k0), change_basis(x, k)
-    out = WingDesign(design.span, {c: copy.deepcopy(design.curves[c]) for c in CURVES})
+    out = WingDesign(design.span, {c: copy.deepcopy(design.curves[c]) for c in CURVES}, design.flat)
     for p in ("dt", "dc"):
         old = np.column_stack([design.at(f"{p}{i}", eta) for i in range(1, k0 + 1)]) if k0 else np.zeros((n_eta, 0))
         new = np.linalg.lstsq(b1, b0 @ old.T, rcond=None)[0].T if k else np.zeros((n_eta, 0))   # (n_eta, k)
         for i in range(1, k + 1):
-            out.curves[f"{p}{i}"] = fit_curve_to(eta, new[:, i - 1], f"{p}{i}", segments, order)
+            out.curves[f"{p}{i}"] = fit_curve_to(eta, new[:, i - 1], f"{p}{i}", segments, order, design.flat)
     out.curves = {c: out.curves[c] for c in out.names}
     return out
 
@@ -761,7 +1031,7 @@ def default_bounds(params, design):
     again on either side, the range at least a fifth of the mean chord (chord), of the span (sweep, rake),
     4 deg (pitch), 0.04 (t/c, f/c); chord and thickness not below 0 unless a fitted control value is; the
     changes at least CHANGE_BOUNDS; the span 50 % to 150 % of the design's (to the mm)."""
-    b = {"d": BM.D_BOUNDS, "seg.d": BM.SEG_D_BOUNDS, "seg.u": BM.SEG_U_BOUNDS}
+    b = {"d": BM.D_BOUNDS, "seg.d": BM.SEG_D_BOUNDS, "seg.u": BM.SEG_U_BOUNDS, "smooth.u": SMOOTH_U_BOUNDS}
     w = [x for c in design.names if design.curves[c].segments == 2
          for x in (design.curves[c].w23, design.curves[c].w56)]
     b["seg.w"] = (BM.SEG_W_BOUNDS[0], float(max([2.0] + [np.ceil(15.0 * x) / 10.0 for x in w])))
@@ -789,12 +1059,13 @@ class WingSpace:
 
     The slots: "span" (mm), then curve by curve (design.names order) its own: 1 segment d1 .. d(m-1) (the
     fractions that place the inner control points), v0 (root) .. vm (tip); 2 segments v1, d1, w23, u4, v4, d2,
-    w56, v7; the root values of sweep and rake are pinned at 0 and no slots; a curve as the file has it (form 0,
-    'table') none. Names "span", "chord.d1", "chord.v0", ... The curves' forms (segments, order) and the number
-    of change points are the design's.
+    w56, v7; smooth 2 segments v0, d1, d2, v2, u3, v3, d4, d5, v5, v6; the root values of sweep and rake are
+    pinned at 0 and no slots, nor (a blended wing body, flat at its centre line) a 1-segment curve's v1, tied to
+    its v0; a curve as the file has it (form 0, 'table') none. Names "span", "chord.d1", "chord.v0", ... The
+    curves' forms (segments, order) and the number of change points are the design's.
 
-    bounds   overrides of default_bounds by group ("d", "seg.d", "seg.u", "seg.w"), curve ("chord": its
-             values; "chord.d", "chord.u", "chord.w") or slot ("chord.v3", "span"); a slot beats its curve, a
+    bounds   overrides of default_bounds by group ("d", "seg.d", "seg.u", "seg.w", "smooth.u"), curve ("chord":
+             its values; "chord.d", "chord.u", "chord.w") or slot ("chord.v3", "span"); a slot beats its curve, a
              curve its group
     fixed    {slot: value} of the held slots (not in the vector); with free given instead (curve names and
              "span"), every other slot is held at the design's value
@@ -802,14 +1073,15 @@ class WingSpace:
 
     def __init__(self, params, design, bounds=None, fixed=None, free=None):
         self.params = params
+        self.flat = bool(params.flat)
         self.curve_names = design.names
         self.forms = {c: (design.curves[c].segments, design.curves[c].order) for c in self.curve_names}
         self.file_curves = {c: design.curves[c] for c in self.curve_names if design.curves[c].segments == 0}
         b = {**default_bounds(params, design), **(bounds or {})}
         self._slots = [(None, "span")]
         for c in self.curve_names:
-            cu = design.curves[c]
-            self._slots += [(c, k) for k in cu.keys() if not (c in PINNED and k == pinned_key(cu))]
+            seg, order = self.forms[c]
+            self._slots += [(c, k) for k in slot_keys(seg, order, c, self.flat)]
         self.all_names = [k if c is None else f"{c}.{k}" for c, k in self._slots]
         self.all_bounds = np.array([self._bound(b, n, sl) for n, sl in zip(self.all_names, self._slots)], dtype=float)
         if fixed is None and free is not None:
@@ -833,6 +1105,8 @@ class WingSpace:
             return b[c]
         if self.forms[c][0] == 1:
             return b.get(f"{c}.d", b["d"])
+        if self.forms[c][0] == 3:                            # smooth 2 segments: d as 1 segment's, the joint u3
+            return b.get(f"{c}.d", b["d"]) if k[0] == "d" else b.get(f"{c}.u", b["smooth.u"])
         return b.get(f"{c}.{k[0]}", b[f"seg.{k[0]}"])
 
     @property
@@ -865,11 +1139,8 @@ class WingSpace:
             if seg == 0:                                     # as the file has it: no variables
                 curves[c] = self.file_curves[c]
                 continue
-            cls = BM.CURVE_TYPES[seg]
-            keys = cls.keys_of(order)
-            pin = "v1" if seg == 2 else "v0"
-            curves[c] = cls.from_keys({k: 0.0 if c in PINNED and k == pin else vals[f"{c}.{k}"] for k in keys}, order)
-        return WingDesign(vals["span"], curves)
+            curves[c] = curve_from_slots(seg, order, c, self.flat, lambda k, c=c: vals[f"{c}.{k}"])
+        return WingDesign(vals["span"], curves, self.flat)
 
     def values(self, design):
         """{slot name: value} of a design, every slot."""
@@ -896,7 +1167,7 @@ class WingSpace:
         k = int(rec.get("changes", 0))
         curves = {c: file_curve(params, c) if int(forms[c]) == 0 else zero_curve(forms[c], orders[c])
                   for c in CURVES + change_names(k)}
-        tmpl = WingDesign(float(params.span), curves)
+        tmpl = WingDesign(float(params.span), curves, params.flat)
         vals = {q["name"]: q["value"] for q in rec["slots"]}
         bounds = {q["name"]: (q["lo"], q["hi"]) for q in rec["slots"]}
         fixed = {q["name"]: q["value"] for q in rec["slots"] if not q["free"]}
@@ -983,26 +1254,27 @@ def _component_design(comp, params, orders=None, segments=None):
         else:
             seg = XF.SEGMENTS[form]
             order = n - 1 if form == "bezier1" else 3
-        keys = BM.CURVE_TYPES[seg].keys_of(order) if seg else []
-        pin = "v1" if seg == 2 else "v0"
-        need = [q for q in keys if not (c in PINNED and q == pin)]
+        if params.flat and seg == 2:
+            raise ValueError(f"{path}: the {c} curve: a blended wing body's curves are flat at the centre line: "
+                             f"bezier1 or smooth2, not bezier2")
+        need = slot_keys(seg, order, c, params.flat)
         given = [q for q in need if f"{c}.{q}" in comp.vars]
         stray = [q for q in comp.vars if q.startswith(c + ".") and q.split(".", 1)[1] not in need]
         if stray:
             raise ValueError(f"{path}: {', '.join(stray)}: not variables of a {XF.FORM_OF[seg]} {c} curve"
                              + (f" of {order + 1} points" if seg == 1 else "")
-                             + (" (its root value is pinned at 0)" if c in PINNED and seg else ""))
+                             + (" (its root value is pinned at 0)" if c in PINNED and seg else "")
+                             + (" (C1's value is C0's: flat at the centre line)" if params.flat and seg == 1 else ""))
         if given and len(given) < len(need):
             raise ValueError(f"{path}: the {c} curve has var lines for some of its variables only; missing: "
                              + ", ".join(f"{c}.{q}" for q in need if q not in given))
         if seg == 0:
             curves[c] = file_curve(params, c)
         elif given:
-            curves[c] = BM.CURVE_TYPES[seg].from_keys(
-                {q: 0.0 if q not in need else comp.vars[f"{c}.{q}"].value for q in keys}, order)
+            curves[c] = curve_from_slots(seg, order, c, params.flat, lambda q, c=c: comp.vars[f"{c}.{q}"].value)
             exact.append(c)
         else:
-            curves[c] = fit_curve_to(eta, params.spline(c)(eta), c, seg, order)
+            curves[c] = fit_curve_to(eta, params.spline(c)(eta), c, seg, order, params.flat)
     span = params.span
     if "span" in comp.vars:
         v = comp.vars["span"].value
@@ -1010,7 +1282,7 @@ def _component_design(comp, params, orders=None, segments=None):
             raise ValueError(f"{path}: var span {v:.10g} disagrees with the geometry's span_mm {span:.10g}; change "
                              f"both, or delete the var line")
         span = v
-    design = WingDesign(float(span), curves)
+    design = WingDesign(float(span), curves, params.flat)
     columns = {**XF.CURVE_COLUMNS[comp.kind], **{c: c for c in change_names(params.changes)}}
     BM.check_columns(comp, design, [c for c in exact if c in columns], columns, "eta", design.at, PINNED)
     return design
@@ -1218,25 +1490,110 @@ def write_case(out_dir, case, design, params, space=None, cad=True, settings=Non
     out = {"paths": paths, "problems": problems, "warnings": warnings, "sections": len(eta), "cap_loops": n_cap,
            "area_mm2": float(_integrate(design.at("chord", ee), ee) * design.span),
            "volume_mm3": float(_integrate(m["area"], ee) * design.span)}
+    if params.flat and not problems:            # a blended wing body: both halves (planform, volume) and more
+        body = body_properties(design, params)
+        out.update(area_mm2=body["planform_mm2"], volume_mm3=body["volume_mm3"], body=body)
     if cad:
         if problems:
             raise ValueError(f"{case}: no CAD for a design with problems: {problems[0]}")
-        out.update(write_cad(out_dir, case, paths["xcad_m.dat"]))
+        out.update(write_cad(out_dir, case, paths["xcad_m.dat"], mirror=params.flat))
         paths.update(out.pop("cad_paths"))
     return out
 
 
-def write_cad(out_dir, case, xcad_path, half=False):
+def body_properties(design, params, n=201, m=POINTS):
+    """From the sections (no CAD needed), n along the span with m points per side: the planform area (mm^2), the
+    volume (mm^3), the wetted area (mm^2: the sides, panel by panel between neighbouring sections, and the flat
+    tip) and the centroid of the volume (mm, x, y, z in the wing's frame). A blended wing body (flat): the whole
+    body, both halves (the centroid on the centre line, y 0); else the surface from its root to its tip. Each
+    section's area and centroid by the shoelace formula over its loop."""
+    eta = np.linspace(0.0, 1.0, int(n))
+    lp = section_loops(design, params, eta, m)
+    x, z = lp[:, :, 0], lp[:, :, 2]
+    cross = x[:, :-1] * z[:, 1:] - x[:, 1:] * z[:, :-1]           # the loops are closed: the last point the first
+    a = 0.5 * cross.sum(axis=1)
+    cx = ((x[:, :-1] + x[:, 1:]) * cross).sum(axis=1) / (6.0 * a)
+    cz = ((z[:, :-1] + z[:, 1:]) * cross).sum(axis=1) / (6.0 * a)
+    area = np.abs(a)
+    y = eta * design.span
+    vol = float(_integrate(area, y))
+    p, q = lp[1:, 1:] - lp[:-1, :-1], lp[:-1, 1:] - lp[1:, :-1]        # each panel's diagonals
+    sides = float(0.5 * np.linalg.norm(np.cross(p, q), axis=-1).sum())
+    tip = float(area[-1]) if params.cap is None and params.tip_tilt == 0.0 else 0.0
+    plan = float(_integrate(design.at("chord", eta), y))
+    c = [float(_integrate(area * cx, y)) / vol, float(_integrate(area * y, y)) / vol, float(_integrate(area * cz, y)) / vol]
+    if design.flat:
+        return {"planform_mm2": 2.0 * plan, "volume_mm3": 2.0 * vol, "wetted_mm2": 2.0 * (sides + tip),
+                "centroid_mm": (c[0], 0.0, c[2]), "whole": True}
+    return {"planform_mm2": plan, "volume_mm3": vol, "wetted_mm2": sides + tip, "centroid_mm": tuple(c),
+            "whole": False}
+
+
+def mirror_fused(shape):
+    """A blended wing body's whole solid (mm, the XCAD frame): the loft of its half (its root face on the centre
+    line, the plane Z = 0) and that mirrored in the plane, fused into one solid (the root faces go)."""
+    import xcad_loft as XL
+    gp_Trsf, gp_Ax2, gp_Pnt, gp_Dir = XL._occ("gp", "gp_Trsf", "gp_Ax2", "gp_Pnt", "gp_Dir")
+    BRepBuilderAPI_Transform = XL._occ("BRepBuilderAPI", "BRepBuilderAPI_Transform")
+    BRepAlgoAPI_Fuse = XL._occ("BRepAlgoAPI", "BRepAlgoAPI_Fuse")
+    tr = gp_Trsf()
+    tr.SetMirror(gp_Ax2(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)))
+    other = BRepBuilderAPI_Transform(shape, tr, True).Shape()
+    op = BRepAlgoAPI_Fuse(shape, other)
+    errors = getattr(op, "HasErrors", None)                     # not in every binding
+    if not op.IsDone() or (errors is not None and errors()):
+        raise RuntimeError("the fuse of the two halves failed")
+    return op.Shape()
+
+
+def solid_properties(shape):
+    """(solids, valid, volume mm^3, area mm^2, centroid mm in the wing's frame) of a solid in the XCAD frame."""
+    import importlib
+    import xcad_loft as XL
+    GProp_GProps = XL._occ("GProp", "GProp_GProps")
+    BRepCheck_Analyzer = XL._occ("BRepCheck", "BRepCheck_Analyzer")
+    TopExp_Explorer, TopAbs_SOLID = XL._occ("TopExp", "TopExp_Explorer"), XL._occ("TopAbs", "TopAbs_SOLID")
+    vol, area = XL.mass_properties(shape)
+    mod = importlib.import_module(f"{XL._PKG}.BRepGProp")
+    fn = XL._static(getattr(mod, "brepgprop", None) or getattr(mod, "BRepGProp"), "VolumeProperties")
+    props = GProp_GProps()
+    try:
+        fn(shape, props, 1.0e-7)
+    except TypeError:                                           # a binding without the eps overload
+        fn(shape, props)
+    c = props.CentreOfMass()
+    n, ex = 0, TopExp_Explorer(shape, TopAbs_SOLID)
+    while ex.More():
+        n += 1
+        ex.Next()
+    return n, bool(BRepCheck_Analyzer(shape).IsValid()), vol, area, (c.X(), c.Z(), -c.Y())
+
+
+def write_cad(out_dir, case, xcad_path, half=False, mirror=False):
     """The solid lofted through the XCAD file's sections (xcad_loft.loft_loops: the root closed by a planar
     face, the tip flat and planar too, or the tip patch over the cap loops when the file has them), mm, the
     XCAD frame, as <case>.step. half=True: the half body cut at the plane of symmetry (refused with a message
-    when the sections are not symmetric: a cambered wing has no half)."""
+    when the sections are not symmetric: a cambered wing has no half). mirror=True (a blended wing body): the
+    whole body, the loft and its mirror image in the centre line's plane fused (mirror_fused; 'whole' in the
+    result: solids, valid, volume, area, centroid); with half the loft alone, the half body on one side of the
+    centre line (for CFD on half the domain)."""
     import time
     import xcad_loft as XL
     t0 = time.time()
-    loft = XL.loft_loops(XL.read_loops(xcad_path, "m"), half=half)
-    step = XL.write_step(loft.shape, os.path.join(out_dir, f"{case}.step"))
-    return {"cad_paths": {"step": step}, "loft": loft, "cad_seconds": time.time() - t0}
+    loops = XL.read_loops(xcad_path, "m")
+    if mirror:          # a blended wing body: its steep blend is no step to ease out, and a row of poles a section
+        n_flat = sum(1 for lp in loops if np.ptp(lp[:, 2]) <= 1.0e-6 * max(1.0, float(np.abs(lp).max())))
+        loft = XL.loft_loops(loops, ease=None, v_poles=max(n_flat, 4))      # (30 rows smooth it by up to 0.3 mm)
+    else:
+        loft = XL.loft_loops(loops, half=half)
+    shape, out = loft.shape, {"loft": loft}
+    if mirror and not half:
+        shape = mirror_fused(loft.shape)
+        n, valid, vol, area, cen = solid_properties(shape)
+        out["whole"] = {"shape": shape, "solids": n, "valid": valid, "volume": vol, "area": area, "centroid": cen}
+    step = XL.write_step(shape, os.path.join(out_dir, f"{case}.step"))
+    out.update(cad_paths={"step": step}, cad_seconds=time.time() - t0)
+    return out
 
 
 def plot_case(path, case, design, params):
@@ -1267,8 +1624,7 @@ def plot_case(path, case, design, params):
         ax.plot(design.at(c, ee), y, "-", color="#2a78d6", lw=1.8, label="design")
         p = design.ctrl(c)
         ax.plot(p[:, 1], p[:, 0] * design.span, "o--", color="#2a78d6", lw=0.8, ms=4, mfc="white")
-        ax.set_xlabel(f"{c} ({UNITS[c]}), {design.curves[c].segments} segment"
-                      + ("s" if design.curves[c].segments == 2 else ""))
+        ax.set_xlabel(f"{c} ({UNITS[c]}), " + FORM_LABELS[design.curves[c].segments])
         ax.set_ylabel("y, span (mm)")
     ax = axs[1, 3]
     x = np.linspace(0.0, 1.0, 301)

@@ -2,7 +2,7 @@
 xgeom_files.py
 
 The XGeom input files (claude/xgeom-file-formats.md): the component file, one layout for every component
-(propeller blade, rudder, fin, wing, hull), and the assembly file, which places the components on the hull and
+(propeller blade, rudder, fin, wing, blended wing body, hull), and the assembly file, which places the components on the hull and
 defines an optimization run. This module reads and writes their text; blade_modify, wing_modify and hull_modify
 turn a component into their parameters, design and design space and back (load_component, write_component).
 Standard library and numpy only. Files are written with LF line endings on every platform, so the same
@@ -11,7 +11,7 @@ content gives the same bytes on any machine.
 Component file ('#' lines are the header, the rest is one table, which np.loadtxt reads):
 
     # XGeom component
-    # kind          blade                        blade, rudder, fin, wing or hull
+    # kind          blade                        blade, rudder, fin, wing, bwb or hull
     # name          msc_blade
     # note          free text (any number of note lines)
     # ---- geometry
@@ -33,7 +33,8 @@ Component file ('#' lines are the header, the rest is one table, which np.loadtx
     note    free text, kept and written back
     curve   a distribution's form: table (the column as it is, the cubic spline through the rows; no
             variables), bezier1 <points> (one Bezier from the root to the tip), bezier2 (two rational cubic
-            segments, x_blade's form), cst <order> (a hull curve)
+            segments, x_blade's form), smooth2 (a blended wing body's: two cubic segments joined smoothly, flat
+            at the centre line; wing_modify.SmoothTwoSegmentCurve), cst <order> (a hull curve)
     var     one variable: its value, its bounds and whether it is free (a design variable) or held
     vary    '<name> Y|N [low high]' (blade_vary.py): the curves and globals with no var lines are free (Y) or
             held (N), their values within low .. high when given; hand-written, or a blade's table file
@@ -82,7 +83,7 @@ import numpy as np
 
 COMPONENT = "# XGeom component"
 ASSEMBLY = "# XGeom assembly"
-PLANAR = ("rudder", "fin", "wing")
+PLANAR = ("rudder", "fin", "wing", "bwb")         # bwb: a blended wing body (20 Nov 2026)
 KINDS = ("blade",) + PLANAR + ("hull",)
 CAP_KEYS = {"scaled": ("cap_k_le", "cap_k_te", "cap_b1", "cap_b2", "cap_p", "cap_q"),
             "radius": ("cap_h_le_mm", "cap_h_te_mm", "cap_b1_mm", "cap_b2_mm", "cap_crown_radius_mm",
@@ -107,12 +108,12 @@ CURVE_COLUMNS = {"blade": {"pitch": "P/D", "chord": "c/D", "thickness": "t/c", "
                  **{k: {"pitch": "pitch_deg", "chord": "chord_mm", "thickness": "t/c", "camber": "f/c",
                         "sweep": "sweep_mm", "rake": "rake_mm"} for k in PLANAR}}
 FORMS = {"blade": ("table", "bezier1", "bezier2"), **{k: ("table", "bezier1", "bezier2") for k in PLANAR},
-         "hull": ("cst",)}
-SEGMENTS = {"table": 0, "bezier1": 1, "bezier2": 2}          # the form's segments (blade_modify's curve types)
-FORM_OF = {0: "table", 1: "bezier1", 2: "bezier2"}
+         "bwb": ("table", "bezier1", "smooth2"), "hull": ("cst",)}
+SEGMENTS = {"table": 0, "bezier1": 1, "bezier2": 2, "smooth2": 3}   # the form's code (wing_modify.CURVE_TYPES)
+FORM_OF = {0: "table", 1: "bezier1", 2: "bezier2", 3: "smooth2"}
 DECIMALS = {"blade": 8, **{k: 8 for k in PLANAR}, "hull": 9}  # the table's
 TITLES = {"blade": "distributions over r/R", **{k: "distributions over eta = y/span" for k in PLANAR},
-          "hull": "stations"}
+          "bwb": "distributions over eta = y/span from the centre line", "hull": "stations"}
 ASSEMBLY_COMPONENTS = ("hull", "blade", "rudder", "fin", "wing")
 PLACEMENT_KEYS = ("prop_x", "prop_d", "rudder_x", "rudder_angle", "rudders", "rudder_scale", "rudder_rake",
                   "fin_x", "fins", "fin_angle", "fin_scale", "wing_x", "wings", "wing_angle", "wing_scale", "view")
@@ -487,7 +488,8 @@ def component_text(comp):
         out.append("# ---- settings")
         out += [_key(k, v) for k, v in comp.settings.items()]
     if comp.curves or comp.vars:
-        forms = "cst <order>" if comp.kind == "hull" else "table | bezier1 <points> | bezier2"
+        forms = {"hull": "cst <order>", "bwb": "table | bezier1 <points> | smooth2"}.get(
+            comp.kind, "table | bezier1 <points> | bezier2")
         out.append(f"# ---- curves ({forms}) and variables (value, low, high, free Y or held N)")
         groups = {c: [] for c in comp.curves}
         loose = []
