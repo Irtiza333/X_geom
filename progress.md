@@ -842,6 +842,28 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   with the window (the sample, flatness of random designs, refusals, smooth2 saved and read back, the table form, the
   body's numbers, the CAD whole and half, the Hull slot's Body box and CAD BWB), hull 65, tool 73, blade 79 and files
   60 with the window; the contract test passes. Project doc `claude/bwb.md`.
+- Tip patch half as tall (20 Nov 2026; the user, with a picture of the mesh: make the tip patch smaller by pushing
+  its straight edges closer to the tip, without compromising the CAD's robustness and smoothness).
+  `xcad_loft.TIP_DROP` 0.75 (1.5 before; `modify_control.ModifySettings.tip_drop` and the rudder tool's fallback with
+  it): the tip patch's corners, and the central panels' straight top edges between them, sit half as far under the
+  tops of the LE and TE lines (the wind-tunnel rudder: 5.6 and 7.1 mm instead of 10.7 and 12.4). Swept 0.5 to 1.5 on
+  the wind-tunnel rudder (extracted and planar), a design of the tool, the tool test's tilted wing and BB2's stern
+  plane: every solid valid, 6 faces, no fold. The slope trades the corners: the angle between the lines is about
+  atan(tip_drop) at the tip patch's corners and 90 deg less that at the strips' top corners (the rudder: 33 to 38
+  and 59 to 62 deg at 0.75, 53 to 57 and 40 to 42 at 1.5). On the rudder the tip patch follows the tip as closely
+  (its normals against the tip's own, the smooth surface it is fitted to, at 299 x 299 stations: within 0.11 deg
+  over 99 % and 1.1 at most; 0.08 and 1.5 at 1.5) and joins its neighbours more smoothly (the normal turns by 0.21
+  deg at most across its edges, 0.63 at 1.5; the planar rudder 0.49 and 1.07, the design 0.31 and 0.87); its lines'
+  smallest angle 15 deg (16 at 1.5). At 0.5 its corners close to 23 deg and its normals' 99 % doubles. BB2's stern
+  plane is the exception: its 15 mm TE round, which a flatter top edge passes within a few mm of the rim, turned the
+  normal across the tip patch's TE edge by 4.5 to 7.8 deg at every slope from 0.5 to 1.25 (2.6 at 1.5). So
+  `loft_loops` measures that turn (`_edge_turn`, `LoftResult.tip_turn`, in the tip patch's note) and, where a slope
+  under `TIP_DROP_SAFE` (1.5) folds the tip patch or turns the normal by more than `EDGE_TURN` (2 deg), builds the
+  solid again at 1.5 and keeps the smoother, saying so in the note (BB2's plane as before, about 50 s instead of 25).
+  A fit of the edge's first row with the turn held to zero, tried instead, removed the turn but left the patch's
+  lines nearly along the TE edge (0.3 deg). Set-up JSON files keep the tip_drop they were saved with; the wing, fin
+  and BWB samples have flat tops (no tip patch). Tests: tool 74 (a pair of slopes; the rebuild on the tilted wing at
+  1.0/0.5, 3.1 deg), wing 78, files 60, hull 65 with the window, modify 136, tip cap 44; the contract test passes.
 
 ## Next steps
 

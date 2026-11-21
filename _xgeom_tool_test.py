@@ -168,15 +168,27 @@ def test_loft():
     run = [0.5 * (abs(cor[a][0] - top[0]) + abs(cor[b][0] - top[0]))
            for a, b, top in (("ur_a", "ur_b", top_le), ("ul_a", "ul_b", top_te))]
     check("the tip patch's corners sit on the strip lines under the tip: under the tops of the LE and TE lines "
-          "by 1.5 times their distance from them along the chord (the diagonals' slope), the same on both sides",
+          f"by TIP_DROP ({XL.TIP_DROP:g}) times their distance from them along the chord (the diagonals' slope), "
+          "the same on both sides",
           [res2.drops[0] / run[0], res2.drops[1] / run[1], top_le[2] - cor["ur_a"][2] - res2.drops[0],
-           cor["ur_a"][2] - cor["ur_b"][2], cor["ul_a"][2] - cor["ul_b"][2]], [1.5, 1.5, 0, 0, 0], 1e-6)
+           cor["ur_a"][2] - cor["ur_b"][2], cor["ul_a"][2] - cor["ul_b"][2]], [XL.TIP_DROP, XL.TIP_DROP, 0, 0, 0],
+          1e-6)
+    pair = XL.loft_loops(loops2, tip_drop=(2.0, 1.5))
+    run = [0.5 * (abs(pair.corners[a][0] - top[0]) + abs(pair.corners[b][0] - top[0]))
+           for a, b, top in (("ur_a", "ur_b", top_le), ("ul_a", "ul_b", top_te))]
+    check("tip_drop sets the slope, a pair one for each end: valid, 6 faces",
+          [pair.valid, XL.count_faces(pair.shape), pair.drops[0] / run[0], pair.drops[1] / run[1]],
+          [1, 6, 2.0, 1.5], 1e-6)
     flat = XL.loft_loops(loops2, tip_drop=(1.0, 0.5))
     run = [0.5 * (abs(flat.corners[a][0] - top[0]) + abs(flat.corners[b][0] - top[0]))
            for a, b, top in (("ur_a", "ur_b", top_le), ("ul_a", "ul_b", top_te))]
-    check("tip_drop sets the slope, a pair one for each end: valid, 6 faces",
-          [flat.valid, XL.count_faces(flat.shape), flat.drops[0] / run[0], flat.drops[1] / run[1]],
-          [1, 6, 1.0, 0.5], 1e-6)
+    note = next(t for t in flat.notes if t.startswith("the tip patch within"))
+    check("a slope that leaves the normal turning across the tip patch's edges by more than EDGE_TURN (0.5 at "
+          "the TE of this wing, 3.1 deg) is built again at TIP_DROP_SAFE (1.5) and the smoother kept, the note "
+          "says so; at the default the turn is under EDGE_TURN",
+          [flat.valid, XL.count_faces(flat.shape), flat.drops[0] / run[0], flat.drops[1] / run[1],
+           flat.tip_turn <= XL.EDGE_TURN, "built again at 1.5/1.5" in note, res2.tip_turn <= XL.EDGE_TURN],
+          [1, 6, XL.TIP_DROP_SAFE, XL.TIP_DROP_SAFE, 1, 1, 1], 1e-6)
     check("the tip patch lies within a ten-thousandth of the chord of the tip; no more than 150 poles each way",
           [res2.tip_error < 1.5e-4 * 150.0, max(res2.tip_poles) <= 150, min(res2.tip_poles) > 20], [1, 1, 1], 0)
     k4 = np.r_[[0.0] * 4, [0.5], [1.0] * 4]                # a 5 x 5 cubic patch: flat and square, sheared
@@ -504,7 +516,7 @@ def test_adapter():
         check("strip_frac from modify_control: None (the strips as wide as their edges' rounding, the default), "
               "one fraction, or a pair (LE, TE) kept as a pair; tip_drop beside it",
               [XR._strip_frac(None) is None, XR._strip_frac(0.07), *XR._strip_frac((0.07, 0.05)),
-               ad.settings["strip_frac"] is None, ad.settings["tip_drop"]], [1, 0.07, 0.07, 0.05, 1, 1.5], 0)
+               ad.settings["strip_frac"] is None, ad.settings["tip_drop"]], [1, 0.07, 0.07, 0.05, 1, XL.TIP_DROP], 0)
         thin = XR.RudderAdapter()
         thin.set("P1z.v3", 0.002)                            # a nose far thinner than the model's fit is off
         pv = thin.preview(skeleton=True)

@@ -23,8 +23,25 @@ patch the cap alone).
   is the straight line between its two corners. The tip patch covers the
   sides above those edges and the cap. Each pair of corners sits under the
   top of its edge line by tip_drop times its distance from that top along
-  the chord (the diagonals' slope; 1.5 gave the smoothest patches on BB2's
-  stern plane among 0.5 to 2).
+  the chord (the diagonals' slope): TIP_DROP 0.75 since 20 Nov 2026, 1.5
+  before (the user, for meshing: a smaller tip patch, its straight edges
+  closer to the tip). The wind-tunnel rudder's corners sit 5.6 and 7.1 mm
+  under the tops of the LE and TE lines instead of 10.7 and 12.4. The
+  slope trades the tip patch's corners against the strips' top corners:
+  the angle between the lines there is about atan(tip_drop) on the tip
+  patch and 90 deg less that on the strips (33 to 38 and 59 to 62 deg at
+  0.75 on that rudder, 53 to 57 and 40 to 42 at 1.5, 41 to 53 at 1). The
+  tip patch follows the tip as closely as at 1.5 (its normals within 0.11
+  deg of the tip's over 99 % of it, 1.1 at most; 0.08 and 1.5 at 1.5) and
+  joins its neighbours more smoothly (the normal turns by 0.21 deg at most
+  across its edges, 0.63 at 1.5). At 0.5 the tip patch's corners close to
+  23 deg and its normals' 99 % doubles. BB2's stern plane, whose 15 mm TE
+  round the flatter top edge passes within a few mm of the rim, turned the
+  normal across the tip patch's TE edge by 7 deg at 0.75 (by 4.5 to 7.8
+  at 0.5 to 1.25, 2.6 at 1.5): where a slope under TIP_DROP_SAFE (1.5)
+  folds the tip patch or turns the normal across its edges by more than
+  EDGE_TURN (2 deg), loft_loops builds the solid again at 1.5 and keeps
+  the smoother (that plane as before).
 - The LE strip is as wide as the LE's rounding (strip_frac None): 1.5 times
   the arc from the LE to where the section's curvature has fallen to a
   quarter of its peak (the sections' median). The TE strip is as wide as the
@@ -100,8 +117,10 @@ patch the cap alone).
   from the sections' arcs, which place a point some um further along. And
   no line leaves an edge at less than EDGE_ANGLE (_into_plane). The result's
   tip_angle is the smallest angle between the patch's two families of
-  lines, 0 when they cross somewhere (a fold; the notes say so): 14 deg on
-  BB2's stern plane, 15 on the wind-tunnel rudder.
+  lines, 0 when they cross somewhere (a fold; the notes say so): 12 deg on
+  BB2's stern plane (built at 1.5), 15 on the wind-tunnel rudder (16 at
+  1.5). Its tip_turn is the largest turn of the normal across the tip
+  patch's edges (_edge_turn).
 - A rounding along the tip's edge. The wind-tunnel rudder's cap runs from
   the rim up a straight wall (0.4 to 1.9 mm, longer towards the TE), round
   its 0.7 mm edge radius and over the crown: two jumps of curvature on each
@@ -379,6 +398,8 @@ class LoftResult:
     tip_edges: tuple = (0.0, 0.0)  # the arc lengths of the tip patch's LE and TE edges (the strips' top rows;
                                    # the flat top's two ends without a cap), mm
     strip_knots: object = None     # the knots across the strips (and the tip patch across them)
+    tip_turn: float = 0.0          # the largest turn of the normal across the tip patch's four edges, deg (its
+                                   # normal against its neighbour's along each edge; _edge_turn)
 
 
 def _thru(wires, solid, ruled, max_degree=None):
@@ -710,13 +731,24 @@ STRIP_POLES = 130                          # on them turns off its section's cur
                                            # TE's round has the round's ends inside it, and their jump of
                                            # curvature rang in a fit on the plain knots: 0.4 deg on the
                                            # wind-tunnel rudder, 0.7 on BB2's stern plane
-TIP_DROP = 1.5                             # the slope of the strips' top edges in the side view: the tip
+TIP_DROP = 0.75                            # the slope of the strips' top edges in the side view: the tip
                                            # patch's corners (the tops of the strip lines) sit under the tops
                                            # of the LE and TE lines by this times their distance from them
-                                           # along the chord (loft_loops). On BB2's stern plane 0.5 to 2 all
-                                           # gave valid patches without folds; the flatter the top edges, the
-                                           # longer they run beside the rim and the less smooth the tip patch
-                                           # under the LE's top (1.5 and 2 the smoothest)
+                                           # along the chord (loft_loops). 0.75 since 20 Nov 2026 (1.5 before;
+                                           # the user: a smaller tip patch): its corners half as deep. 0.5 to
+                                           # 1.5 all gave valid solids without folds on the wind-tunnel rudder
+                                           # (extracted and planar), a design of the tool, the tool test's
+                                           # tilted wing and BB2's stern plane, the tip patch as close to the
+                                           # tip at 0.75 to 1.5; the angle at its corners is about
+                                           # atan(tip_drop), at the strips' top corners 90 deg less that
+TIP_DROP_SAFE = 1.5                        # loft_loops builds a solid again at this slope (the default before
+EDGE_TURN = 2.0                            # 20 Nov 2026) when a flatter one leaves the tip patch folded or
+                                           # turning the normal across one of its edges by more than EDGE_TURN
+                                           # deg (_edge_turn), and keeps the smoother: below 1.5 BB2's stern
+                                           # plane, a TE round of 15 mm, turned it by 4.5 to 7.8 deg on the TE
+                                           # edge about the round's ends, where the flatter top edge runs within
+                                           # a few mm of the rim (2.6 at 1.5, at the TE's top); the wind-tunnel
+                                           # rudder 0.2 at 0.75 (0.6 at 1.5), the tool test's tilted wing 1.4
 FAN_FACTOR = 4.0                           # the rows turn onto the patches' top edges over a band this many
                                            # times as tall as those edges' spread in height
 CAP_STATIONS = 401                         # stations along the chord of the tip's grid
@@ -1802,6 +1834,35 @@ def _lines_angle(poles, k_u, k_v, per=4):
     return float(np.degrees(np.arcsin(min(float(sine.min()), 1.0))))
 
 
+def _edge_turn(tip, k_u, k_v, walls, per=8):
+    """The largest turn of the normal across the tip patch's four edges (deg): at `per` stations in every knot
+    span of an edge, the tip patch's normal against its neighbour's at the same point (the edge's parameter
+    is both patches'). walls {name: (poles, knots across, knots along the span, degree along the span)}: the
+    patches whose top rows are the tip patch's edges v = 0 (cen_a), v = 1 (cen_b), u = 0 (le), u = 1 (te)."""
+    def unit(a, b):
+        nrm = np.cross(a, b)
+        ln = np.linalg.norm(nrm, axis=1)
+        return nrm / np.maximum(ln, 1e-300)[:, None], ln > 1.0e-12 * max(float(ln.max()), 1e-300)
+
+    top, worst = np.array([1.0]), 0.0
+    for name, along_u, at in (("cen_a", True, 0.0), ("cen_b", True, 1.0), ("le", False, 0.0), ("te", False, 1.0)):
+        grid, k_nb, k_span, deg = walls[name]
+        s, e = _knot_stations(k_u if along_u else k_v, per), np.array([at])
+        n_nb, ok_nb = unit(_tensor(_design(top, k_span, deg), grid, _design(s, k_nb, deriv=1))[0],
+                           _tensor(_design(top, k_span, deg, deriv=1), grid, _design(s, k_nb))[0])
+        if along_u:
+            n_tip, ok_tip = unit(_tensor(_design(e, k_v), tip, _design(s, k_u, deriv=1))[0],
+                                 _tensor(_design(e, k_v, deriv=1), tip, _design(s, k_u))[0])
+        else:
+            n_tip, ok_tip = unit(_tensor(_design(s, k_v), tip, _design(e, k_u, deriv=1))[:, 0],
+                                 _tensor(_design(s, k_v, deriv=1), tip, _design(e, k_u))[:, 0])
+        ok = ok_nb & ok_tip
+        if ok.any():
+            c = float(np.abs(np.einsum("ic,ic->i", n_nb[ok], n_tip[ok])).min())
+            worst = max(worst, float(np.degrees(np.arccos(min(c, 1.0)))))
+    return worst
+
+
 def _half_cut(solid, loops, thick, cen_a_row):
     """The half body: the solid cut by the plane of symmetry, keeping the
     LE-to-TE side (the side of the loops' indices 0 to i_te). The six faces
@@ -2016,7 +2077,13 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
                 view. The tip patch's four corners, the tops of the strip
                 lines, sit under the top of the LE line and of the TE line by
                 tip_drop times their distance from that top along the chord
-                (1: the top edges at 45 deg; a pair: the LE's and the TE's)
+                (TIP_DROP 0.75 by default; 1: the top edges at 45 deg; a
+                pair: the LE's and the TE's). Where a slope under
+                TIP_DROP_SAFE leaves the tip patch folded or turning the
+                normal across one of its edges by more than EDGE_TURN deg (a
+                TE round wider than a flatter top edge leaves room for), the
+                solid is built again at TIP_DROP_SAFE and the smoother of the
+                two kept; the tip patch's note says so
     half        True: the half body on the LE-to-TE side of the plane of
                 symmetry (thickness 0), the loops symmetric within sym_tol (mm)
     ease        which loops give way at a step from one horizontal loop to
@@ -2037,6 +2104,33 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
                 need it, _strip_knots), or the knots used as given
                 (loft_split gives its lower loft its upper loft's)
     """
+    t0 = time.time()
+    kw = dict(n_poles=n_poles, height_axis=height_axis, flat_tol=flat_tol, sew_tol=sew_tol, v_poles=v_poles,
+              strip_frac=strip_frac, half=half, sym_tol=sym_tol, ease=ease, widths=widths, match_te=match_te,
+              strip_knots=strip_knots)
+    res = _loft_once(loops, tip_drop=tip_drop, **kw)
+    td = np.atleast_1d(np.asarray(tip_drop, dtype=float))
+    if (res.tip_angle > 0.0 and res.tip_turn <= EDGE_TURN) or np.all(td >= TIP_DROP_SAFE):
+        return res
+    safe = np.maximum(td, TIP_DROP_SAFE)
+    again = _loft_once(loops, tip_drop=tuple(safe) if safe.size == 2 else float(safe[0]), **kw)
+    why = (f"at tip_drop {'/'.join(f'{v:g}' for v in td)} the tip patch "
+           + ("folded" if res.tip_angle <= 0.0 else f"turned the normal by {res.tip_turn:.2g} deg across its edges "
+                                                    f"(EDGE_TURN {EDGE_TURN:g})"))
+    if again.tip_angle > 0.0 and (res.tip_angle <= 0.0 or again.tip_turn < res.tip_turn):
+        keep, say = again, f"{why}: built again at {'/'.join(f'{v:g}' for v in safe)}"
+    else:
+        keep, say = res, f"{why}; no better at {'/'.join(f'{v:g}' for v in safe)}: kept"
+    i = next((j for j, t in enumerate(keep.notes) if t.startswith("the tip patch within")), None)
+    if i is not None:
+        keep.notes[i] += f" ({say})"
+    keep.seconds = time.time() - t0
+    return keep
+
+
+def _loft_once(loops, n_poles, height_axis, flat_tol, sew_tol, v_poles, strip_frac, half, sym_tol, ease, tip_drop,
+               widths, match_te, strip_knots):
+    """loft_loops at one tip_drop."""
     if ease not in ("both", "below", "above", None):
         raise ValueError('ease is "both", "below", "above" or None')
     t0 = time.time()
@@ -2216,7 +2310,7 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
 
     # the tip patch: the sides above the four patches' top rows and the cap, fitted through the map of
     # their mesh onto the patch's square
-    tip, tip_err, tip_angle, tip_blend, k_tu, k_tv = None, 0.0, 90.0, (0.0, 0.0), k_cen, k_strip
+    tip, tip_err, tip_angle, tip_blend, k_tu, k_tv, tip_turn = None, 0.0, 90.0, (0.0, 0.0), k_cen, k_strip, 0.0
     if k < n:
         js = tip_info["js"]
         verts, tris, b_idx, b_uv, idx, cols, truth, on, tip_blend = _tip_mesh(
@@ -2233,9 +2327,12 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
                                             inner={"row0": grids["cen_a"][-2], "row1": grids["cen_b"][-2],
                                                    "col0": grids["le"][-2], "col1": grids["te"][-2]})
         tip_angle = _lines_angle(tip, k_tu, k_tv)
+        tip_turn = _edge_turn(tip, k_tu, k_tv, {nm: (grids[nm], kk, vk, vd) for nm, kk in
+                                                (("le", k_strip), ("cen_a", k_cen), ("te", k_strip), ("cen_b", k_cen))})
         notes.append(f"the tip patch within {tip_err:.3g} mm of the tip ({tip.shape[1]} x {tip.shape[0]} poles); "
                      + (f"its two families of lines at {tip_angle:.3g} deg or more to each other (no fold)"
                         if tip_angle > 0.0 else "ITS LINES CROSS SOMEWHERE: the patch folds on itself")
+                     + f"; the normal turns by {tip_turn:.2g} deg at most across its edges"
                      + (f"; the cap's rounding blended over {tip_blend[0]:.2g} mm ({CAP_BLEND:.3g} of its "
                         f"tightest radius), which moved the cap by up to {tip_blend[1]:.2g} mm"
                         if tip_blend[1] > 0.0 else ""))
@@ -2263,7 +2360,7 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
                       (int(tip.shape[1]), int(tip.shape[0])) if tip is not None else (0, 0), tip_angle,
                       None if tip_info is None else {kk: np.array(vv) for kk, vv in tip_info["corners"].items()},
                       (float(tip_blend[0]), float(tip_blend[1])), tip_edges=(float(t_edges[0]), float(t_edges[1])),
-                      strip_knots=np.array(k_strip))
+                      strip_knots=np.array(k_strip), tip_turn=float(tip_turn))
 
 
 def _box(shape):
@@ -2378,7 +2475,7 @@ def loft_split(loops, split, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol
                       count_faces(solid), max(lower.v_error, upper.v_error), bool(half), steps, (w_le, w_te),
                       te_round and w_te == upper.strips[1] and not match, upper.drops, upper.tip_error,
                       upper.tip_poles, upper.tip_angle, upper.corners, upper.tip_blend, split + 1, upper.tip_edges,
-                      upper.strip_knots)
+                      upper.strip_knots, upper.tip_turn)
 
 
 # --------------------------------------------------------------------------

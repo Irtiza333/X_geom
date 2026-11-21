@@ -74,11 +74,12 @@ class ModifySettings:
                                    # mm). A fraction: the LE strip reaches that fraction of the root chord
                                    # along the arc to both sides of the LE (the blade's constant width), the
                                    # TE strip as above. A pair (LE, TE), e.g. (0.07, 0.07), is used as given
-    tip_drop: float = 1.5          # the slope of the strips' top edges in the side view (the diagonals from
+    tip_drop: float = 0.75         # the slope of the strips' top edges in the side view (the diagonals from
                                    # the strip lines' tops up to the tops of the LE and TE): the tip patch's
                                    # four corners sit on the strip lines, under the tip by this times their
                                    # distance from the LE's or TE's top along the chord. A pair (LE, TE)
-                                   # gives the two ends their own
+                                   # gives the two ends their own. 0.75 since 20 Nov 2026 (1.5 before):
+                                   # a tip patch half as tall, its straight edges closer to the tip
     plot: bool = True              # write <case>_check.png
 
 settings = ModifySettings( # SET PARAMETERS HERE
