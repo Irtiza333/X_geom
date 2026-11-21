@@ -231,9 +231,9 @@ Right panel
                  expanded outline, the picked curve against the parameter file,
                  and in 3D the blade as the CAD builds it. Hull: the half-profiles
                  of the whole hull, the picked curve's part against the parameter
-                 file, and the hull in 3D. Wing, fin: planform, front view, the
-                 picked curve against the parameter file, the wing in 3D and its
-                 sections over the chord (dotted: without the changes). The
+                 file, and the hull in 3D. Wing, fin, blended wing body: the
+                 picked curve against the parameter file and the sections over
+                 the chord (dotted: without the changes), nothing else. The
                  blade's and the hull's 2D plots have r/R and x across; the
                  rudder's, the wing's and the fin's are drawn as the rudder stands
                  (x, or the curve's value, across and the height or span up). Drag

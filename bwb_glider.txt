@@ -16,13 +16,13 @@
 # sections      41
 # change_points 3
 # ---- curves (table | bezier1 <points> | smooth2) and variables (value, low, high, free Y or held N)
-# var    span                         500               250               750  N
+# var    span                         500               250               750  Y
 # curve  pitch         bezier1 4
-# var    pitch.d1          0.333333333333              0.01              0.99  N
-# var    pitch.d2                     0.5              0.01              0.99  N
-# var    pitch.v0                       0                -2                 2  N
-# var    pitch.v2                       0                -2                 2  N
-# var    pitch.v3                       0                -2                 2  N
+# var    pitch.d1          0.333333333333              0.01              0.99  Y
+# var    pitch.d2                     0.5              0.01              0.99  Y
+# var    pitch.v0                       0                -2                 2  Y
+# var    pitch.v2                       0                -2                 2  Y
+# var    pitch.v3                       0                -2                 2  Y
 # curve  chord         smooth2
 # var    chord.v0           349.101879871                 0               520  Y
 # var    chord.d1          0.471687339435              0.01              0.99  Y
@@ -46,11 +46,11 @@
 # var    thickness.v5     0.0804426304841                 0               0.3  Y
 # var    thickness.v6     0.0799337680857                 0               0.3  Y
 # curve  camber        bezier1 4
-# var    camber.d1         0.333333333333              0.01              0.99  N
-# var    camber.d2                    0.5              0.01              0.99  N
-# var    camber.v0                      0             -0.02              0.02  N
-# var    camber.v2                      0             -0.02              0.02  N
-# var    camber.v3                      0             -0.02              0.02  N
+# var    camber.d1         0.333333333333              0.01              0.99  Y
+# var    camber.d2                    0.5              0.01              0.99  Y
+# var    camber.v0                      0             -0.02              0.02  Y
+# var    camber.v2                      0             -0.02              0.02  Y
+# var    camber.v3                      0             -0.02              0.02  Y
 # curve  sweep         smooth2
 # var    sweep.d1          0.251818282948              0.01              0.99  Y
 # var    sweep.d2          0.667970283813              0.01              0.99  Y
@@ -62,34 +62,34 @@
 # var    sweep.v5           58.7070806444              -170               490  Y
 # var    sweep.v6           320.329817345              -170               490  Y
 # curve  rake          bezier1 4
-# var    rake.d1           0.333333333333              0.01              0.99  N
-# var    rake.d2                      0.5              0.01              0.99  N
-# var    rake.v2                        0               -50                50  N
-# var    rake.v3                        0               -50                50  N
+# var    rake.d1           0.333333333333              0.01              0.99  Y
+# var    rake.d2                      0.5              0.01              0.99  Y
+# var    rake.v2                        0               -50                50  Y
+# var    rake.v3                        0               -50                50  Y
 # curve  dt1           bezier1 3
-# var    dt1.d1                       0.5              0.01              0.99  N
-# var    dt1.v0                         0             -0.02              0.02  N
-# var    dt1.v2                         0             -0.02              0.02  N
+# var    dt1.d1                       0.5              0.01              0.99  Y
+# var    dt1.v0                         0             -0.02              0.02  Y
+# var    dt1.v2                         0             -0.02              0.02  Y
 # curve  dt2           bezier1 3
-# var    dt2.d1                       0.5              0.01              0.99  N
-# var    dt2.v0                         0             -0.02              0.02  N
-# var    dt2.v2                         0             -0.02              0.02  N
+# var    dt2.d1                       0.5              0.01              0.99  Y
+# var    dt2.v0                         0             -0.02              0.02  Y
+# var    dt2.v2                         0             -0.02              0.02  Y
 # curve  dt3           bezier1 3
-# var    dt3.d1                       0.5              0.01              0.99  N
-# var    dt3.v0                         0             -0.02              0.02  N
-# var    dt3.v2                         0             -0.02              0.02  N
+# var    dt3.d1                       0.5              0.01              0.99  Y
+# var    dt3.v0                         0             -0.02              0.02  Y
+# var    dt3.v2                         0             -0.02              0.02  Y
 # curve  dc1           bezier1 3
-# var    dc1.d1                       0.5              0.01              0.99  N
-# var    dc1.v0                         0             -0.02              0.02  N
-# var    dc1.v2                         0             -0.02              0.02  N
+# var    dc1.d1                       0.5              0.01              0.99  Y
+# var    dc1.v0                         0             -0.02              0.02  Y
+# var    dc1.v2                         0             -0.02              0.02  Y
 # curve  dc2           bezier1 3
-# var    dc2.d1                       0.5              0.01              0.99  N
-# var    dc2.v0                         0             -0.02              0.02  N
-# var    dc2.v2                         0             -0.02              0.02  N
+# var    dc2.d1                       0.5              0.01              0.99  Y
+# var    dc2.v0                         0             -0.02              0.02  Y
+# var    dc2.v2                         0             -0.02              0.02  Y
 # curve  dc3           bezier1 3
-# var    dc3.d1                       0.5              0.01              0.99  N
-# var    dc3.v0                         0             -0.02              0.02  N
-# var    dc3.v2                         0             -0.02              0.02  N
+# var    dc3.d1                       0.5              0.01              0.99  Y
+# var    dc3.v0                         0             -0.02              0.02  Y
+# var    dc3.v2                         0             -0.02              0.02  Y
 # ---- distributions over eta = y/span from the centre line
 #        eta   pitch_deg      chord_mm         t/c         f/c      sweep_mm     rake_mm         dt1         dt2         dt3         dc1         dc2         dc3
   0.00000000  0.00000000  349.10187987  0.21835371  0.00000000    0.00000000  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000  0.00000000

@@ -25,6 +25,8 @@ load_params reads a component file (its design, variables and settings exactly; 
 save_file writes the design, its variables and the settings as one (Save set-up).
 
 The views are drawn as the rudder's, in the wing's own frame: x (or the curve's value) across and the span up.
+The Design tab has only what a design is decided on (the picked curve, the sections over the chord); the 3D
+sections tab shows the whole shape.
 
 The adapter has the methods of xgeom_rudder.RudderAdapter that the tool uses.
 """
@@ -44,7 +46,8 @@ MIRROR = "#9ec5f4"                                 # a blended wing body's other
 
 MAX_ORDER = 12
 VIEW_FRACTIONS = (0.0, 0.25, 0.5, 0.75, 1.0)     # sections in the Design tab's views, fractions of the span
-FREE = ("chord", "pitch")                         # the curves whose variables start free
+FREE = ("span",) + WM.CURVES + WM.change_names(WM.MAX_CHANGES)   # whose variables start free: all of them, the
+                                                  # user holds what he chooses (21 Nov 2026; chord and pitch before)
 ROLES = {"wing": {"name": "Wing", "params": "wing.txt", "out_dir": os.path.join("outputs", "wing")},
          "fin": {"name": "Fin", "params": "fin.txt", "out_dir": os.path.join("outputs", "fin")},
          "rudder": {"name": "Rudder", "params": None, "out_dir": os.path.join("outputs", "rudder_planar")},
@@ -239,14 +242,15 @@ class WingAdapter:
 
     def set_changes(self, k):
         """k change points along the chord for the thickness and the camber line each (0 to MAX_CHANGES): the
-        changes carried over (wing_modify.with_changes), the new change curves held unless one of the old ones
-        had a free variable. Returns what was done."""
+        changes carried over (wing_modify.with_changes), the new change curves free unless every variable of the
+        old ones was held (the user's choice). Returns what was done."""
         k = int(k)
         k0 = self.design.changes
         if k == k0:
             return "unchanged"
         old = WM.change_names(k0)
-        free = any(m["free"] for n, m in self.meta.items() if n.split(".")[0] in old)
+        flags = [m["free"] for n, m in self.meta.items() if n.split(".")[0] in old]
+        free = not flags or any(flags)
         ee, x = np.linspace(0.0, 1.0, 41), np.linspace(0.0, 1.0, 201)
         before = WM.section_shape(self.design.values(ee), self.params, x, k0)
         self.design = WM.with_changes(self.design, k)
@@ -411,8 +415,8 @@ class WingAdapter:
     def preview(self, skeleton=False):
         """What the live views draw: the design, its problems (wing_modify.design_checks), the curves, the
         file's rows and splines, the wing: sections at VIEW_FRACTIONS, LE and TE lines, the planform and front
-        view outlines, the sections over their chords with and without the changes; with skeleton the XCAD
-        file's sections."""
+        view outlines (the web app draws these; the tool's Design tab no longer, since 21 Nov 2026), the sections
+        over their chords with and without the changes; with skeleton the XCAD file's sections."""
         t0 = time.time()
         d, p = self.design, self.params
         ee = np.linspace(0.0, 1.0, 121)
@@ -523,13 +527,13 @@ class BwbAdapter(WingAdapter):
     """The blended wing body (kind bwb, 20 Nov 2026; bwb_glider.txt, the underwater glider of Ye, Wang and Pan
     2021): the wing's model over the half-span from the centre line, every curve flat there, the tool's Hull slot's
     other body beside the cylindrical hull. Its curves are 1 segment (C1 at C0's value), 2 smooth segments
-    (smooth2: joined smoothly at a free joint, the body's end) or as the table has it; its views draw it with its
-    mirror image; its CAD (build_task) is the whole body, the loft of the half and its mirror image fused, or with
+    (smooth2: joined smoothly at a free joint, the body's end; every curve of the sample since 21 Nov 2026) or as
+    the table has it; its 3D sections tab draws it with its mirror image; its CAD (build_task) is the whole body,
+    the loft of the half and its mirror image fused, or with
     the half switch the half on one side of the centre line. The report gives the volume, the wetted area and the
     centroid. Save set-up writes kind bwb."""
     role = "bwb"
     segment_options = (0, 1, 3)
-    free_start = ("chord", "sweep", "thickness")
     half_text = ("half body: one side of the centre line, closed by its centre section on the plane of symmetry "
                  "(for CFD on half the domain)")
     short = "BWB"
@@ -605,85 +609,33 @@ def _limits(ax, xs, ys, pad=0.05):
 
 
 class WingViews:
-    """The Design tab: the planform (x across, the span up), the front view (z across), the picked curve (its
-    value across, the span up), the wing in 3D (sections, LE and TE lines; dashed grey the parameter file's)
-    and the sections over their chords (dotted: the airfoil scaled, without the changes)."""
+    """The Design tab: what a design is decided on. The picked curve (its value across, the span up: the file's
+    rows and spline, the design and its control polygon) and the sections over their chords (dotted: the airfoil
+    scaled, without the changes). The 3D sections tab shows the whole shape; the planform, the front view and the
+    wing in 3D were here until 21 Nov 2026 (the user: only plots that inform the design, nothing else)."""
 
     def __init__(self, adapter, fig):
         self.a = adapter
         self.fig = fig
-        gs = fig.add_gridspec(2, 3, width_ratios=[1.0, 0.75, 1.0], height_ratios=[1.0, 1.15], wspace=0.3,
-                              hspace=0.36, left=0.07, right=0.98, top=0.95, bottom=0.04)
-        self.ax_plan = fig.add_subplot(gs[0, 0])
-        self.ax_front = fig.add_subplot(gs[0, 1])
-        self.ax_curve = fig.add_subplot(gs[0, 2])
-        self.ax_3d = fig.add_subplot(gs[1, :2], projection="3d")
-        self.ax_sec = fig.add_subplot(gs[1, 2])
-        self.ax_3d.view_init(elev=24, azim=-60)
-        self.box = None
-        keep_fitted(fig, self.ax_3d, lambda: self.box)
+        gs = fig.add_gridspec(1, 2, width_ratios=[1.0, 1.15], wspace=0.22, left=0.07, right=0.98, top=0.94,
+                              bottom=0.08)
+        self.ax_curve = fig.add_subplot(gs[0, 0])
+        self.ax_sec = fig.add_subplot(gs[0, 1])
 
     def update(self, pv, curve):
-        for ax in (self.ax_plan, self.ax_front, self.ax_curve, self.ax_sec):
+        for ax in (self.ax_curve, self.ax_sec):
             ax.cla()
             ax.grid(True, color=GRID, lw=0.6)
         if isinstance(pv.get("sections"), str):
-            self.ax_plan.text(0.02, 0.98, pv["sections"][:120], transform=self.ax_plan.transAxes, va="top",
-                              color=RED, fontsize=8)
+            self.ax_sec.text(0.02, 0.98, pv["sections"][:120], transform=self.ax_sec.transAxes, va="top",
+                             color=RED, fontsize=8, wrap=True)
         else:
-            self._outlines(pv, curve)
             self._sections(pv, curve)
         self._curve(pv, curve)
-        self._wing(pv, curve)
         if pv["problems"]:
-            self.ax_plan.text(0.02, 0.98, "\n".join(q[:80] for q in pv["problems"][:3]),
-                              transform=self.ax_plan.transAxes, va="top", ha="left", color=RED, fontsize=8)
-
-    def _outlines(self, pv, curve):
-        """Planform (x across) and front view (z across), the span up: the design's outline (the sections'
-        extent), its LE and TE, the pitch axis; dashed the parameter file's."""
-        a, o = self.a, pv.get("orig")
-        y = pv["y"]
-        sides = (1.0, -1.0) if pv.get("mirror") else (1.0,)       # a blended wing body: both halves
-        ax = self.ax_plan
-        ref = pv["curves"]["sweep"] + a.params.ref_xc * pv["curves"]["chord"]
-        for s in sides:
-            first = s > 0
-            ax.plot(pv["x"][0], s * y, "-", color=RED if curve in ("chord", "sweep") else BLUE, lw=1.8,
-                    label="LE, TE" if first else None)
-            ax.plot(pv["x"][1], s * y, "-", color=RED if curve == "chord" else BLUE, lw=1.8)
-            ax.plot(ref, s * y, ":", color=INK2, lw=1.0, label=f"pitch axis ({a.params.ref_xc:g} c)" if first else None)
-            for sec in pv["sections"]:
-                ax.plot([sec[:, 0].min(), sec[:, 0].max()], [s * sec[0, 1]] * 2, "-", color=GRID, lw=0.8)
-        xs, ys = [pv["x"][0], pv["x"][1]], [s * y for s in sides]
-        if o is not None:
-            for s in sides:
-                ax.plot(o["x"][0], s * o["y"], "--", color=GREY, lw=1.0, label="parameter file" if s > 0 else None)
-                ax.plot(o["x"][1], s * o["y"], "--", color=GREY, lw=1.0)
-            xs += [o["x"][0], o["x"][1]]
-            ys += [s * o["y"] for s in sides]
-        _limits(ax, xs, ys)
-        ax.set_aspect("equal", adjustable="box")
-        ax.set_xlabel("x (mm)")
-        ax.set_ylabel("y, span (mm)")
-        ax.legend(loc="lower right", fontsize=7)
-        ax.set_title("planform, both halves" if len(sides) == 2 else "planform", loc="left", fontsize=10)
-        ax = self.ax_front
-        for s in sides:
-            ax.fill_betweenx(s * y, pv["z"][0], pv["z"][1], color="#d5e6f8", lw=0)
-            ax.plot(pv["le"][:, 2], s * y, "-", color=RED if curve == "rake" else BLUE, lw=1.6,
-                    label="LE" if s > 0 else None)
-            ax.plot(pv["te"][:, 2], s * y, "--", color=RED if curve == "pitch" else BLUE, lw=1.0,
-                    label="TE" if s > 0 else None)
-        zs = [pv["z"][0], pv["z"][1]]
-        if o is not None:
-            for s in sides:
-                ax.plot(o["le"][:, 2], s * o["y"], "--", color=GREY, lw=1.0)
-            zs += [o["le"][:, 2]]
-        _limits(ax, zs, ys)
-        ax.set_xlabel("z (mm)")
-        ax.legend(loc="lower right", fontsize=7)
-        ax.set_title("front view (z not to scale)", loc="left", fontsize=10)
+            self.ax_curve.text(0.02, 0.98, "\n".join(q[:80] for q in pv["problems"][:3]),
+                               transform=self.ax_curve.transAxes, va="top", ha="left", color=RED, fontsize=8,
+                               bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="none", alpha=0.85), zorder=10)
 
     def _curve(self, pv, curve):
         """The picked curve, its value across and the span (mm) up: the file's rows and spline (at the
@@ -703,9 +655,11 @@ class WingViews:
         pinned = np.zeros(len(p), dtype=bool)
         if curve in WM.PINNED:
             pinned[0] = True
-        ax.plot(p[free, 1], y[free], "o", color=BLUE, ms=6, label="control point: free")
+        if free.any():
+            ax.plot(p[free, 1], y[free], "o", color=BLUE, ms=6, label="control point: free")
         held = ~free & ~pinned
-        ax.plot(p[held, 1], y[held], "o", color=BLUE, ms=6, mfc="white", label="held")
+        if held.any():
+            ax.plot(p[held, 1], y[held], "o", color=BLUE, ms=6, mfc="white", label="control point: held")
         if pinned.any():
             ax.plot(p[pinned, 1], y[pinned], "s", color=RED, ms=6, mfc="white",
                     label="pinned (centre line's LE)" if pv.get("mirror") else "pinned (root LE)")
@@ -750,69 +704,16 @@ class WingViews:
             k = int(curve[2:])
             b = WM.change_basis(x, d.changes)[:, k - 1]
             ax.plot(x, 0.25 * b * float(T.max()), "-", color=RED, lw=1.2, label=f"B{k},{d.changes + 1} (scaled)")
-        ax.set_aspect("equal", adjustable="datalim")
+        z = np.concatenate([C + 0.5 * T, C - 0.5 * T, C0 + 0.5 * T0, C0 - 0.5 * T0]).ravel()
+        h = max(float(np.ptp(z)), 1e-3)
+        ax.set_xlim(-0.03, 1.03)
+        ax.set_ylim(float(z.min()) - 0.15 * h, float(z.max()) + 0.7 * h)    # room for the legend at the top
+        ax.set_aspect("equal", adjustable="box")           # true shape, the box as tall as the sections need,
+        ax.set_anchor("C")                                 # in the middle of its column
         ax.set_xlabel("x/c")
         ax.set_ylabel("z/c")
-        ax.legend(loc="upper right", fontsize=6, ncol=2)
-        ax.set_title("sections over the chord (dotted: no changes)", loc="left", fontsize=9)
-
-    def _wing(self, pv, curve):
-        """The wing in 3D (mm; x, z across, the span up): sections at VIEW_FRACTIONS, LE and TE lines, the
-        parameter file's sections dashed."""
-        ax = self.ax_3d
-        elev, azim, roll = ax.elev, ax.azim, ax.roll
-        ax.cla()
-        ax.view_init(elev=elev, azim=azim, roll=roll)
-        ax.tick_params(labelsize=8)
-        secs, pts = pv.get("sections"), []
-        if isinstance(secs, str) or secs is None:
-            ax.text2D(0.01, 0.97, str(secs)[:150], transform=ax.transAxes, color=RED, fontsize=8, va="top")
-        else:
-            for sec, col in zip(secs, SECTION_COLORS):
-                ax.plot(sec[:, 0], sec[:, 2], sec[:, 1], color=col, lw=1.5)
-                pts.append(sec)
-                if curve == "pitch":
-                    le, te = sec[0], sec[(len(sec) - 1) // 2]
-                    ax.plot([le[0], te[0]], [le[2], te[2]], [le[1], te[1]], color=RED, lw=1.6)
-            for key in ("le", "te"):
-                q = pv[key]
-                hot = curve in ("chord", "sweep", "rake") and (key == "le" or curve == "chord")
-                ax.plot(q[:, 0], q[:, 2], q[:, 1], "-", color=RED if hot else INK2, lw=1.8 if hot else 1.0)
-                pts.append(q)
-            if pv.get("mirror"):                           # a blended wing body: its other half, lighter
-                for sec in secs[1:]:
-                    ax.plot(sec[:, 0], sec[:, 2], -sec[:, 1], color=MIRROR, lw=1.0)
-                    pts.append(sec * np.array([1.0, -1.0, 1.0]))
-                for key in ("le", "te"):
-                    q = pv[key]
-                    ax.plot(q[:, 0], q[:, 2], -q[:, 1], "-", color=MIRROR, lw=1.0)
-        o = pv.get("orig")
-        if o is not None:
-            for sec in o["sections"]:
-                ax.plot(sec[:, 0], sec[:, 2], sec[:, 1], "--", color=GREY, lw=0.7)
-                pts.append(sec)
-        if pts:
-            p = np.vstack(pts)
-            lo, hi = p.min(axis=0), p.max(axis=0)
-            pad = 0.03 * (hi - lo)
-            lo, hi = lo - pad, hi + pad
-            ax.set_xlim(lo[0], hi[0])
-            ax.set_ylim(lo[2], hi[2])
-            ax.set_zlim(lo[1], hi[1])
-            self.box = np.maximum(np.array([hi[0] - lo[0], hi[2] - lo[2], hi[1] - lo[1]]), 1e-9)
-            fit_box(ax, self.fig, self.box)
-        from matplotlib.ticker import MaxNLocator
-        for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
-            axis.set_major_locator(MaxNLocator(4))
-        ax.set_xlabel("x (mm)")
-        ax.set_ylabel("z (mm)")
-        ax.set_zlabel("y, span (mm)")
-        what = {"chord": "LE and TE", "sweep": "LE", "rake": "LE", "pitch": "chord lines"}.get(curve)
-        ax.set_title(f"the {ROLES[self.a.role]['name'].lower()} as the CAD builds it: sections at eta "
-                     + ", ".join(f"{e:g}" for e in pv["fractions"])
-                     + (f"; red: the {what}" if what else "") + "\ndashed: the parameter file's"
-                     + ("; light: the other half, mirrored" if pv.get("mirror") else "") + "; drag to turn",
-                     fontsize=9)
+        ax.legend(loc="upper right", fontsize=8, ncol=3, frameon=False)
+        ax.set_title("sections over the chord (dotted: no changes)", loc="left", fontsize=10)
 
 
 class WingSkeletonView:

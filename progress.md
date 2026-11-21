@@ -871,6 +871,19 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   and BWB samples (flat tops) get the thin strips too. Tests: tool 74 (the LE strip about 2 % of the chord, the
   real rudder's TE strip 2 to 5 mm, the guard forced with EDGE_TURN 0), wing 78, files 60, hull 65 with the
   window, modify 136, tip cap 44; the contract test passes.
+- Planar Design tab uncluttered, no variables held (21 Nov 2026; the user, of the blended wing body's tab: the
+  planform, the front view and the 3D view are unnecessary there, the 3D sections tab shows the shape much more
+  clearly, the Design tab only for plots that inform and help the design; then "just two changes: unclutter the
+  design tab and only display plots useful for designing; and do not hold any variables, the user chooses that").
+  `xgeom_wing.WingViews` (the wing, the fin and the blended wing body): the picked curve on the left over the full
+  height, the sections over the chord on the right in their true shape (the box as tall as they need, the legend
+  above them); a design's problems on the curve plot, a failed section build on the sections plot. `preview()`
+  keeps the outline entries the web app draws. Every variable starts free: `xgeom_wing.FREE` is all of them
+  (chord and pitch before; the blended wing body's own start set gone); new change curves come free unless the
+  user held every old one; `bwb_glider.txt` (62 of 62), `wing.txt` and `fin.txt` (59 of 59) with every var line Y,
+  nothing else changed. Held only keeps a variable out of the optimiser's space; it moves in the panel either way.
+  Tests: wing 79 (the samples all free, a user's holds carried to new change curves), hull 65, files 60 with the
+  window; the contract test passes.
 
 ## Next steps
 

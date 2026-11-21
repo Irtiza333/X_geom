@@ -260,10 +260,12 @@ def test_adapter(tmp):
     import xgeom_wing as XW
     ad, fin = XW.WingAdapter(), XW.FinAdapter()
     rows = ad.curve_rows("sweep")
-    check("wing and fin from their own files; the sweep's root a pinned row; chord and pitch free",
+    check("wing and fin from their own files; the sweep's root a pinned row; every variable free (the user, 21 Nov "
+          "2026: none held, he chooses which to hold)",
           [ad.title.startswith("Wing"), fin.title.startswith("Fin"), rows[0].kind == "pinned",
-           ad.is_free("chord.v1"), ad.is_free("pitch.v0"), ad.is_free("sweep.v1"), ad.out_dir.endswith("wing"),
-           fin.out_dir.endswith("fin")], [1, 1, 1, 1, 1, 0, 1, 1], 0)
+           ad.is_free("chord.v1"), ad.is_free("pitch.v0"), ad.is_free("sweep.v1"), ad.is_free("span"),
+           ad.is_free("dc3.v1"), ad.n_free()[0] == ad.n_free()[1], fin.n_free()[0] == fin.n_free()[1],
+           ad.out_dir.endswith("wing"), fin.out_dir.endswith("fin")], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 0)
     ad.set("chord.v3", 60.0)
     v = ad.set("span", 1e6)
     check("a variable set (the tip chord 60 mm); the span clamped to its bounds", [ad.design.at("chord", 1.0),
@@ -286,9 +288,19 @@ def test_adapter(tmp):
     sec0 = WM.section_shape(ad.design.values(e), ad.params, x, 3)
     msg = ad.set_changes(5)
     sec1 = WM.section_shape(ad.design.values(e), ad.params, x, 5)
-    check("5 change points: the sections kept, dt1 .. dt5 and dc1 .. dc5, held as before",
+    check("5 change points: the sections kept, dt1 .. dt5 and dc1 .. dc5, free as before",
           [ad.design.changes, np.abs(sec1[0] - sec0[0]).max(), "dc5" in ad.names, ad.is_free("dt4.v0")],
-          [5, 0, 1, 0], 1e-9)
+          [5, 0, 1, 1], 1e-9)
+    w = XW.WingAdapter(WING)                                      # the change curves all held: new ones held
+    for n in w.space.all_names:
+        if n.split(".")[0] in WM.change_names(w.design.changes):
+            w.set_free(n, False)
+    w.set_changes(4)
+    kept = not any(w.is_free(n) for n in w.space.all_names if n.split(".")[0] in WM.change_names(4))
+    w.set_changes(0)
+    w.set_changes(2)
+    check("the user's holds kept: with every change curve held, 4 change points come held; from none, 2 come free",
+          [kept, all(w.is_free(n) for n in w.space.all_names if n.split(".")[0] in WM.change_names(2))], [1, 1], 0)
     path = ad.save_file(os.path.join(tmp, "w_saved.txt"))
     ad2 = XW.WingAdapter(path)
     check("Save set-up (a component file), then a new adapter from it: values, bounds, free flags, 5 change "
@@ -722,10 +734,11 @@ def test_bwb(tmp):
         same = fa.read() == fb.read()
     err = {c: float(np.abs(d.at(c, GLIDER["eta"]) - np.array(GLIDER[c])).max()) for c in ("chord", "sweep", "thickness")}
     check("the sample glider (Ye, Wang and Pan 2021): kind bwb, flat; saved again byte for byte; chord, LE and t/c as "
-          "2 smooth segments within 2.5 mm, 0.5 mm and 0.0025 of the paper's seven sections; 29 of 62 variables free",
+          "2 smooth segments within 2.5 mm, 0.5 mm and 0.0025 of the paper's seven sections; every one of its 62 "
+          "variables free (the user, 21 Nov 2026: none held, the user chooses)",
           [ld.kind == "bwb", d.flat, p.flat, same, [d.curves[c].segments for c in ("chord", "sweep", "thickness")]
            == [3, 3, 3], err["chord"] < 2.5, err["sweep"] < 0.5, err["thickness"] < 0.0025, len(ld.space.names),
-           len(ld.space.all_names)], [1, 1, 1, 1, 1, 1, 1, 1, 29, 62], 0)
+           len(ld.space.all_names)], [1, 1, 1, 1, 1, 1, 1, 1, 62, 62], 0)
 
     full = WM.WingSpace(p, d)                                     # every variable, random within its bounds
     rng = np.random.default_rng(20261120)
