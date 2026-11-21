@@ -142,10 +142,10 @@ def test_loft():
     print(f"       the tip patch's LE and TE edges {res2.tip_edges[0]:.4f} and {res2.tip_edges[1]:.4f} mm (the CAD's "
           f"{cad[0]:.4f} and {cad[1]:.4f}); the strips {res2.strips[0]:.3f} and {res2.strips[1]:.3f} mm, "
           f"{len(res2.strip_knots) - 4} poles across")
-    check("the LE strip as wide as the LE's rounding (a few percent of the chord); the TE strip wider than the "
+    check("the LE strip as wide as half the LE's rounding (about 2 % of the chord); the TE strip wider than the "
           "TE's round (its arc to the flank), until the tip patch's TE edge is as long as its LE edge (to "
           "EDGE_RTOL; the CAD's two edges measured by OCCT the same); the note says so",
-          [res2.te_round, res2.strips[1] > 2.0 * arc, 0.03 * 150.0 < res2.strips[0] < 0.12 * 150.0,
+          [res2.te_round, res2.strips[1] > 2.0 * arc, 0.01 * 150.0 < res2.strips[0] < 0.04 * 150.0,
            abs(res2.tip_edges[1] / res2.tip_edges[0] - 1.0) < XL.EDGE_RTOL, abs(cad[1] / cad[0] - 1.0) < 2e-3,
            abs(cad[0] / res2.tip_edges[0] - 1.0) < 1e-3, "as long as its LE edge" in res2.notes[0]],
           [0, 1, 1, 1, 1, 1, 1], 0)
@@ -179,16 +179,21 @@ def test_loft():
     check("tip_drop sets the slope, a pair one for each end: valid, 6 faces",
           [pair.valid, XL.count_faces(pair.shape), pair.drops[0] / run[0], pair.drops[1] / run[1]],
           [1, 6, 2.0, 1.5], 1e-6)
-    flat = XL.loft_loops(loops2, tip_drop=(1.0, 0.5))
+    keep = XL.EDGE_TURN
+    XL.EDGE_TURN = 0.0                                     # any turn counts: built again at TIP_DROP_SAFE
+    try:
+        flat = XL.loft_loops(loops2, tip_drop=(1.0, 0.5))
+    finally:
+        XL.EDGE_TURN = keep
     run = [0.5 * (abs(flat.corners[a][0] - top[0]) + abs(flat.corners[b][0] - top[0]))
            for a, b, top in (("ur_a", "ur_b", top_le), ("ul_a", "ul_b", top_te))]
     note = next(t for t in flat.notes if t.startswith("the tip patch within"))
-    check("a slope that leaves the normal turning across the tip patch's edges by more than EDGE_TURN (0.5 at "
-          "the TE of this wing, 3.1 deg) is built again at TIP_DROP_SAFE (1.5) and the smoother kept, the note "
-          "says so; at the default the turn is under EDGE_TURN",
+    check("a slope under TIP_DROP_SAFE that turns the normal across the tip patch's edges by more than EDGE_TURN "
+          "(here set to 0; this wing at 1.0/0.5 0.84 deg, at 1.5 0.53) is built again at TIP_DROP_SAFE and the "
+          "smoother kept, the note says so; at the default the turn is under EDGE_TURN",
           [flat.valid, XL.count_faces(flat.shape), flat.drops[0] / run[0], flat.drops[1] / run[1],
-           flat.tip_turn <= XL.EDGE_TURN, "built again at 1.5/1.5" in note, res2.tip_turn <= XL.EDGE_TURN],
-          [1, 6, XL.TIP_DROP_SAFE, XL.TIP_DROP_SAFE, 1, 1, 1], 1e-6)
+           "built again at 1.5/1.5" in note, res2.tip_turn <= XL.EDGE_TURN],
+          [1, 6, XL.TIP_DROP_SAFE, XL.TIP_DROP_SAFE, 1, 1], 1e-6)
     check("the tip patch lies within a ten-thousandth of the chord of the tip; no more than 150 poles each way",
           [res2.tip_error < 1.5e-4 * 150.0, max(res2.tip_poles) <= 150, min(res2.tip_poles) > 20], [1, 1, 1], 0)
     k4 = np.r_[[0.0] * 4, [0.5], [1.0] * 4]                # a 5 x 5 cubic patch: flat and square, sheared
@@ -444,12 +449,12 @@ def test_adapter():
                       f"poles across; the tip patch's edges {lr.tip_edges[0]:.3f} and {lr.tip_edges[1]:.3f} mm")
                 check("XCAD: a valid closed solid and its STEP file; the rudder's 6 patches (the LE and TE "
                       "strips, the central panels, the tip, the root); no step at H for the loft to ease; "
-                      "the TE strip wider than the 0.75 mm round (8 to 14 mm to each side), as the tip "
+                      "the TE strip wider than the 0.75 mm round (2 to 5 mm to each side), as the tip "
                       "patch's TE edge needs to be as long as its LE edge; the tip patch's corners under the tip "
                       "on the strip lines; the cap's 0.7 mm edge rounding blended over 0.2 to 0.4 mm, which "
                       "moved the cap by 0.005 to 0.03 mm",
                       [lr.valid, lr.free_edges, os.path.exists(res["step"]), lr.faces, len(lr.steps), lr.te_round,
-                       8.0 < lr.strips[1] < 14.0, abs(lr.tip_edges[1] / lr.tip_edges[0] - 1.0) < XL.EDGE_RTOL,
+                       2.0 < lr.strips[1] < 5.0, abs(lr.tip_edges[1] / lr.tip_edges[0] - 1.0) < XL.EDGE_RTOL,
                        lr.drops[0] > 0.0, lr.drops[1] > 0.0, lr.tip_angle > 5.0,
                        0.2 < lr.tip_blend[0] < 0.4, 0.005 < lr.tip_blend[1] < 0.03],
                       [1, 0, 1, 6, 0, 0, 1, 1, 1, 1, 1, 1, 1], 0)

@@ -23,28 +23,31 @@ patch the cap alone).
   is the straight line between its two corners. The tip patch covers the
   sides above those edges and the cap. Each pair of corners sits under the
   top of its edge line by tip_drop times its distance from that top along
-  the chord (the diagonals' slope): TIP_DROP 0.75 since 20 Nov 2026, 1.5
-  before (the user, for meshing: a smaller tip patch, its straight edges
-  closer to the tip). The wind-tunnel rudder's corners sit 5.6 and 7.1 mm
-  under the tops of the LE and TE lines instead of 10.7 and 12.4. The
-  slope trades the tip patch's corners against the strips' top corners:
-  the angle between the lines there is about atan(tip_drop) on the tip
-  patch and 90 deg less that on the strips (33 to 38 and 59 to 62 deg at
-  0.75 on that rudder, 53 to 57 and 40 to 42 at 1.5, 41 to 53 at 1). The
-  tip patch follows the tip as closely as at 1.5 (its normals within 0.11
-  deg of the tip's over 99 % of it, 1.1 at most; 0.08 and 1.5 at 1.5) and
-  joins its neighbours more smoothly (the normal turns by 0.21 deg at most
-  across its edges, 0.63 at 1.5). At 0.5 the tip patch's corners close to
-  23 deg and its normals' 99 % doubles. BB2's stern plane, whose 15 mm TE
-  round the flatter top edge passes within a few mm of the rim, turned the
-  normal across the tip patch's TE edge by 7 deg at 0.75 (by 4.5 to 7.8
-  at 0.5 to 1.25, 2.6 at 1.5): where a slope under TIP_DROP_SAFE (1.5)
-  folds the tip patch or turns the normal across its edges by more than
-  EDGE_TURN (2 deg), loft_loops builds the solid again at 1.5 and keeps
-  the smoother (that plane as before).
-- The LE strip is as wide as the LE's rounding (strip_frac None): 1.5 times
-  the arc from the LE to where the section's curvature has fallen to a
-  quarter of its peak (the sections' median). The TE strip is as wide as the
+  the chord (the diagonals' slope, TIP_DROP 1.5), so the strips' widths set
+  how far under the tip the central panels' straight top edges run. Since
+  20 Nov 2026 the strips are a third as wide as before (LE_MARGIN 0.5; the
+  user, for meshing: the tip patch smaller, its straight edges closer to the
+  tip, the strips thinner if needed to keep the angles). The wind-tunnel
+  rudder's corners sit 2.05 and 3.25 mm under the tops of the LE and TE
+  lines (10.7 and 12.4 before). A flatter slope was tried first (0.75: 5.6
+  and 7.1 mm): the angle between the lines at the tip patch's corners is
+  about atan(tip_drop) and at the strips' top corners about 90 deg less
+  that, so it closed the tip patch's corners to 33 deg, and on BB2's stern
+  plane (a 15 mm TE round that a flatter top edge passes within a few mm of
+  the rim) every slope from 0.5 to 1.25 turned the normal across the tip
+  patch's TE edge by 4.5 to 7.8 deg (2.6 at 1.5). With the thin strips at
+  1.5 the corners keep their angles (the rudder's tip patch 47 to 53 deg,
+  its strips 42 to 48; 53 to 57 and 40 to 42 before) and the normal turns
+  less across the tip patch's edges (0.07 deg at most on the rudder, 0.97
+  on BB2's plane; 0.63 and 2.6 before). Where a slope under TIP_DROP_SAFE
+  (1.5) is given that folds the tip patch or turns the normal across its
+  edges by more than EDGE_TURN (2 deg), loft_loops builds the solid again
+  at 1.5 and keeps the smoother.
+- The LE strip is as wide as half the LE's rounding (strip_frac None):
+  LE_MARGIN (0.5) times the arc from the LE to where the section's curvature
+  has fallen to a quarter of its peak (the sections' median; 1.5 times until
+  20 Nov 2026, see above), the rest of the nose in the central panels, whose
+  knots crowd towards their ends. The TE strip is as wide as the
   tip patch's TE edge needs to be as long as its LE edge (_match_te; the
   user, 20 Nov 2026, for meshing: the tip patch's two ends take the same
   number of nodes, which crowded on the short TE edge and spread on the long
@@ -52,8 +55,9 @@ patch the cap alone).
   the curvature has fallen to a tenth of its peak). Until then the TE strip
   was the round itself, its seams where the round meets the flanks: the
   wind-tunnel rudder's tip patch had a TE edge of 3.2 mm against an LE edge
-  of 30.7 (both 30.7 now, the TE strip 10.6 mm to each side of the TE instead
-  of 1.26), BB2's stern plane 60 against 453. Without a cap the flat top's
+  of 30.7 (both 30.7 then, the TE strip 10.6 mm to each side of the TE
+  instead of 1.26; both 8.6 mm with the thin strips, the TE strip 3.1 mm),
+  BB2's stern plane 60 against 453 (135 both now). Without a cap the flat top's
   two ends are matched the same way (the TE strip as wide as the LE strip).
 - The round inside the TE strip. Where its curvature jumps (the round's ends)
   a strip fitted across on the plain knots rings: its rows turned off the
@@ -117,9 +121,9 @@ patch the cap alone).
   from the sections' arcs, which place a point some um further along. And
   no line leaves an edge at less than EDGE_ANGLE (_into_plane). The result's
   tip_angle is the smallest angle between the patch's two families of
-  lines, 0 when they cross somewhere (a fold; the notes say so): 12 deg on
-  BB2's stern plane (built at 1.5), 15 on the wind-tunnel rudder (16 at
-  1.5). Its tip_turn is the largest turn of the normal across the tip
+  lines, 0 when they cross somewhere (a fold; the notes say so): 9 deg on
+  BB2's stern plane, 11 on the wind-tunnel rudder (12 and 16 with the wide
+  strips). Its tip_turn is the largest turn of the normal across the tip
   patch's edges (_edge_turn).
 - A rounding along the tip's edge. The wind-tunnel rudder's cap runs from
   the rim up a straight wall (0.4 to 1.9 mm, longer towards the TE), round
@@ -710,8 +714,13 @@ def _wire_face(edges):
 N_DENSE = 1501                             # points per side of a row's smooth polyline
 ROUND_DROP = 0.25                          # an edge's rounding ends where the curvature has fallen to this
                                            # share of its peak round the edge (_edge_rounding)
-LE_MARGIN = 1.5                            # strip_frac None: the LE strip reaches this many times the LE's
-                                           # rounding (to a quarter of the peak curvature) to each side of the LE
+LE_MARGIN = 0.5                            # strip_frac None: the LE strip reaches this many times the LE's
+                                           # rounding (to a quarter of the peak curvature) to each side of the LE.
+                                           # 0.5 since 20 Nov 2026 (1.5 before): the tip patch's corners, at
+                                           # TIP_DROP times the strips' reach under the tip, a fifth as deep
+                                           # (the wind-tunnel rudder 2.05 and 3.25 mm, BB2's stern plane 26 and
+                                           # 51); 0.35 to 0.4 leave the tip patch's lines 8 to 10 deg apart at
+                                           # the tops of the edge lines and its normals up to 6 deg off the tip's
 LE_WINDOW = 0.25                           # ... the LE's rounding looked for within this share of a side's arc
 ROUND_SMALL = 0.5                          # one strip_frac given: the TE strip is narrowed to the TE's round
                                            # when that is under this share of the strip (then widened as the
@@ -731,24 +740,22 @@ STRIP_POLES = 130                          # on them turns off its section's cur
                                            # TE's round has the round's ends inside it, and their jump of
                                            # curvature rang in a fit on the plain knots: 0.4 deg on the
                                            # wind-tunnel rudder, 0.7 on BB2's stern plane
-TIP_DROP = 0.75                            # the slope of the strips' top edges in the side view: the tip
+TIP_DROP = 1.5                             # the slope of the strips' top edges in the side view: the tip
                                            # patch's corners (the tops of the strip lines) sit under the tops
                                            # of the LE and TE lines by this times their distance from them
-                                           # along the chord (loft_loops). 0.75 since 20 Nov 2026 (1.5 before;
-                                           # the user: a smaller tip patch): its corners half as deep. 0.5 to
-                                           # 1.5 all gave valid solids without folds on the wind-tunnel rudder
-                                           # (extracted and planar), a design of the tool, the tool test's
-                                           # tilted wing and BB2's stern plane, the tip patch as close to the
-                                           # tip at 0.75 to 1.5; the angle at its corners is about
-                                           # atan(tip_drop), at the strips' top corners 90 deg less that
-TIP_DROP_SAFE = 1.5                        # loft_loops builds a solid again at this slope (the default before
-EDGE_TURN = 2.0                            # 20 Nov 2026) when a flatter one leaves the tip patch folded or
+                                           # along the chord (loft_loops). The angle between the lines at the
+                                           # tip patch's corners is about atan(tip_drop), at the strips' top
+                                           # corners 90 deg less that. 0.75 for an hour on 20 Nov 2026 (the
+                                           # tip patch's corners 33 deg); the corners come up with thinner
+                                           # strips instead (LE_MARGIN)
+TIP_DROP_SAFE = 1.5                        # loft_loops builds a solid again at this slope (the default) when a
+EDGE_TURN = 2.0                            # flatter one given leaves the tip patch folded or
                                            # turning the normal across one of its edges by more than EDGE_TURN
                                            # deg (_edge_turn), and keeps the smoother: below 1.5 BB2's stern
                                            # plane, a TE round of 15 mm, turned it by 4.5 to 7.8 deg on the TE
                                            # edge about the round's ends, where the flatter top edge runs within
-                                           # a few mm of the rim (2.6 at 1.5, at the TE's top); the wind-tunnel
-                                           # rudder 0.2 at 0.75 (0.6 at 1.5), the tool test's tilted wing 1.4
+                                           # a few mm of the rim (2.6 at 1.5, at the TE's top; these with the
+                                           # wide strips); the wind-tunnel rudder 0.2 at 0.75 (0.6 at 1.5)
 FAN_FACTOR = 4.0                           # the rows turn onto the patches' top edges over a band this many
                                            # times as tall as those edges' spread in height
 CAP_STATIONS = 401                         # stations along the chord of the tip's grid
@@ -2041,7 +2048,11 @@ def _strip_knots(levels, w_le, w_te, knots, tol=STRIP_ANGLE, cap=STRIP_POLES, n_
         if not len(bad) or len(knots) - 4 >= cap:
             break
         mids = 0.5 * (uk[bad] + uk[bad + 1])
-        inner = np.unique(np.round(np.r_[knots[4:-4], mids, 1.0 - mids], 13))
+        cand = np.sort(np.r_[knots[4:-4], mids, 1.0 - mids])
+        cand = cand[np.r_[True, np.diff(cand) > 1.0e-10]]     # one knot where two meet but for rounding (a
+        left = cand[cand < 0.5 - 1.0e-10]                     # rounding to 13 places split two of them, 20
+        centre = [0.5] if np.any(np.abs(cand - 0.5) <= 1.0e-10) else []      # Nov 2026: a knot taken twice,
+        inner = np.r_[left, centre, (1.0 - left)[::-1]]       # its mirror once), mirrored exactly
         knots = np.r_[[0.0] * 4, inner, [1.0] * 4]
     return knots, float(worst.max())
 
@@ -2077,7 +2088,7 @@ def loft_loops(loops, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3
                 view. The tip patch's four corners, the tops of the strip
                 lines, sit under the top of the LE line and of the TE line by
                 tip_drop times their distance from that top along the chord
-                (TIP_DROP 0.75 by default; 1: the top edges at 45 deg; a
+                (TIP_DROP 1.5 by default; 1: the top edges at 45 deg; a
                 pair: the LE's and the TE's). Where a slope under
                 TIP_DROP_SAFE leaves the tip patch folded or turning the
                 normal across one of its edges by more than EDGE_TURN deg (a

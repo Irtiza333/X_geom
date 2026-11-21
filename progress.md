@@ -842,28 +842,35 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   with the window (the sample, flatness of random designs, refusals, smooth2 saved and read back, the table form, the
   body's numbers, the CAD whole and half, the Hull slot's Body box and CAD BWB), hull 65, tool 73, blade 79 and files
   60 with the window; the contract test passes. Project doc `claude/bwb.md`.
-- Tip patch half as tall (20 Nov 2026; the user, with a picture of the mesh: make the tip patch smaller by pushing
-  its straight edges closer to the tip, without compromising the CAD's robustness and smoothness).
-  `xcad_loft.TIP_DROP` 0.75 (1.5 before; `modify_control.ModifySettings.tip_drop` and the rudder tool's fallback with
-  it): the tip patch's corners, and the central panels' straight top edges between them, sit half as far under the
-  tops of the LE and TE lines (the wind-tunnel rudder: 5.6 and 7.1 mm instead of 10.7 and 12.4). Swept 0.5 to 1.5 on
-  the wind-tunnel rudder (extracted and planar), a design of the tool, the tool test's tilted wing and BB2's stern
-  plane: every solid valid, 6 faces, no fold. The slope trades the corners: the angle between the lines is about
-  atan(tip_drop) at the tip patch's corners and 90 deg less that at the strips' top corners (the rudder: 33 to 38
-  and 59 to 62 deg at 0.75, 53 to 57 and 40 to 42 at 1.5). On the rudder the tip patch follows the tip as closely
-  (its normals against the tip's own, the smooth surface it is fitted to, at 299 x 299 stations: within 0.11 deg
-  over 99 % and 1.1 at most; 0.08 and 1.5 at 1.5) and joins its neighbours more smoothly (the normal turns by 0.21
-  deg at most across its edges, 0.63 at 1.5; the planar rudder 0.49 and 1.07, the design 0.31 and 0.87); its lines'
-  smallest angle 15 deg (16 at 1.5). At 0.5 its corners close to 23 deg and its normals' 99 % doubles. BB2's stern
-  plane is the exception: its 15 mm TE round, which a flatter top edge passes within a few mm of the rim, turned the
-  normal across the tip patch's TE edge by 4.5 to 7.8 deg at every slope from 0.5 to 1.25 (2.6 at 1.5). So
-  `loft_loops` measures that turn (`_edge_turn`, `LoftResult.tip_turn`, in the tip patch's note) and, where a slope
-  under `TIP_DROP_SAFE` (1.5) folds the tip patch or turns the normal by more than `EDGE_TURN` (2 deg), builds the
-  solid again at 1.5 and keeps the smoother, saying so in the note (BB2's plane as before, about 50 s instead of 25).
-  A fit of the edge's first row with the turn held to zero, tried instead, removed the turn but left the patch's
-  lines nearly along the TE edge (0.3 deg). Set-up JSON files keep the tip_drop they were saved with; the wing, fin
-  and BWB samples have flat tops (no tip patch). Tests: tool 74 (a pair of slopes; the rebuild on the tilted wing at
-  1.0/0.5, 3.1 deg), wing 78, files 60, hull 65 with the window, modify 136, tip cap 44; the contract test passes.
+- Tip patch: thin strips, its straight edges just under the tip (20 Nov 2026; the user, with a picture of the mesh:
+  make the tip patch smaller by pushing its straight edges closer to the tip without compromising the CAD's
+  robustness and smoothness; then, with a picture of his rebuilt rudder: "This did not go up enough at all, to
+  make the angles work you can make LE and TE strips thinner if needed"). The tip patch's corners sit under the
+  tops of the LE and TE lines by tip_drop times the strip lines' distance from those tops along the chord, so the
+  strips' widths set the height. `xcad_loft.LE_MARGIN` 0.5 (1.5 before): the LE strip half the LE's rounding
+  (3.72 mm to each side of the LE on the wind-tunnel rudder instead of 11.16), the TE strip matched to the tip
+  patch's LE edge as before (3.08 mm instead of 10.59); `TIP_DROP` 1.5 as before. The corners 2.05 and 3.25 mm
+  under the tops (10.67 and 12.39 before), both tip patch edges 8.58 mm (30.71). A flatter slope was tried first
+  (`TIP_DROP` 0.75, installed an hour before: 5.6 and 7.1 mm): the angle between the lines at the tip patch's
+  corners is about atan(tip_drop) and at the strips' top corners 90 deg less that, so it closed the tip patch's
+  corners to 33 deg; and his rebuild still had 1.5, from the planar set-up cached on 19 Nov (a set-up keeps the
+  tip_drop it was saved with). Measured with the thin strips at 1.5 (the wind-tunnel rudder extracted and planar,
+  a design of the tool, the tool test's tilted wing, BB2's stern plane): every solid valid, 6 faces, no fold; the
+  corners' angles kept (the rudder's tip patch 47 to 53 deg, the strips' top corners 42 to 48; 53 to 57 and 40 to
+  42 before; BB2's 34 at the TE strip as before); the normal turns less across the tip patch's edges (0.07 deg at
+  most on the rudder, 0.97 on BB2's plane; 0.63 and 2.6 before) and by 0.002 to 0.01 across the strip lines (0.24
+  at the top of the tilted wing's, 41 loops); the tip patch within 0.0032 mm of the tip, its normals within 0.27
+  deg of the tip's over 99 % (0.08 before) and 1.16 at most (1.49); its lines' smallest angle, at the tops of the
+  LE and TE lines, 11 deg (16; BB2 9, 12). LE_MARGIN 0.35 to 0.4 gave 1.1 to 2.4 mm but those lines 8 to 10 deg
+  apart and the normals up to 6 deg off. BB2's stern plane: the corners 26 and 51 mm under the tops (145 and 183).
+  `loft_loops` keeps a guard for slopes under 1.5 given: `_edge_turn` (`LoftResult.tip_turn`, in the tip patch's
+  note) and, where such a slope folds the tip patch or turns the normal across its edges by more than `EDGE_TURN`
+  (2 deg), the solid built again at `TIP_DROP_SAFE` (1.5) and the smoother kept (at 0.5 to 1.25 BB2's 15 mm TE
+  round turned it by 4.5 to 7.8 deg with the wide strips). `_strip_knots`: knots merged within 1e-10 and mirrored
+  exactly (rounding to 13 places had split two near-equal knots: one taken twice, its mirror once). The wing, fin
+  and BWB samples (flat tops) get the thin strips too. Tests: tool 74 (the LE strip about 2 % of the chord, the
+  real rudder's TE strip 2 to 5 mm, the guard forced with EDGE_TURN 0), wing 78, files 60, hull 65 with the
+  window, modify 136, tip cap 44; the contract test passes.
 
 ## Next steps
 

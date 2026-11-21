@@ -95,7 +95,7 @@ class RudderAdapter:
                          "plot": bool(s.plot), "fit_orders": dict(MC.FIT_ORDERS if fit_orders is None else fit_orders),
                          "fit_free_heights": bool(s.fit_free_heights), "half": bool(getattr(s, "half", False)),
                          "strip_frac": _strip_frac(getattr(s, "strip_frac", None)),
-                         "tip_drop": _strip_frac(getattr(s, "tip_drop", 0.75))}     # xcad_loft.TIP_DROP
+                         "tip_drop": _strip_frac(getattr(s, "tip_drop", 1.5))}
         self.title = "Rudder, modified below H"
         self.setup_file = None                                # the set-up file loaded or saved last (the tool shows it)
         self.meta = {}

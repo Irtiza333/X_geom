@@ -67,19 +67,24 @@ class ModifySettings:
     half: bool = False             # the CAD as the half body, cut at the plane of symmetry (CFD on half the
                                    # domain; the sections are symmetric, so either side is the same)
     strip_frac: object = None      # the LE and TE wrap strips (xcad_loft). None: the LE strip as wide as
-                                   # the LE's rounding (1.5 times the arc to where the curvature has fallen
-                                   # to a quarter of its peak), the TE strip as wide as the tip patch's TE
-                                   # edge needs to be as long as its LE edge (about 10.6 mm to each side of
-                                   # the TE; 20 Nov 2026, for meshing; before, the 0.75 mm round itself, 1.3
-                                   # mm). A fraction: the LE strip reaches that fraction of the root chord
-                                   # along the arc to both sides of the LE (the blade's constant width), the
-                                   # TE strip as above. A pair (LE, TE), e.g. (0.07, 0.07), is used as given
-    tip_drop: float = 0.75         # the slope of the strips' top edges in the side view (the diagonals from
+                                   # half the LE's rounding (0.5 times the arc to where the curvature has
+                                   # fallen to a quarter of its peak, 3.7 mm to each side of the LE; 1.5
+                                   # times until 20 Nov 2026), the TE strip as wide as the tip patch's TE
+                                   # edge needs to be as long as its LE edge (about 3.1 mm to each side of
+                                   # the TE), at least the 0.75 mm round. The tip patch's corners sit under
+                                   # the tip by tip_drop times the strips' reach along the chord, so the
+                                   # thin strips put them 2.05 and 3.25 mm under the tops of the LE and TE
+                                   # (10.7 and 12.4 before). A fraction: the LE strip reaches that fraction
+                                   # of the root chord along the arc to both sides of the LE (the blade's
+                                   # constant width), the TE strip as above. A pair (LE, TE), e.g. (0.07,
+                                   # 0.07), is used as given
+    tip_drop: float = 1.5          # the slope of the strips' top edges in the side view (the diagonals from
                                    # the strip lines' tops up to the tops of the LE and TE): the tip patch's
                                    # four corners sit on the strip lines, under the tip by this times their
                                    # distance from the LE's or TE's top along the chord. A pair (LE, TE)
-                                   # gives the two ends their own. 0.75 since 20 Nov 2026 (1.5 before):
-                                   # a tip patch half as tall, its straight edges closer to the tip
+                                   # gives the two ends their own. The angle between the lines at the tip
+                                   # patch's corners is about atan(tip_drop); a slope under 1.5 that creases
+                                   # the tip patch's edges is built again at 1.5 (xcad_loft.EDGE_TURN)
     plot: bool = True              # write <case>_check.png
 
 settings = ModifySettings( # SET PARAMETERS HERE
