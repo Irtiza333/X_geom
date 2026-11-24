@@ -28,8 +28,9 @@ order n. Its control points, drawn in the plots, are the coefficients at psi = i
 scaled to radii. An axisymmetric hull (SUBOFF) has the r curves only (r' = r).
 
 Component file (xgeom_files.py, kind hull; claude/xgeom-file-formats.md): the lengths, the axisymmetry, each
-curve's order ('# curve nose_r cst 5'), every variable's value, bounds and free flag ('# var') and the station
-table. A table file has no curve or var lines (read_params, write_params):
+curve's order ('# curve nose_r cst 5'), every variable's value, bounds, free flag and, when it depends on
+others, its relation ('# var', xgeom_relations.py) and the station table. A table file has no curve or var lines
+(read_params, write_params):
     # XGeom component
     # kind          hull
     # name          suboff
@@ -72,6 +73,7 @@ import numpy as np
 import hull_extraction as HE
 import xcad_loft as XL
 import xgeom_files as XF
+import xgeom_relations as REL
 
 OUT_DIR = os.path.join("outputs", "hull")
 KINDS = ("nose", "tail")
@@ -509,7 +511,7 @@ def default_bounds(design):
 DEFAULT_FREE = ("nose", "middle", "tail", "nose_r", "tail_r", "nose_rp", "tail_rp")
 
 
-class HullSpace:
+class HullSpace(REL.SpaceRelations):
     """A flat design vector for an optimiser and the HullDesign it stands for.
 
     The slots: the lengths nose, middle, tail, cap (m), the radii r, re (and rp, rpe unless axisymmetric, m),
@@ -519,6 +521,8 @@ class HullSpace:
     bounds   overrides of default_bounds by slot
     fixed    {slot: value} of the held slots (not in the vector); with free given instead (globals and curve
              names, default DEFAULT_FREE), every other slot is held at the design's value
+    Dependent variables (xgeom_relations.SpaceRelations): set_relations({slot: relation text}), relations,
+    violations(x), project(x); a slot defined with '=' leaves the vector (full_vector works it out).
     """
 
     def __init__(self, design, bounds=None, fixed=None, free=None):
@@ -554,14 +558,6 @@ class HullSpace:
         vals = self.values(design)
         return np.array([vals[n] for n in self.names])
 
-    def full_vector(self, x):
-        x = np.asarray(x, dtype=float)
-        if x.shape != (len(self.names),):
-            raise ValueError(f"the design vector has {len(self.names)} entries")
-        full = np.array([self.fixed.get(n, np.nan) for n in self.all_names])
-        full[self._free] = x
-        return full
-
     def to_design(self, x):
         return self.design_of(dict(zip(self.all_names, self.full_vector(x))))
 
@@ -580,9 +576,7 @@ class HullSpace:
 
     def to_dict(self, design):
         vals = self.values(design)
-        return {"axisymmetric": self.axisymmetric, "orders": self.orders,
-                "slots": [{"name": n, "value": vals[n], "lo": float(lo), "hi": float(hi), "free": n not in self.fixed}
-                          for n, (lo, hi) in zip(self.all_names, self.all_bounds)],
+        return {"axisymmetric": self.axisymmetric, "orders": self.orders, "slots": self.slot_records(vals),
                 "vector": {"names": self.names, "values": [vals[n] for n in self.names],
                            "bounds": self.bounds.tolist()}}
 
@@ -601,6 +595,7 @@ class HullSpace:
             d.rp, d.rpe = vals["rp"], vals["rpe"]
         space = cls(d, {q["name"]: (q["lo"], q["hi"]) for q in rec["slots"]},
                     {q["name"]: q["value"] for q in rec["slots"] if not q["free"]})
+        space.set_relations({q["name"]: q["relation"] for q in rec["slots"] if q.get("relation")})
         return space, d
 
 
@@ -736,9 +731,9 @@ def _component_design(comp, params, orders=None):
 
 
 def _component_space(comp, design, free=None):
-    """The HullSpace of a hull component: each variable's bounds and free flag from its var line; one with
-    none: default_bounds (a vary range for a length or a radius) and free as the vary lines say (with none: the
-    names in free, default DEFAULT_FREE)."""
+    """The HullSpace of a hull component: each variable's bounds, free flag and relation (a dependent
+    variable's) from its var line; one with none: default_bounds (a vary range for a length or a radius) and free
+    as the vary lines say (with none: the names in free, default DEFAULT_FREE)."""
     names = set(global_slots(design)) | set(design.curves)
     bad = sorted(set(comp.vary) - names)
     if bad:
@@ -755,7 +750,8 @@ def _component_space(comp, design, free=None):
     vals = full.values(design)
     fixed = {n: vals[n] for n in full.all_names
              if not (comp.vars[n].free if n in comp.vars else n.split(".")[0] in free0)}
-    return HullSpace(design, bounds=bounds, fixed=fixed)
+    return HullSpace(design, bounds=bounds, fixed=fixed).set_relations(
+        {n: q.relation for n, q in comp.vars.items() if q.relation}, comp.path)
 
 
 def load_component(path, orders=None, free=None):
@@ -791,7 +787,7 @@ def _mapped_x(params, design):
 
 def write_component(path, params, design, space, name=None, notes=(), settings=None):
     """Write the design as a component file, which load_component reads back exactly: the lengths, the
-    axisymmetry, each curve's order, every variable of space (value, bounds, free), the settings
+    axisymmetry, each curve's order, every variable of space (value, bounds, free, relation), the settings
     (SETTING_TYPES: half) and the half-height r (and half-width r') at the station table's x (part by part on
     the design's lengths)."""
     comp = XF.Component("hull", name or os.path.splitext(os.path.basename(path))[0], list(notes))

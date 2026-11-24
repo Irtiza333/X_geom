@@ -212,8 +212,11 @@ Left panel (wing, fin)
               .. dc8, to edit its curve over the span, 1 or 2 segments as the
               blade's, or as the table has it. The root's sweep and rake are
               pinned at 0: the root's LE is the origin.
-Each variable:  free | name | low | slider | high | value | where
+Each variable:  free | name | low | slider | high | value | where | dep
     free      ticked: a design variable within low .. high; unticked: held
+    name      what a relation calls the variable: its key in its curve (v1, d2,
+              u4, ...) or its own name (span, H, radius); a variable of another
+              curve goes by its full name (chord.v1), as the set-up files have it
     d         the position of a control point, as the fraction d of the span
               left (rudder: below the point above it; blade: up to the tip;
               blade, 2 segments: d1 from P4 to the root, d2 from P4 to the tip)
@@ -224,6 +227,24 @@ Each variable:  free | name | low | slider | high | value | where
               wing, fin: mm, deg, t/c, f/c, a change in fractions of the chord
     where     rudder: the height; blade: r/R; hull: the x it sits at (m); wing,
               fin: y along the span (mm), the planform area for the span
+    dep       unticked: an independent variable, a number within low .. high.
+              Ticked: a dependent one (24 Nov 2026, xgeom_relations.py): the line
+              that opens under it takes its relation to other variables, an
+              operator (< <= > >= =) and an expression of them (numbers, names,
+              + - * /, brackets; 0.5v4 is 0.5*v4), such as > 0.5*v4 or
+              <= 0.5*v2 + 2*chord.v3; several separated by commas (> 0.5*v0,
+              < v1). Return sets it. The variable then stays inside low .. high
+              and its relations (the limits they give now are shown beside the
+              relation, and the slider runs over them), and when a variable it
+              depends on moves it follows. With = it takes the expression's
+              value and is no design variable. A variable may depend on
+              dependent ones, but not in a loop. Relations that cannot hold
+              inside low .. high leave the variable on a bound, with a warning
+              (the build still runs). An empty relation, or dep unticked: the
+              variable is independent again. Saved with the set-up: the var
+              line's relation in a component file, "relation" in the rudder's
+              set-up; a relation whose variable is gone (a curve's new form) is
+              dropped, which the status bar says.
 Right panel
     Design       rudder: planform, the picked curve against the original, and in
                  3D five sections from the root to H with their control polygons
@@ -242,8 +263,9 @@ Right panel
                  (red), unchanged (grey); all blades of the propeller; the hull's
                  sections by part; the wing's or fin's XCAD sections.
 Save set-up ... writes the component as it stands as a component file (every
-variable with its value, bounds and free flag, each curve's form and points, the
-settings, the table; xgeom_files.py): a dialog opens on the file it came from.
+variable with its value, bounds, free flag and, a dependent one, its relation;
+each curve's form and points, the settings, the table; xgeom_files.py): a dialog
+opens on the file it came from.
 Load ... and --file read it back exactly; the
 optimiser reads it (blade_modify.load_component, wing_modify.load_component,
 hull_modify.load_component, xgeom_files.load). The rudder (modified below H)
@@ -341,6 +363,8 @@ VEHICLE_DIR = os.path.join("outputs", "vehicle")   # the Vehicle CAD's files (re
 LOG = os.path.join(HERE, "outputs", "xgeom_tool_log.txt")   # every build's outcome
 CAD_TYPES = [("STEP", "*.step *.stp"), ("IGES", "*.igs *.iges")]   # Save CAD's file types
 FROM_CAD_KINDS = ("blade", "hull", "rudder")   # From CAD ...: the components with an extraction (xgeom_from_cad)
+COLS = 9                                       # a variable row's columns: free | name | (label) | low | slider |
+                                               # high | value | where | dep
 
 
 def planar_rudder_file(path):
@@ -437,26 +461,49 @@ def file_kind(path):
     return XF.file_kind(path)
 
 
+def grid_row(r):
+    """The grid row of line r of a box of variables (0 the header): each line takes two, a variable's own and,
+    under it, the relation of a dependent one (hidden for an independent one)."""
+    return 2 * r
+
+
 class VarRow:
-    """free | name | low | slider | high | value | where, for one variable."""
+    """free | name | (label) | low | slider | high | value | where | dep, for one variable. dep ticked: the
+    variable depends on others, and the line under it takes its relation to them ('> 0.5*v4', '<= 0.5*v2 +
+    2*chord.v3', '= v0'; xgeom_relations.py) and shows the limits that gives now; the slider then runs over
+    those limits. Unticked: independent, within low .. high."""
 
     def __init__(self, app, parent, r, spec):
         self.app, self.name, self.digits = app, spec.name, spec.digits
         ad = app.ad
         self._busy = False
+        self._open = False                               # dep ticked, no relation entered yet
+        g = grid_row(r)
         self.free = tk.BooleanVar(value=ad.is_free(self.name))
-        ttk.Checkbutton(parent, variable=self.free, command=self.on_free).grid(row=r, column=0)
+        self.free_box = ttk.Checkbutton(parent, variable=self.free, command=self.on_free)
+        self.free_box.grid(row=g, column=0)
+        ttk.Label(parent, text=self.name.split(".")[-1]).grid(row=g, column=1, sticky="w", padx=(0, 6))
         self.label = ttk.Label(parent, text=spec.label, width=12)
-        self.label.grid(row=r, column=1, sticky="w")
+        self.label.grid(row=g, column=2, sticky="w")
         self.lo = ttk.Entry(parent, width=8, justify="right")
         self.hi = ttk.Entry(parent, width=8, justify="right")
         lo, hi = ad.bounds(self.name)
         self.scale = ttk.Scale(parent, from_=lo, to=hi, orient="horizontal", length=120, command=self.on_scale)
         self.val = ttk.Entry(parent, width=9, justify="right")
         self.info = ttk.Label(parent, text="", foreground=INK2, width=9)
-        for c, w in enumerate((self.lo, self.scale, self.hi, self.val, self.info), start=2):
-            w.grid(row=r, column=c, sticky="ew", padx=1, pady=1)
-        for e, fn in ((self.lo, self.on_bounds), (self.hi, self.on_bounds), (self.val, self.on_value)):
+        for c, w in enumerate((self.lo, self.scale, self.hi, self.val, self.info), start=3):
+            w.grid(row=g, column=c, sticky="ew", padx=1, pady=1)
+        self.dep = tk.BooleanVar(value=ad.is_dependent(self.name))
+        ttk.Checkbutton(parent, variable=self.dep, command=self.on_dep).grid(row=g, column=8)
+        self.rel = ttk.Entry(parent)                     # the relation line, shown for a dependent variable
+        self.rel_info = ttk.Label(parent, text="", foreground=INK2)
+        self._rel_line = ((ttk.Label(parent, text="relation", foreground=INK2), dict(column=2, sticky="e", padx=4)),
+                          (self.rel, dict(column=3, columnspan=3, sticky="ew", padx=1, pady=(0, 3))),
+                          (self.rel_info, dict(column=6, columnspan=3, sticky="w", padx=3)))
+        for w, opts in self._rel_line:
+            opts["row"] = g + 1
+        for e, fn in ((self.lo, self.on_bounds), (self.hi, self.on_bounds), (self.val, self.on_value),
+                      (self.rel, self.on_relation)):
             e.bind("<Return>", fn)
             e.bind("<FocusOut>", fn)
         self.refresh()
@@ -465,19 +512,57 @@ class VarRow:
         ad = self.app.ad
         v = ad.get(self.name)
         lo, hi = ad.bounds(self.name)
+        low, high = ad.limits(self.name)                 # a dependent variable's: its bounds and its relations
+        dep, defined = ad.is_dependent(self.name), ad.is_defined(self.name)
+        room = high > low and not defined
+        focus = self.app.root.focus_get()
         self._busy = True
         try:
-            self.scale.configure(from_=lo, to=hi)
+            self.scale.configure(from_=low if room else lo, to=high if room else hi)
+            self.scale.state(["!disabled" if room else "disabled"])
             if slider:
                 self.scale.set(v)
+            self.val.state(["!disabled"])
             for e, x in ((self.lo, lo), (self.hi, hi), (self.val, v)):
-                if self.app.root.focus_get() is not e:
+                if focus is not e:
                     e.delete(0, "end")
                     e.insert(0, f"{x:.{self.digits}f}")
+            self.val.state(["disabled" if defined else "!disabled"])        # '=': it follows the others
+            self.free_box.state(["disabled" if defined else "!disabled"])
             self.info.configure(text=ad.row_info(self.name))
-            self.label.configure(foreground="black" if self.free.get() else INK2)
+            self.label.configure(foreground="black" if ad.varies(self.name) else INK2)
+            self._relation_line(v, low, high, dep, defined, focus)
         finally:
             self._busy = False
+
+    def _relation_line(self, v, low, high, dep, defined, focus):
+        """The line under the row: there for a dependent variable (and once dep is ticked), with its relation
+        and what it gives now: the limits, the value it follows ('='), or that it cannot hold."""
+        ad, d = self.app.ad, self.digits
+        show = dep or self._open
+        self.dep.set(show)
+        for w, opts in self._rel_line:
+            if show:
+                w.grid(**opts)
+            else:
+                w.grid_remove()
+        if not show:
+            return
+        if focus is not self.rel:
+            self.rel.delete(0, "end")
+            self.rel.insert(0, ad.relation(self.name))
+        if not dep:                                      # nothing entered yet: an example with a variable like it
+            curve, key = self.name.split(".")[0], self.name.split(".")[-1]
+            names = [n for n in ad.meta if n != self.name]
+            near = [n.split(".")[1] for n in names if "." in n and n.split(".")[0] == curve]
+            like = [k for k in near if k.rstrip("0123456789") == key.rstrip("0123456789")]
+            self.rel_info.configure(text=f"e.g.  > 0.5*{(like or near or names or ['v0'])[0]}", foreground=INK2)
+        elif defined:
+            self.rel_info.configure(text=f"now {v:.{d}f}", foreground=INK2)
+        elif high < low:
+            self.rel_info.configure(text="cannot hold in low .. high", foreground=RED)
+        else:
+            self.rel_info.configure(text=f"now {low:.{d}f} .. {high:.{d}f}", foreground=INK2)
 
     def on_scale(self, s):
         if not self._busy:
@@ -504,6 +589,38 @@ class VarRow:
         self.app.ad.set_free(self.name, self.free.get())
         self.app.refresh_labels()
         self.app.schedule_update()
+
+    def on_dep(self):
+        """The dep switch. Ticked: the relation line opens, and the variable depends on others once a relation
+        is entered there. Unticked: independent again (its relation dropped)."""
+        self._open = bool(self.dep.get())
+        if not self._open and self.app.ad.is_dependent(self.name):
+            self.app.guard(lambda: self.app.ad.set_relation(self.name, ""))
+            self.app.after_change()
+            return
+        self.refresh(slider=False)
+        if self._open:
+            self.rel.focus_set()
+
+    def on_relation(self, _event=None):
+        """The relation entered (Return, or the entry left): the variable depends on the others as it says, and
+        the design follows at once; an empty one makes it independent. A text that is no relation is named in
+        the status bar and changes nothing."""
+        ad = self.app.ad
+        try:
+            text = self.rel.get().strip()
+        except tk.TclError:                              # the row is gone (panel rebuilt)
+            return
+        if text == ad.relation(self.name):
+            return
+        try:
+            shown = ad.set_relation(self.name, text)
+        except ValueError as exc:
+            self.app.say(f"{self.name}: {exc}", error=True)
+            return
+        self.rel.delete(0, "end")                        # as the tool writes it ('> 0.5*v4' for '>0.5v4')
+        self.rel.insert(0, shown)
+        self.app.after_change()
 
 
 class App:
@@ -690,7 +807,7 @@ class App:
             ttk.Separator(left, orient="horizontal").pack(fill="x", side="top", pady=(2, 0))
         self.outbar = ttk.Frame(left)                              # the Output box, under the panel: always in view
         self.outbar.pack(fill="x", side="bottom")
-        canvas = tk.Canvas(left, width=610, highlightthickness=0)
+        canvas = tk.Canvas(left, width=640, highlightthickness=0)
         sb = ttk.Scrollbar(left, orient="vertical", command=canvas.yview)
         self.panel = ttk.Frame(canvas)
         self.panel.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
@@ -833,9 +950,9 @@ class App:
             if spec.kind == "var":
                 self.rows.append(VarRow(self, grid, r, spec))
             else:
-                ttk.Label(grid, text=spec.label, foreground=RED).grid(row=r, column=1, sticky="w")
+                ttk.Label(grid, text=spec.label, foreground=RED).grid(row=grid_row(r), column=2, sticky="w")
                 lab = ttk.Label(grid, text=spec.text, foreground=INK2)
-                lab.grid(row=r, column=2, columnspan=5, sticky="w")
+                lab.grid(row=grid_row(r), column=3, columnspan=COLS - 3, sticky="w")
                 self.pinned.append(lab)
 
         for w in self.outbar.winfo_children():
@@ -883,8 +1000,8 @@ class App:
 
     @staticmethod
     def _header(parent):
-        for c, t in enumerate(("free", "", "low", "", "high", "value", "where")):
-            ttk.Label(parent, text=t, foreground=INK2).grid(row=0, column=c, sticky="w")
+        for c, t in enumerate(("free", "name", "", "low", "", "high", "value", "where", "dep")):
+            ttk.Label(parent, text=t, foreground=INK2).grid(row=0, column=c, sticky="w", padx=(0, 4))
 
     def refresh_labels(self):
         self.free_label.configure(text=self.ad.summary())
@@ -1166,6 +1283,9 @@ class App:
             else:
                 self.views.update(pv, self.curve.get())
                 self.canvas.draw_idle()
+            notes = self.ad.relation_notes()             # a relation dropped with a variable that is gone
+            if notes:
+                self._note = "; ".join(([self._note] if self._note else []) + notes)
             if pv["problems"]:
                 self.say(f"problem (no {self.ad.build_label} until it is solved): " + "; ".join(pv["problems"]),
                          error=True)
@@ -1672,7 +1792,7 @@ def rudder_panel(app):
     app._header(box)
     app.rows.append(VarRow(app, box, 1, Row("var", "H (mm)", "H", 3)))
     row = ttk.Frame(box)
-    row.grid(row=2, column=0, columnspan=7, sticky="w", padx=2, pady=(4, 2))
+    row.grid(row=grid_row(2), column=0, columnspan=COLS, sticky="w", padx=2, pady=(4, 2))
     ttk.Label(row, text="full height").pack(side="left", padx=(2, 4))
     app.span_box = ttk.Spinbox(row, from_=round(XR.SPAN_RANGE[0] * ad.span0, 1),
                                to=round(XR.SPAN_RANGE[1] * ad.span0, 1), increment=1.0, width=8, command=app.on_span)
@@ -1685,7 +1805,7 @@ def rudder_panel(app):
               wraplength=430, justify="left").pack(side="left", padx=6)
     state = ad.tangent_state()
     row = ttk.Frame(box)
-    row.grid(row=3, column=0, columnspan=7, sticky="w", padx=2, pady=(2, 2))
+    row.grid(row=grid_row(3), column=0, columnspan=COLS, sticky="w", padx=2, pady=(2, 2))
     app.tangent_all = tk.BooleanVar(value=state == "all")
     ttk.Checkbutton(row, text="tangent at H", variable=app.tangent_all,
                     command=app.on_tangent_all).pack(side="left", padx=(2, 4))
@@ -1769,7 +1889,7 @@ def blade_panel(app):
     for r, spec in enumerate(specs, start=1):
         app.rows.append(VarRow(app, box, r, spec))
     row = ttk.Frame(box)
-    row.grid(row=len(specs) + 1, column=0, columnspan=7, sticky="w", padx=2, pady=(4, 2))
+    row.grid(row=grid_row(len(specs) + 1), column=0, columnspan=COLS, sticky="w", padx=2, pady=(4, 2))
     ttk.Label(row, text="hub").pack(side="left", padx=(2, 4))
     app.vhub = tk.StringVar(value=ad.hub_shape)
     for shape in ad.hub_shapes:
@@ -1782,7 +1902,7 @@ def blade_panel(app):
                          "base and top radii, the base's x and a rounded nose"),
               foreground=INK2, wraplength=440, justify="left").pack(side="left", padx=6)
     row = ttk.Frame(box)
-    row.grid(row=len(specs) + 2, column=0, columnspan=7, sticky="w", padx=2, pady=(2, 2))
+    row.grid(row=grid_row(len(specs) + 2), column=0, columnspan=COLS, sticky="w", padx=2, pady=(2, 2))
     ttk.Label(row, text="blades Z").pack(side="left", padx=(2, 4))
     app.nblades = ttk.Spinbox(row, from_=BM.BLADES[0], to=BM.BLADES[1], width=4, command=app.on_blades)
     app.nblades.set(p.blades)
@@ -1857,8 +1977,9 @@ def hull_panel(app):
         app.rows.append(VarRow(app, box, r, spec))
     app.elliptic = tk.BooleanVar(value=ad.elliptic)
     ttk.Checkbutton(box, text="elliptical sections: the half-width r' has radii and curves of its own",
-                    variable=app.elliptic, command=app.on_elliptic).grid(row=len(specs) + 1, column=0, columnspan=7,
-                                                                         sticky="w", padx=2, pady=(4, 2))
+                    variable=app.elliptic, command=app.on_elliptic).grid(row=grid_row(len(specs) + 1), column=0,
+                                                                         columnspan=COLS, sticky="w", padx=2,
+                                                                         pady=(4, 2))
 
     box = ttk.LabelFrame(app.panel, text="Curves (pick the curve to edit)")
     box.pack(fill="x", padx=6, pady=4)
@@ -1894,7 +2015,7 @@ def wing_panel(app):
     for r, spec in enumerate(specs, start=1):
         app.rows.append(VarRow(app, box, r, spec))
     row = ttk.Frame(box)
-    row.grid(row=len(specs) + 1, column=0, columnspan=7, sticky="w", padx=2, pady=(4, 2))
+    row.grid(row=grid_row(len(specs) + 1), column=0, columnspan=COLS, sticky="w", padx=2, pady=(4, 2))
     app.wsec = {}
     for key, text, kw in (("sections", "sections", dict(from_=3, to=401, width=5)),
                           ("changes", "change points", dict(from_=0, to=WM.MAX_CHANGES, width=4))):
@@ -1907,7 +2028,7 @@ def wing_panel(app):
     app.wsec["sections"].set(ad.settings["sections"])
     app.wsec["changes"].set(ad.design.changes)
     app.sec_info = ttk.Label(box, foreground=INK2, wraplength=560, justify="left")
-    app.sec_info.grid(row=len(specs) + 2, column=0, columnspan=7, sticky="w", padx=4)
+    app.sec_info.grid(row=grid_row(len(specs) + 2), column=0, columnspan=COLS, sticky="w", padx=4)
 
     box = ttk.LabelFrame(app.panel, text="Distributions and section changes (pick the curve to edit)")
     box.pack(fill="x", padx=6, pady=4)

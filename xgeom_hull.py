@@ -13,6 +13,8 @@ and each curve's exponent and free coefficients. The curves: nose r and tail r; 
 curves). A new order (set_order) is fitted to the file's stations while none of the curve's variables has
 changed, else to the curve's present shape. load_params reads a component file (its design and variables
 exactly; a table file's curves fitted); save_file writes the design and its variables as one (Save set-up).
+A variable is independent or dependent on others through a relation (xgeom_relations.AdapterRelations: relation,
+set_relation, limits; the dependent ones follow when the others move).
 
 The adapter has the methods of xgeom_rudder.RudderAdapter that the tool uses.
 """
@@ -25,6 +27,7 @@ import time
 import numpy as np
 
 import hull_modify as HM
+import xgeom_relations as REL
 from xgeom_common import AQUA, BLUE, GREY, GRID, INK2, ORANGE, RED, SECTION_COLORS, Row, fit_box, keep_fitted
 
 CURVES = ("nose_r", "tail_r", "nose_rp", "tail_rp")
@@ -38,7 +41,7 @@ SKELETON_STATIONS = 25                              # stations per curved part i
 DEFAULT_FILE = "suboff_hull.txt"                    # the hull to start with (not there: SUBOFF's equations)
 
 
-class HullAdapter:
+class HullAdapter(REL.AdapterRelations):
     joins = False                 # no join switch
     segment_choice = False        # one CST curve per part and view
     build_label = "CAD"
@@ -68,14 +71,13 @@ class HullAdapter:
         else:
             raise FileNotFoundError(path)
         self.params, self.source, self.design = params, source, design
-        self.meta = {n: {"lo": float(lo), "hi": float(hi), "free": n not in space.fixed}
-                     for n, (lo, hi) in zip(space.all_names, space.all_bounds)}
+        self.meta = self.meta_of(space)             # each variable's bounds, free flag and (dependent) relation
         self.as_fitted = set(self.design.curves)    # curves still as the file has them (no variable changed)
         self._rebuild()
 
     def save_file(self, path):
-        """Write the design and its variables (bounds, free flags) as a component file (hull_modify.
-        write_component), which load_params reads back exactly; it is the file in use then."""
+        """Write the design and its variables (bounds, free flags, the dependent ones' relations) as a component
+        file (hull_modify.write_component), which load_params reads back exactly; it is the file in use then."""
         HM.write_component(path, self.params, self.design, self.free_space(),
                            os.path.splitext(os.path.basename(path))[0], self.notes,
                            settings={"half": self.settings.get("half", False)})
@@ -98,8 +100,9 @@ class HullAdapter:
 
     # ---------------------------------------------------------------- state
     def _rebuild(self):
-        """The space for the present curves, keeping the bounds and free flags of every slot that is still
-        there; a new slot gets hull_modify's default bounds and is free as in hull_modify.DEFAULT_FREE."""
+        """The space for the present curves, keeping the bounds, free flags and relations of every slot that
+        is still there; a new slot gets hull_modify's default bounds and is free as in hull_modify.DEFAULT_FREE.
+        The dependent variables then follow (xgeom_relations)."""
         full = HM.HullSpace(self.design, fixed={})
         held = HM.HullSpace(self.design).fixed
         self.meta = {n: self.meta.get(n, {"lo": float(lo), "hi": float(hi), "free": n not in held})
@@ -107,6 +110,7 @@ class HullAdapter:
         self.space = HM.HullSpace(self.design, bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()},
                                   fixed={})
         self.values = self.space.values(self.design)
+        self.follow(note=True)
 
     def get(self, name):
         return self.values[name]
@@ -118,14 +122,13 @@ class HullAdapter:
         return self.meta[name]["free"]
 
     def set(self, name, value):
-        """Set one variable; returns the value used (clamped to its bounds)."""
-        lo, hi = self.bounds(name)
-        value = float(min(max(value, lo), hi))
-        vals = dict(self.values)
-        vals[name] = value
+        """Set one variable; returns the value used (kept inside its limits: its bounds and, a dependent
+        variable, its relations). The variables that depend on it follow."""
+        vals, value, moved = self._moved(name, value)
         self.design = self.space.design_of(vals)
         self.values = self.space.values(self.design)
-        self.as_fitted.discard(name.split(".")[0])
+        for n in moved:
+            self.as_fitted.discard(n.split(".")[0])
         return value
 
     def set_bounds(self, name, lo, hi):
@@ -277,15 +280,14 @@ class HullAdapter:
         n, out = c.order, []
         for i in range(n + 1):
             key = (f"b{i}" if i <= n - 2 else None) if c.kind == "nose" else (f"t{i}" if i >= 2 else None)
-            out.append("pinned" if key is None else "free" if self.meta[f"{curve}.{key}"]["free"] else "held")
+            out.append("pinned" if key is None else "free" if self.varies(f"{curve}.{key}") else "held")
         return np.array(out)
 
     def n_free(self, curve=None):
         names = [n for n in self.space.all_names if curve is None or n.startswith(curve + ".")]
-        return sum(1 for n in names if self.meta[n]["free"]), len(names)
+        return sum(1 for n in names if self.varies(n)), len(names)
 
     def summary(self):
-        n, m = self.n_free()
         d = self.design
         size = (f"D {2 * d.r:.4g} m" if d.axisymmetric else
                 f"depth {2 * d.r:.4g} m, breadth {2 * d.rp:.4g} m (elliptical sections)")
@@ -296,7 +298,7 @@ class HullAdapter:
         except Exception:                                    # a design with problems: the status bar says why
             hydro = ""
         aft = "" if d.nose > 0 else " (no nose: an aft half, the front a flat face)"
-        return f"{n} of {m} variables free; L {d.length:.4g} m{aft}, {size}{hydro}"
+        return f"{self.free_text()}; L {d.length:.4g} m{aft}, {size}{hydro}"
 
     def describe(self, curve):
         c = self.design.curves[curve]
@@ -320,13 +322,14 @@ class HullAdapter:
 
     # ---------------------------------------------------------------- preview
     def preview(self, skeleton=False):
-        """What the live views draw: the design and its problems, the half-profiles r and r' along x, the
-        parameter file; with skeleton the sections of the 3D sections tab by part."""
+        """What the live views draw: the design and its problems, its warnings (the relations of dependent
+        variables that do not hold), the half-profiles r and r' along x, the parameter file; with skeleton the
+        sections of the 3D sections tab by part."""
         t0 = time.time()
         d = self.design
         x = HM.stations_x(d, 161)
         out = {"design": d, "params": self.params, "x": x, "r": d.radius("r", x), "rp": d.radius("rp", x),
-               "problems": HM.design_problems(d)}
+               "problems": HM.design_problems(d), "warnings": self.relation_warnings()}
         if skeleton:
             xs = HM.stations_x(d, SKELETON_STATIONS)
             part = np.clip(np.searchsorted(d.joins[1:-1], xs, side="left"), 0, 3)    # nose 0 .. cap 3
@@ -344,9 +347,11 @@ class HullAdapter:
 
     # ---------------------------------------------------------------- output
     def free_space(self):
-        """The design space with the unticked variables held fixed: the one an optimiser gets."""
+        """The design space with the unticked variables held fixed and the dependent ones' relations: the one
+        an optimiser gets."""
         fixed = {n: self.values[n] for n in self.space.all_names if not self.meta[n]["free"]}
-        return HM.HullSpace(self.design, bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()}, fixed=fixed)
+        return self.related(HM.HullSpace(self.design, bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()},
+                                         fixed=fixed))
 
     def build_task(self, case, half=None):
         """A function that writes the case as the design is now (hull_modify.write_case: the component file,

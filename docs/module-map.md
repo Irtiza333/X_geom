@@ -27,6 +27,7 @@ Vehicle tab. Each component is an adapter class that the window drives through t
 | `xgeom_wing.py` | The wing and the fin (and the planar rudder's own model), and the blended wing body (`BwbAdapter`, the Hull slot's other body: mirrored views, the whole or half CAD): a wing file as variables, views, the CAD build | X_geom, web | wing, contract |
 | `xgeom_vehicle.py` | The Vehicle tab: the propeller, rudders, fins and wings placed on the hull (positions as x/L), `assemble()` | X_geom, web | hull, wing, files, contract |
 | `xgeom_files.py` | The component and assembly files: read and write (an old `.dat` parameter file is refused, named as one) | X_geom, web | files, wing, contract |
+| `xgeom_relations.py` | Independent and dependent variables: a relation's grammar (`> 0.5*v4`), a variable's limits, the dependent ones following the others; `SpaceRelations` (every design space: relations, violations, project) and `AdapterRelations` (every adapter: relation, set_relation, limits); numpy only | both, web | relations, files, contract |
 | `xgeom_from_cad.py` | From CAD: a set-up from a STEP or IGES file (extraction and fits per component); a planar rudder's file as the original modified below H | both (the Rudder copy is older) | tool, wing, hull, blade |
 | `vehicle_cad.py` | The vehicle as one CAD solid (Vehicle CAD): each component's CAD placed and fused; blade solids, booleans | X_geom | hull, wing, blade |
 
@@ -137,6 +138,7 @@ suites without OCC; the cloud runs them with cadquery-ocp under Xvfb).
 | blade | `_xgeom_blade_test.py` (`--gui`) | blade_modify and its files, extraction, sections, hub, Initial_sampling | X_geom |
 | files | `_xgeom_files_test.py` (`--gui`) | the component and assembly files | X_geom |
 | contract | `_xgeom_web_contract_test.py` | what the web app relies on (Eddie's; run before handing a change over) | X_geom |
+| relations | `_xgeom_relations_test.py` (`--gui`) | xgeom_relations: the grammar, limits and following; relations in every design space, in the component files and the rudder's set-up JSON, in the adapters and the window's rows | both (the Rudder folder: the module and the rudder) |
 | modify | `_rudder_modify_test.py` | rudder_modify, bezier_section, the replica's pieces | both |
 | section_fit | `_section_fit_test.py` | Main_PSO, the replica, retruncate, temp_funcs | both |
 | rudder_param | `_rudder_param_test.py` | Rudder_geom_extraction's spanwise parameters | both |
@@ -172,12 +174,13 @@ On the user's machine but not in the repository: copies named `*-1.py` (`blade_m
 
 ## The Rudder folder
 
-Its 27 modules are all copies of X_geom's: `xgeom_tool.py`, `xgeom_common.py`, `xgeom_rudder.py`,
-`rudder_modify.py`, `modify_control.py`, `bezier_section.py`, `tip_cap.py`, `xcad_loft.py`,
+Its 29 modules are all copies of X_geom's: `xgeom_tool.py`, `xgeom_common.py`, `xgeom_relations.py`,
+`xgeom_rudder.py`, `rudder_modify.py`, `modify_control.py`, `bezier_section.py`, `tip_cap.py`, `xcad_loft.py`,
 `temp_rudder_cad.py`, `Rudder_geom_extraction.py`, `rot_axis.py`, `skew_symmetric_matrix.py`, the section fit's
 nine (`control.py`, `match_rudder_section.py`, `replica_funcs.py`, `retruncate.py`, `temp_funcs.py`,
-`Main_PSO.py`, `bound_check.py`, `penalty.py`, `repair.py`) and five self-checks (`_xgeom_tool_test.py`,
-`_rudder_modify_test.py`, `_section_fit_test.py`, `_rudder_param_test.py`, `_tip_cap_test.py`), all
+`Main_PSO.py`, `bound_check.py`, `penalty.py`, `repair.py`) and six self-checks (`_xgeom_tool_test.py`,
+`_xgeom_relations_test.py`, `_rudder_modify_test.py`, `_section_fit_test.py`, `_rudder_param_test.py`,
+`_tip_cap_test.py`), all
 byte-identical, and `xgeom_from_cad.py`, an older copy kept as it is.
 
 ## Before handing a change over

@@ -22,7 +22,8 @@ Component file ('#' lines are the header, the rest is one table, which np.loadtx
     # ...
     # ---- curves and variables
     # curve  pitch      bezier2                   table | bezier1 <points> | bezier2; the hull's: cst <order>
-    # var    pitch.v1   1.24135133  0.6  1.4  Y   value, low, high, free (Y) or held (N)
+    # var    pitch.v1   1.24135133  0.6  1.4  Y   value, low, high, free (Y) or held (N): independent
+    # var    pitch.v4   0.9  0.6  1.4  Y  <= 0.9*pitch.v1      the same and a relation: dependent
     # ...
     # ---- distributions
     # r/R  P/D  c/D  t/c  f/c  skew_deg  rake/D    the last '#' line above the table names its columns
@@ -35,7 +36,12 @@ Component file ('#' lines are the header, the rest is one table, which np.loadtx
             variables), bezier1 <points> (one Bezier from the root to the tip), bezier2 (two rational cubic
             segments, x_blade's form), smooth2 (a blended wing body's: two cubic segments joined smoothly, flat
             at the centre line; wing_modify.SmoothTwoSegmentCurve), cst <order> (a hull curve)
-    var     one variable: its value, its bounds and whether it is free (a design variable) or held
+    var     one variable, the same line in every component file: '<name> <value> <low> <high> <Y|N>
+            [<relation>, ...]', its value, its bounds, whether it is free (a design variable) or held, and
+            for a dependent variable its relation to others: one of < <= > >= = and an expression of other
+            variables (numbers, names, + - * /, brackets), several separated by commas (xgeom_relations.py:
+            the variable then stays within its bounds and its relations; '=': it follows the others and is
+            no design variable). Without a relation the variable is independent
     vary    '<name> Y|N [low high]' (blade_vary.py): the curves and globals with no var lines are free (Y) or
             held (N), their values within low .. high when given; hand-written, or a blade's table file
             (blade_modify.write_params) that has them
@@ -81,6 +87,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+import xgeom_relations as REL
+
 COMPONENT = "# XGeom component"
 ASSEMBLY = "# XGeom assembly"
 PLANAR = ("rudder", "fin", "wing", "bwb")         # bwb: a blended wing body (20 Nov 2026)
@@ -119,15 +127,22 @@ PLACEMENT_KEYS = ("prop_x", "prop_d", "rudder_x", "rudder_angle", "rudders", "ru
                   "fin_x", "fins", "fin_angle", "fin_scale", "wing_x", "wings", "wing_angle", "wing_scale", "view")
 RUN_KEYS = ("samples", "batch", "seed", "cad_timeout_s")
 KEY_WIDTH = 14
+VAR_TITLE = ("# ---- var <name> <value> <low> <high> <Y free | N held> [<relation>]: independent without a relation; "
+             "dependent with one,",
+             "# ----     an operator (< <= > >= =) and an expression of other variables, such as <= 0.5*{a} + 2*{b}")
+VAR_EXAMPLE = {**{k: ("chord.v2", "chord.v3") for k in KINDS}, "hull": ("nose_r.b1", "nose_r.b2")}   # the var
+                                                         # line's title, the same in every component file
 
 
 @dataclass
 class Var:
-    """One variable: its value, bounds and whether it is free (a design variable) or held."""
+    """One variable: its value, bounds and whether it is free (a design variable) or held; a dependent
+    variable's relation to others (xgeom_relations.py; '' for an independent one)."""
     value: float
     lo: float
     hi: float
     free: bool
+    relation: str = ""
 
 
 @dataclass
@@ -306,9 +321,9 @@ def settings_text(settings, types):
 
 def vars_of(space, design):
     """{variable: Var} of a design space with a design in it (blade_modify.BladeSpace, wing_modify.WingSpace or
-    hull_modify.HullSpace: all_names, all_bounds, fixed, values)."""
+    hull_modify.HullSpace: all_names, all_bounds, fixed, values, and relation for the dependent ones)."""
     vals = space.values(design)
-    return {n: Var(float(vals[n]), float(lo), float(hi), n not in space.fixed)
+    return {n: Var(float(vals[n]), float(lo), float(hi), n not in space.fixed, space.relation(n))
             for n, (lo, hi) in zip(space.all_names, space.all_bounds)}
 
 
@@ -439,8 +454,8 @@ def _read_curve(comp, parts, where):
 
 
 def _read_var(comp, parts, where):
-    if len(parts) != 5:
-        raise ValueError(f"{where}: '# var <name> <value> <low> <high> <Y|N>'")
+    if len(parts) < 5:
+        raise ValueError(f"{where}: '# var <name> <value> <low> <high> <Y|N> [<relation>, ...]'")
     name = parts[0]
     try:
         value, lo, hi = (float(v) for v in parts[1:4])
@@ -450,7 +465,12 @@ def _read_var(comp, parts, where):
         raise ValueError(f"{where}: low must lie below high")
     if name in comp.vars:
         raise ValueError(f"{where}: {name} has a var line already")
-    comp.vars[name] = Var(value, lo, hi, as_bool(parts[4], where))
+    relation = " ".join(parts[5:])                    # a dependent variable's; its names are checked with the
+    try:                                              # space (the modules' load_component), its grammar here
+        REL.parse(relation)
+    except ValueError as exc:
+        raise ValueError(f"{where}: the relation of {name}: {exc}") from None
+    comp.vars[name] = Var(value, lo, hi, as_bool(parts[4], where), relation)
 
 
 def _read_vary(comp, parts, where):
@@ -490,7 +510,9 @@ def component_text(comp):
     if comp.curves or comp.vars:
         forms = {"hull": "cst <order>", "bwb": "table | bezier1 <points> | smooth2"}.get(
             comp.kind, "table | bezier1 <points> | bezier2")
-        out.append(f"# ---- curves ({forms}) and variables (value, low, high, free Y or held N)")
+        a, b = VAR_EXAMPLE[comp.kind]
+        out += ["# ---- curves and variables", f"# ---- curve <name> <form>: {forms}", VAR_TITLE[0],
+                VAR_TITLE[1].format(a=a, b=b)]
         groups = {c: [] for c in comp.curves}
         loose = []
         for n in comp.vars:
@@ -499,7 +521,8 @@ def component_text(comp):
 
         def var_line(n):
             v = comp.vars[n]
-            return f"# var    {n:<{w}s}  {num(v.value, 12):>18s}  {num(v.lo):>16s}  {num(v.hi):>16s}  {yn(v.free)}"
+            return (f"# var    {n:<{w}s}  {num(v.value, 12):>18s}  {num(v.lo):>16s}  {num(v.hi):>16s}  {yn(v.free)}"
+                    + (f"  {v.relation}" if v.relation else ""))
         out += [var_line(n) for n in loose]
         for c, (form, k) in comp.curves.items():
             out.append(f"# curve  {c:<{w}s}  {form}" + (f" {k}" if k is not None else ""))

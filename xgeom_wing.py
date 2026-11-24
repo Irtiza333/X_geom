@@ -22,7 +22,9 @@ staying. A new form or order is fitted to the parameter file while none of the c
 else to the curve's present shape. set_changes sets the number of change points along the chord (0 to 8): the
 changes are carried over, exactly when there are more of them. set_sections sets the sections of the XCAD file.
 load_params reads a component file (its design, variables and settings exactly; a table file's curves fitted);
-save_file writes the design, its variables and the settings as one (Save set-up).
+save_file writes the design, its variables and the settings as one (Save set-up). A variable is independent or
+dependent on others through a relation (xgeom_relations.AdapterRelations: relation, set_relation, limits; the
+dependent ones follow when the others move).
 
 The views are drawn as the rudder's, in the wing's own frame: x (or the curve's value) across and the span up.
 The Design tab has only what a design is decided on (the picked curve, the sections over the chord); the 3D
@@ -39,6 +41,7 @@ import time
 import numpy as np
 
 import wing_modify as WM
+import xgeom_relations as REL
 from xgeom_common import BLUE, GREY, GRID, INK2, RED, SECTION_COLORS, Row, fit_box, keep_fitted
 
 GREEN = "#1f8a70"                                  # the tip cap's loops in the 3D view
@@ -63,7 +66,7 @@ SEGMENT_TEXT = {0: "table", 1: "1", 2: "2", 3: "2 smooth"}             # the seg
 DIGITS = {"chord": 2, "sweep": 2, "rake": 2, "pitch": 3}  # value digits; t/c, f/c and the changes 5
 
 
-class WingAdapter:
+class WingAdapter(REL.AdapterRelations):
     joins = False                 # the curves have no join to switch
     segment_choice = True         # each curve 1 or 2 segments, or as the table has it (0)
     segment_options = (0, 1, 2)   # 0: as the table has it ("table"); 3: 2 smooth segments (a blended wing body)
@@ -87,8 +90,7 @@ class WingAdapter:
         a table file's distributions fitted, 1 segment, the variables of FREE free)."""
         ld = WM.load_component(path, free=self.settings["free"])
         self.params, self.design = ld.params, ld.design
-        self.meta = {n: {"lo": float(lo), "hi": float(hi), "free": n not in ld.space.fixed}
-                     for n, (lo, hi) in zip(ld.space.all_names, ld.space.all_bounds)}
+        self.meta = self.meta_of(ld.space)          # each variable's bounds, free flag and (dependent) relation
         self.settings.update({k: v for k, v in ld.settings.items() if k in self.CASE_KEYS})
         self.file, self.notes = os.path.abspath(path), ld.notes
         self.as_fitted = set(self.design.names)     # curves still as the file has them (no variable changed)
@@ -96,9 +98,9 @@ class WingAdapter:
         self._original = None
 
     def save_file(self, path):
-        """Write the design, its variables (bounds, free flags) and the settings as a component file of this
-        role's kind (wing_modify.write_component), which load_params reads back exactly; it is the file in use
-        then."""
+        """Write the design, its variables (bounds, free flags, the dependent ones' relations) and the settings
+        as a component file of this role's kind (wing_modify.write_component), which load_params reads back
+        exactly; it is the file in use then."""
         WM.write_component(path, self.params, self.design, self.free_space(), self._case_settings(),
                            os.path.splitext(os.path.basename(path))[0], self.notes, self.role)
         self.file = os.path.abspath(path)
@@ -124,7 +126,8 @@ class WingAdapter:
 
     # ---------------------------------------------------------------- state
     def _rebuild(self):
-        """The space for the present curves, keeping the bounds and free flags of every slot still there."""
+        """The space for the present curves, keeping the bounds, free flags and relations of every slot still
+        there; the dependent variables then follow (xgeom_relations)."""
         full = WM.WingSpace(self.params, self.design)
         free0 = self.settings["free"]
         self.meta = {n: self.meta.get(n, {"lo": float(lo), "hi": float(hi), "free": n.split(".")[0] in free0})
@@ -132,6 +135,7 @@ class WingAdapter:
         self.space = WM.WingSpace(self.params, self.design,
                                   bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()})
         self.values = self.space.values(self.design)
+        self.follow(note=True)
 
     def get(self, name):
         return self.values[name]
@@ -143,14 +147,13 @@ class WingAdapter:
         return self.meta[name]["free"]
 
     def set(self, name, value):
-        """Set one variable; returns the value used (clamped to its bounds)."""
-        lo, hi = self.bounds(name)
-        value = float(min(max(value, lo), hi))
-        vals = dict(self.values)
-        vals[name] = value
+        """Set one variable; returns the value used (kept inside its limits: its bounds and, a dependent
+        variable, its relations). The variables that depend on it follow."""
+        vals, value, moved = self._moved(name, value)
         self.design = self.space.design_of(vals)
         self.values = self.space.values(self.design)
-        self.as_fitted.discard(name.split(".")[0])
+        for n in moved:
+            self.as_fitted.discard(n.split(".")[0])
         return value
 
     def set_bounds(self, name, lo, hi):
@@ -325,7 +328,7 @@ class WingAdapter:
         cu = self.design.curves[curve]
         if cu.segments == 0:
             return np.zeros(len(cu.r), dtype=bool)
-        free = {k: self.meta[f"{curve}.{k}"]["free"] for k in cu.keys() if f"{curve}.{k}" in self.meta}
+        free = {k: self.varies(f"{curve}.{k}") for k in cu.keys() if f"{curve}.{k}" in self.meta}
         if cu.segments == 2:
             groups = (("v1",), ("d1", "w23"), ("d1", "w23"), ("u4", "v4"), ("d2", "w56"), ("d2", "w56"), ("v7",))
             return np.array([any(free.get(k, False) for k in g) for g in groups])
@@ -339,17 +342,16 @@ class WingAdapter:
 
     def n_free(self, curve=None):
         names = [n for n in self.space.all_names if curve is None or n.startswith(curve + ".")]
-        return sum(1 for n in names if self.meta[n]["free"]), len(names)
+        return sum(1 for n in names if self.varies(n)), len(names)
 
     def summary(self):
-        n, m = self.n_free()
         d = self.design
         c = d.at("chord", [0.0, 1.0])
         if self.params.flat:
-            return (f"{n} of {m} variables free; span {2 * d.span:.1f} mm (two halves of {d.span:.1f} mm), chord "
+            return (f"{self.free_text()}; span {2 * d.span:.1f} mm (two halves of {d.span:.1f} mm), chord "
                     f"{c[0]:.1f} mm at the centre line and {c[1]:.1f} mm at the tips; {d.changes} change point"
                     f"{'s' if d.changes != 1 else ''} along the chord")
-        return (f"{n} of {m} variables free; span {d.span:.1f} mm, chord {c[0]:.1f} mm at the root and {c[1]:.1f} mm "
+        return (f"{self.free_text()}; span {d.span:.1f} mm, chord {c[0]:.1f} mm at the root and {c[1]:.1f} mm "
                 f"at the tip; {d.changes} change point{'s' if d.changes != 1 else ''} along the chord")
 
     def pick_note(self, curve):
@@ -442,7 +444,7 @@ class WingAdapter:
             out["orig"] = self._original_views()
         except Exception:
             out["orig"] = None
-        out["problems"], out["warnings"] = problems, warnings
+        out["problems"], out["warnings"] = problems, warnings + self.relation_warnings()
         if skeleton:
             try:
                 out["skeleton"] = WM.section_loops(d, p, self.stations(), self.settings["points"])
@@ -462,10 +464,11 @@ class WingAdapter:
 
     # ---------------------------------------------------------------- output
     def free_space(self):
-        """The design space with the unticked variables held fixed: the one an optimiser gets."""
+        """The design space with the unticked variables held fixed and the dependent ones' relations: the one
+        an optimiser gets."""
         fixed = {n: self.values[n] for n in self.space.all_names if not self.meta[n]["free"]}
-        return WM.WingSpace(self.params, self.design, bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()},
-                            fixed=fixed)
+        return self.related(WM.WingSpace(self.params, self.design,
+                                         bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()}, fixed=fixed))
 
     CASE_KEYS = ("sections", "points", "half", "cap_loops")
 

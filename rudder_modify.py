@@ -93,6 +93,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 import bezier_section as BS
+import xgeom_relations as REL
 from replica_funcs import bernstein, build_half_airfoil, mirror_selig
 
 BASE_DEGREE = 4                  # the section table's fits are quartics; no lower degree is exact
@@ -672,7 +673,7 @@ def default_bounds(z_top, h_min=None, h_max=None):
     return {"H": (h_min, h_max), "d": (0.05, 0.95), "LE": (-4.0 * h_max, 0.0), "x": (0.0, 1.0), "z": (0.0, 0.2)}
 
 
-class DesignSpace:
+class DesignSpace(REL.SpaceRelations):
     """A flat design vector for an optimiser, and the Design it stands for.
 
     The slots, in order: H, then for each curve of orig.names d_1 .. d_(n-1),
@@ -694,7 +695,11 @@ class DesignSpace:
                the vector x (the design variables are the other slots)
 
     all_names / all_bounds cover every slot, names / bounds the free ones;
-    len(space) is the number of design variables."""
+    len(space) is the number of design variables.
+
+    Dependent variables (xgeom_relations.SpaceRelations): set_relations({slot:
+    relation text}), relations, violations(x), project(x); a slot defined
+    with '=' leaves the vector (full_vector works it out)."""
 
     def __init__(self, orig, orders=None, join="G1", weights=None, bounds=None, h_min=None, h_max=None,
                  fixed=None):
@@ -744,15 +749,6 @@ class DesignSpace:
     def __len__(self):
         return len(self.names)
 
-    def full_vector(self, x):
-        """Every slot's value: the design variables x and the fixed slots."""
-        x = np.asarray(x, dtype=float)
-        if x.shape != (len(self.names),):
-            raise ValueError(f"the design vector has {len(self.names)} entries")
-        full = np.array([self.fixed.get(n, np.nan) for n in self.all_names])
-        full[self._free] = x
-        return full
-
     def to_design(self, x):
         """The (pinned) Design of the design vector x."""
         return self._design_of(self.full_vector(x))
@@ -801,17 +797,16 @@ class DesignSpace:
 
     def to_dict(self, design):
         """The space and a design in it, as plain data (JSON): the section
-        degree, orders, joins, weights, every slot with its value, bounds and
-        whether it is free, and the design vector (names, values, bounds).
-        from_dict reads it back."""
+        degree, orders, joins, weights, every slot with its value, bounds,
+        whether it is free and (a dependent variable) its relation, and the
+        design vector (names, values, bounds). from_dict reads it back."""
         vals = self.values(design)
         return {"z_top_mm": self.orig.z_top, "h_min_mm": float(self.all_bounds[0, 0]),
                 "h_max_mm": float(self.all_bounds[0, 1]),
                 "degree": int(self.orig.degree),
                 "orders": {c: int(self.orders[c]) for c in self.curves}, "join": dict(self.join),
                 "weights": {c: (None if self.weights[c] is None else self.weights[c].tolist()) for c in self.curves},
-                "slots": [{"name": n, "value": vals[n], "lo": float(lo), "hi": float(hi), "free": n not in self.fixed}
-                          for n, (lo, hi) in zip(self.all_names, self.all_bounds)],
+                "slots": self.slot_records(vals),
                 "vector": {"names": self.names, "values": [vals[n] for n in self.names],
                            "bounds": self.bounds.tolist()}}
 
@@ -826,6 +821,7 @@ class DesignSpace:
         weights = {c: w for c, w in (rec.get("weights") or {}).items() if w is not None}
         space = cls(orig, rec["orders"], rec["join"], weights, bounds, h_min=bounds["H"][0], h_max=bounds["H"][1],
                     fixed=fixed)
+        space.set_relations({q["name"]: q["relation"] for q in slots if q.get("relation")})
         return space, space.design_of({q["name"]: q["value"] for q in slots})
 
 

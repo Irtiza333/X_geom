@@ -72,15 +72,15 @@ def read_vary(path):
 
 
 def read_free(path):
-    """{name: Vary} of a component file's '# var <name> <value> <low> <high> Y|N' lines, every VARY_NAMES: a
-    parameter is on (Y, no range) when one of its variables is free (pitch.v1, ... for a distribution); {} when
-    the file has no var line."""
+    """{name: Vary} of a component file's '# var <name> <value> <low> <high> Y|N [<relation>]' lines, every
+    VARY_NAMES: a parameter is on (Y, no range) when one of its variables is free (pitch.v1, ... for a
+    distribution); {} when the file has no var line."""
     on = {}
     with open(path) as fh:
         for line in fh:
             s = line.strip()
             parts = s[1:].split() if s.startswith("#") else []
-            if len(parts) != 6 or parts[0] != "var":
+            if len(parts) < 6 or parts[0] != "var":
                 continue
             name = parts[1].split(".")[0]
             on[name] = on.get(name, False) or parts[5].upper() in ("Y", "YES", "1", "TRUE")

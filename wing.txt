@@ -12,7 +12,10 @@
 # change_points 3
 # half          N
 # cap_loops     40
-# ---- curves (table | bezier1 <points> | bezier2) and variables (value, low, high, free Y or held N)
+# ---- curves and variables
+# ---- curve <name> <form>: table | bezier1 <points> | bezier2
+# ---- var <name> <value> <low> <high> <Y free | N held> [<relation>]: independent without a relation; dependent with one,
+# ----     an operator (< <= > >= =) and an expression of other variables, such as <= 0.5*chord.v2 + 2*chord.v3
 # var    span                         200               100               300  Y
 # curve  pitch         bezier1 4
 # var    pitch.d1          0.333333333333              0.01              0.99  Y

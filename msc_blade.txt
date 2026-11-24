@@ -15,7 +15,10 @@
 # clearance_mm  25
 # hub           Y
 # part          sector
-# ---- curves (table | bezier1 <points> | bezier2) and variables (value, low, high, free Y or held N)
+# ---- curves and variables
+# ---- curve <name> <form>: table | bezier1 <points> | bezier2
+# ---- var <name> <value> <low> <high> <Y free | N held> [<relation>]: independent without a relation; dependent with one,
+# ----     an operator (< <= > >= =) and an expression of other variables, such as <= 0.5*chord.v2 + 2*chord.v3
 # var    radius                     0.7             0.524             0.875  N
 # var    hub_radius               0.126             0.063             0.189  N
 # var    hub_height               0.625             0.312              1.25  N

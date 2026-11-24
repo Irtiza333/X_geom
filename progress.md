@@ -884,6 +884,45 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   nothing else changed. Held only keeps a variable out of the optimiser's space; it moves in the panel either way.
   Tests: wing 79 (the samples all free, a user's holds carried to new change curves), hull 65, files 60 with the
   window; the contract test passes.
+- Independent and dependent variables, one structure in every set-up file (24 Nov 2026; the user: the variables
+  have been independent numbers so far, but one may have to depend on others, such as p1y <= 0.5*p2y + 2*p3y or
+  p2x > p1x + 0.2; a switch per variable between independent and dependent and, for a dependent one, an equation
+  like > 0.5p4y; and in the set-up files of every component the same fixed structure for declaring variables
+  and defining them with expressions). New module `xgeom_relations.py` (in the Rudder folder too): a relation is
+  an operator (< <= > >= =) and an expression of other variables of the component (numbers, names, + - * /,
+  brackets; 0.5v4 is 0.5*v4; several relations with commas; a variable of the same curve by its key, another by
+  its full name). `parse` and `text` (what is written is read back as the same relation), `order` (the order of
+  dependence; a loop is refused, named), `limits`, `nearest`, `apply`, `violations`. A dependent variable's
+  limits are its bounds narrowed by its relations at the other variables' present values: it moves inside them,
+  and when a variable it depends on moves it follows (each dependent variable into its limits, in the order of
+  dependence). With `=` it takes the expression's value and is no design variable. Relations that cannot hold
+  inside the bounds leave the variable on a bound, with a warning (the build still runs). Files: the var line
+  is `# var <name> <value> <low> <high> <Y|N> [<relation>, ...]` in every kind (`xgeom_files.Var.relation`; a
+  wrong grammar refused with the line, a name that is no variable or a loop with the file), and the curves and
+  variables block starts with title lines that name its two line forms; the rudder-h set-up JSON has
+  `"relation"` in a dependent variable's slot. A file with no dependent variable is written as before but for
+  those title lines. A file whose design breaks a relation loads as written (`space.design_violations`); the
+  tool then applies the relations and says which variables moved. Design spaces (`BladeSpace`, `WingSpace`,
+  `HullSpace` and the rudder's `DesignSpace`, now on `SpaceRelations`): `set_relations`, `relations`,
+  `violations(x)`, `project(x)`; `full_vector` is the mixin's one copy and works out the `=` variables, which
+  leave the design vector. Adapters (on `AdapterRelations`): `relation`, `set_relation`, `limits`,
+  `is_dependent`, `is_defined`, `varies`, `relation_notes`; `set()` keeps a variable inside its limits and lets
+  the dependent ones follow; a curve's new form drops the relations of its variables, and a relation elsewhere
+  that names a variable now gone (the status bar says so). The tool's rows are free | name | low | slider | high
+  | value | where | dep: the name is what a relation calls the variable; dep ticked opens the relation line
+  under the row (Return sets it), which shows the limits it gives now, and the slider runs over them; the left
+  panel is 640 px wide (610). `blade_vary.read_free` reads var lines with a relation (a pipeline folder's copy
+  needs this version for such a file; `Initial_sampling.py` does not apply relations: its variables are
+  para_control's). The five samples re-saved with the title lines (`bwb_glider.txt` also gains `# half N` and
+  `# cap_loops 40`, which Save set-up writes). For the web app: additive, nothing renamed (docs/keeping-
+  interfaces-stable.md). Copy the new module `xgeom_relations.py` (xgeom_files, the four *_modify modules and
+  the four adapters import it); a file with a relation needs this version to read; `meta[name]` has `"rel"`
+  for a dependent variable only; `n_free()` leaves out a variable defined with `=`; the hull's and the rudder's
+  `preview()` gain `"warnings"`. Not done: the rudder-h set-up stays JSON (the same six things per variable,
+  not yet the text layout of the component files). Tests: new `_xgeom_relations_test.py`, 69 with the window
+  (the grammar, limits and following, every design space, the files, the adapters, the rows; in the Rudder
+  folder the module and the rudder), tool 74, wing 79, files 60, hull 65, blade 79 with the window, modify 136,
+  hull_modify 17; the contract test passes (its one note as before).
 
 ## Next steps
 
@@ -901,6 +940,9 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
 - Optimisation: sample a saved set-up (`load_component`, `Initial_sampling.py`), screen
   designs with the problem checks, couple to CFD. `Initial_sampling.py` varies pitch and chord only (x_blade_new's
   form); other parameters flagged Y are reported, not sampled.
+- Dependent variables: the rudder-h set-up as a text file with the component files' layout (it is JSON, with
+  the same variable records), if the user wants it; relations in `Initial_sampling.py` when a campaign needs
+  them.
 - Rudder: the tip tilt and cap parameters into the design space. If the mesher draws the tip's rounded edge
   the way it drew the TE: a band of its own for it (as the TE strip now is for the TE's round).
 - Open items: section-fit bounds (X2 on its bound) and an LE-radius constraint; plain-named rudder outputs are

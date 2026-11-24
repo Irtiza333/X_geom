@@ -9,9 +9,10 @@ check of x_blade_new.X_blade), blade_surface_new.BladeSurface, tip_surfaces_new,
 DRDC five-surface CAD with the hub sector.
 
 Component file ('#' header, np.loadtxt reads the table): the geometry, the settings (SETTING_TYPES), each
-curve's form ('table' as the file has it, 'bezier1 <points>', 'bezier2') and every variable's value, bounds and
-free flag ('# var'), and the radial table. A table file has no curve or var lines (write_params writes one),
-only the geometry, optional vary lines and the table:
+curve's form ('table' as the file has it, 'bezier1 <points>', 'bezier2') and every variable's value, bounds,
+free flag and, when it depends on others, its relation ('# var', xgeom_relations.py), and the radial table. A
+table file has no curve or var lines (write_params writes one), only the geometry, optional vary lines and the
+table:
 
     # XGeom component
     # kind          blade
@@ -143,6 +144,7 @@ from scipy.optimize import least_squares
 from scipy.spatial import cKDTree
 
 import xgeom_files as XF
+import xgeom_relations as REL
 from blade_vary import CURVES, GLOBAL_SLOTS, HUB_SLOTS, VARY_NAMES, Vary   # the names; a vary line
 from prop_hub import HubProfile
 from hub_new import DEFAULT_HUB_HEIGHT
@@ -904,7 +906,7 @@ def default_bounds(params, design):
     return b
 
 
-class BladeSpace:
+class BladeSpace(REL.SpaceRelations):
     """A flat design vector for an optimiser, and the BladeDesign it stands for.
 
     The slots: the globals radius, hub_radius, hub_height (m), with a conic
@@ -922,6 +924,9 @@ class BladeSpace:
     fixed    {slot: value} of the held slots (not in the vector); with free
              given instead (curve names and globals), every other slot is held
              at the design's value
+    Dependent variables (xgeom_relations.SpaceRelations): set_relations({slot:
+    relation text}), relations, violations(x), project(x); a slot defined
+    with '=' leaves the vector (full_vector works it out).
     """
 
     def __init__(self, params, design, bounds=None, fixed=None, free=None):
@@ -961,14 +966,6 @@ class BladeSpace:
     def __len__(self):
         return len(self.names)
 
-    def full_vector(self, x):
-        x = np.asarray(x, dtype=float)
-        if x.shape != (len(self.names),):
-            raise ValueError(f"the design vector has {len(self.names)} entries")
-        full = np.array([self.fixed.get(n, np.nan) for n in self.all_names])
-        full[self._free] = x
-        return full
-
     def to_design(self, x):
         return self._design_of(self.full_vector(x))
 
@@ -1001,9 +998,7 @@ class BladeSpace:
     def to_dict(self, design):
         vals = self.values(design)
         return {"forms": {c: f[0] for c, f in self.forms.items()}, "orders": {c: f[1] for c, f in self.forms.items()},
-                "r1": self.r1,
-                "slots": [{"name": n, "value": vals[n], "lo": float(lo), "hi": float(hi), "free": n not in self.fixed}
-                          for n, (lo, hi) in zip(self.all_names, self.all_bounds)],
+                "r1": self.r1, "slots": self.slot_records(vals),
                 "vector": {"names": self.names, "values": [vals[n] for n in self.names],
                            "bounds": self.bounds.tolist()}}
 
@@ -1037,6 +1032,7 @@ class BladeSpace:
             if g not in vals:
                 vals[g] = fixed[g] = float(getattr(tmpl, g))
         space = cls(params, tmpl, bounds, fixed)
+        space.set_relations({q["name"]: q["relation"] for q in slots if q.get("relation")})
         return space, space.design_of(vals)
 
 
@@ -1192,9 +1188,9 @@ def _component_design(comp, params, orders=None, segments=None):
 
 
 def _component_space(comp, params, design, free=None):
-    """The BladeSpace of a blade component: each variable's bounds and free flag from its var line; one with
-    none: default_bounds (its curve's vary range for the values) and free as the vary lines say (with none: the
-    names in free)."""
+    """The BladeSpace of a blade component: each variable's bounds, free flag and relation (a dependent
+    variable's) from its var line; one with none: default_bounds (its curve's vary range for the values) and free
+    as the vary lines say (with none: the names in free)."""
     bounds = {**vary_bounds(params), **{n: (q.lo, q.hi) for n, q in comp.vars.items()}}
     full = BladeSpace(params, design, bounds=bounds)
     unknown = [n for n in comp.vars if n not in full.all_names]
@@ -1206,19 +1202,23 @@ def _component_space(comp, params, design, free=None):
     vals = full.values(design)
     fixed = {n: vals[n] for n in full.all_names
              if not (comp.vars[n].free if n in comp.vars else n.split(".")[0] in free0)}
-    return BladeSpace(params, design, bounds=bounds, fixed=fixed)
+    return BladeSpace(params, design, bounds=bounds, fixed=fixed).set_relations(
+        {n: q.relation for n, q in comp.vars.items() if q.relation}, comp.path)
 
 
 def load_component(path, orders=None, segments=None, free=None):
     """A blade from a component file (xgeom_files.py, kind blade): an XF.Loaded with the parameters, the design
     (each curve as its var lines give it; a curve without them fitted to its column as fit_design fits it,
     orders and segments, or as the table has it), the design space (every variable, the held ones fixed; a
-    variable without a var line free as the vary lines say, else as the names in free), the file's settings
-    (SETTING_TYPES), its name, notes and extra geometry (section_tables).
+    variable without a var line free as the vary lines say, else as the names in free; the dependent ones with
+    their relations, ld.space.relations), the file's settings (SETTING_TYPES), its name, notes and extra geometry
+    (section_tables). The design is the file's as it is: ld.space.design_violations(ld.design) says what it
+    breaks.
 
         ld = load_component("msc_blade.txt")
         x0, bounds = ld.space.to_vector(ld.design), ld.space.bounds
         d = ld.space.to_design(x)
+        broken = ld.space.violations(x)                # of the dependent variables' relations ([]: none)
     """
     comp = XF.read_component(path)
     if comp.kind != "blade":
@@ -1234,7 +1234,7 @@ def load_component(path, orders=None, segments=None, free=None):
 def write_component(path, params, design, space, settings=None, name=None, notes=(), extra=None):
     """Write the design as a component file, which load_component reads back exactly: the geometry (the
     design's D, root r/R and hub height; the blades, the section and extra of params), the settings
-    (SETTING_TYPES), each curve's form, every variable of space (value, bounds, free) and the distributions at
+    (SETTING_TYPES), each curve's form, every variable of space (value, bounds, free, relation) and the distributions at
     the parameter file's rows (their fractions of the span on the design's span, rounded as written)."""
     folder = os.path.dirname(os.path.abspath(path))
     comp = XF.Component("blade", name or os.path.splitext(os.path.basename(path))[0], list(notes))

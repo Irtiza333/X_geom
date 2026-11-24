@@ -10,8 +10,9 @@ unless the file gives it a tip cap (below).
 
 Component file ('#' header, np.loadtxt reads the table): the geometry, the settings (sections, change_points,
 half, cap_loops), each curve's form ('table' as the file has it, 'bezier1 <points>', 'bezier2'), every
-variable's value, bounds and free flag ('# var'), and the spanwise table. A table file has no curve or var
-lines (write_params writes one), only the geometry and the table:
+variable's value, bounds, free flag and, when it depends on others, its relation ('# var',
+xgeom_relations.py), and the spanwise table. A table file has no curve or var lines (write_params writes
+one), only the geometry and the table:
 
     # XGeom component
     # kind          wing                         (fin, rudder: the same layout)
@@ -124,6 +125,7 @@ from scipy.optimize import least_squares
 import blade_modify as BM
 import tip_cap as TC
 import xgeom_files as XF
+import xgeom_relations as REL
 from blade_modify import BladeCurve, FileCurve, TwoSegmentCurve, curve_at, fit_form
 from replica_funcs import bernstein
 from rudder_modify import Bezier, fit_values, law_basis
@@ -1054,7 +1056,7 @@ def default_bounds(params, design):
     return b
 
 
-class WingSpace:
+class WingSpace(REL.SpaceRelations):
     """A flat design vector for an optimiser, and the WingDesign it stands for.
 
     The slots: "span" (mm), then curve by curve (design.names order) its own: 1 segment d1 .. d(m-1) (the
@@ -1069,6 +1071,8 @@ class WingSpace:
              curve its group
     fixed    {slot: value} of the held slots (not in the vector); with free given instead (curve names and
              "span"), every other slot is held at the design's value
+    Dependent variables (xgeom_relations.SpaceRelations): set_relations({slot: relation text}), relations,
+    violations(x), project(x); a slot defined with '=' leaves the vector (full_vector works it out).
     """
 
     def __init__(self, params, design, bounds=None, fixed=None, free=None):
@@ -1116,14 +1120,6 @@ class WingSpace:
     def __len__(self):
         return len(self.names)
 
-    def full_vector(self, x):
-        x = np.asarray(x, dtype=float)
-        if x.shape != (len(self.names),):
-            raise ValueError(f"the design vector has {len(self.names)} entries")
-        full = np.array([self.fixed.get(n, np.nan) for n in self.all_names])
-        full[self._free] = x
-        return full
-
     def to_design(self, x):
         return self._design_of(self.full_vector(x))
 
@@ -1154,9 +1150,7 @@ class WingSpace:
     def to_dict(self, design):
         vals = self.values(design)
         return {"forms": {c: f[0] for c, f in self.forms.items()}, "orders": {c: f[1] for c, f in self.forms.items()},
-                "changes": self.changes,
-                "slots": [{"name": n, "value": vals[n], "lo": float(lo), "hi": float(hi), "free": n not in self.fixed}
-                          for n, (lo, hi) in zip(self.all_names, self.all_bounds)],
+                "changes": self.changes, "slots": self.slot_records(vals),
                 "vector": {"names": self.names, "values": [vals[n] for n in self.names],
                            "bounds": self.bounds.tolist()}}
 
@@ -1172,6 +1166,7 @@ class WingSpace:
         bounds = {q["name"]: (q["lo"], q["hi"]) for q in rec["slots"]}
         fixed = {q["name"]: q["value"] for q in rec["slots"] if not q["free"]}
         space = cls(params, tmpl, bounds, fixed)
+        space.set_relations({q["name"]: q["relation"] for q in rec["slots"] if q.get("relation")})
         return space, space.design_of(vals)
 
 
@@ -1289,9 +1284,9 @@ def _component_design(comp, params, orders=None, segments=None):
 
 
 def _component_space(comp, params, design, free=None):
-    """The WingSpace of a component: each variable's bounds and free flag from its var line; one with none:
-    default_bounds (its curve's vary range for the values) and free as the vary lines say (with none: the names
-    in free)."""
+    """The WingSpace of a component: each variable's bounds, free flag and relation (a dependent variable's)
+    from its var line; one with none: default_bounds (its curve's vary range for the values) and free as the
+    vary lines say (with none: the names in free)."""
     names = set(design.names) | {"span"}
     bad = sorted(set(comp.vary) - names)
     if bad:
@@ -1307,19 +1302,22 @@ def _component_space(comp, params, design, free=None):
     vals = full.values(design)
     fixed = {n: vals[n] for n in full.all_names
              if not (comp.vars[n].free if n in comp.vars else n.split(".")[0] in free0)}
-    return WingSpace(params, design, bounds=bounds, fixed=fixed)
+    return WingSpace(params, design, bounds=bounds, fixed=fixed).set_relations(
+        {n: q.relation for n, q in comp.vars.items() if q.relation}, comp.path)
 
 
 def load_component(path, orders=None, segments=None, free=None):
     """A rudder, fin or wing from a component file (xgeom_files.py): an XF.Loaded with the parameters, the design
     (each curve as its var lines give it; a curve without them fitted to its column as fit_design fits it,
     orders and segments, or as the table has it), the design space (every variable, the held ones fixed; a
-    variable without a var line free as the vary lines say, else as the names in free), the file's settings
-    (SETTING_TYPES), its name and notes. The kind is the file's.
+    variable without a var line free as the vary lines say, else as the names in free; the dependent ones with
+    their relations, ld.space.relations), the file's settings (SETTING_TYPES), its name and notes. The kind is
+    the file's. The design is the file's as it is: ld.space.design_violations(ld.design) says what it breaks.
 
         ld = load_component("fin.txt")
         x0, bounds = ld.space.to_vector(ld.design), ld.space.bounds
         d = ld.space.to_design(x)
+        broken = ld.space.violations(x)                # of the dependent variables' relations ([]: none)
     """
     comp = XF.read_component(path)
     if comp.kind not in XF.PLANAR:
@@ -1336,7 +1334,7 @@ def write_component(path, params, design, space, settings=None, name=None, notes
     """Write the design as a component file of kind (default the parameter file's: rudder, fin or wing), which
     load_component reads back exactly: the geometry (the design's span; the section, the pitch axis and, for a
     symmetric section, camber_xc of params), the settings (sections; change_points, the design's), each curve's
-    form, every variable of space (value, bounds, free) and the distributions at the parameter file's rows,
+    form, every variable of space (value, bounds, free, relation) and the distributions at the parameter file's rows,
     with the dt and dc columns of the design's change points."""
     kind = kind or params.kind
     comp = XF.Component(kind, name or os.path.splitext(os.path.basename(path))[0], list(notes))

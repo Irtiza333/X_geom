@@ -16,8 +16,10 @@ segments (set_segments):
   2 segments (para_control_bez_updated, x_blade): P1 (root) .. P7 (tip), P2 =
     P3 and P5 = P6 at the value of P4, so zero slope at P4; P4's position u4,
     the fractions d1, d2, the weights w23, w56 and the values v1, v4, v7.
-Each is a design variable or held. A change of either radius stretches the
-curves over the new span. A new form (set_segments) or order (set_order) is
+Each is a design variable or held, and independent or dependent on others
+through a relation (xgeom_relations.AdapterRelations: relation, set_relation,
+limits; the dependent ones follow when the others move). A change of either
+radius stretches the curves over the new span. A new form (set_segments) or order (set_order) is
 fitted to the file's table while none of the curve's variables has changed,
 else to the curve's present shape. A component file gives its design, variables
 (bounds, free flags) and settings exactly. A table file (no curve or var lines)
@@ -59,6 +61,7 @@ import time
 import numpy as np
 
 import blade_modify as BM
+import xgeom_relations as REL
 from xgeom_common import BLUE, GREY, GRID, INK2, RED, SECTION_COLORS, Row, fit_box, keep_fitted
 
 MAX_ORDER = 12
@@ -73,7 +76,7 @@ TWO_SEGMENT_ROWS = (("v1", "P1 value (root)"), ("d1", "P2=P3 d1"), ("w23", "P2=P
 TWO_SEGMENT_POINT = {"v1": 0, "d1": 1, "w23": 1, "u4": 3, "v4": 3, "d2": 4, "w56": 4, "v7": 6}   # control point
 
 
-class BladeAdapter:
+class BladeAdapter(REL.AdapterRelations):
     joins = False                 # the curves have no join to switch
     segment_choice = True         # each curve 1 or 2 segments, or the file's own (0)
     segment_options = (0, 1, 2)   # 0: as the parameter file has it ("file")
@@ -100,8 +103,7 @@ class BladeAdapter:
         line)."""
         ld = BM.load_component(path, self.settings["orders"], self.settings["segments"], self.settings["free"])
         self.params, self.design = ld.params, ld.design
-        self.meta = {n: {"lo": float(lo), "hi": float(hi), "free": n not in ld.space.fixed}
-                     for n, (lo, hi) in zip(ld.space.all_names, ld.space.all_bounds)}
+        self.meta = self.meta_of(ld.space)          # each variable's bounds, free flag and (dependent) relation
         self.settings.update(ld.settings)
         self.file, self.notes, self.extra = os.path.abspath(path), ld.notes, ld.extra
         self.file_blades = self.params.blades       # the file's Z (set_blades may change the one in use)
@@ -110,8 +112,9 @@ class BladeAdapter:
         self._original = None
 
     def save_file(self, path):
-        """Write the design, its variables (bounds, free flags) and the settings as a component file
-        (blade_modify.write_component), which load_params reads back exactly; it is the file in use then."""
+        """Write the design, its variables (bounds, free flags, the dependent ones' relations) and the settings
+        as a component file (blade_modify.write_component), which load_params reads back exactly; it is the file
+        in use then."""
         BM.write_component(path, self.params, self.design, self.free_space(), self._case_settings(),
                            os.path.splitext(os.path.basename(path))[0], self.notes, self.extra)
         self.file = os.path.abspath(path)
@@ -132,8 +135,9 @@ class BladeAdapter:
 
     # ---------------------------------------------------------------- state
     def _rebuild(self):
-        """The space for the present curves, keeping the bounds and free flags
-        of every slot that is still there."""
+        """The space for the present curves, keeping the bounds, free flags and
+        relations of every slot that is still there; the dependent variables
+        then follow (xgeom_relations)."""
         full = BM.BladeSpace(self.params, self.design, bounds=BM.vary_bounds(self.params))
         free0 = self._free0()
         self.meta = {n: self.meta.get(n, {"lo": float(lo), "hi": float(hi), "free": n.split(".")[0] in free0})
@@ -141,6 +145,7 @@ class BladeAdapter:
         self.space = BM.BladeSpace(self.params, self.design,
                                    bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()})
         self.values = self.space.values(self.design)
+        self.follow(note=True)
 
     def get(self, name):
         return self.values[name]
@@ -152,14 +157,13 @@ class BladeAdapter:
         return self.meta[name]["free"]
 
     def set(self, name, value):
-        """Set one variable; returns the value used (clamped to its bounds)."""
-        lo, hi = self.bounds(name)
-        value = float(min(max(value, lo), hi))
-        vals = dict(self.values)
-        vals[name] = value
+        """Set one variable; returns the value used (kept inside its limits: its bounds and, a dependent
+        variable, its relations). The variables that depend on it follow."""
+        vals, value, moved = self._moved(name, value)
         self.design = self.space.design_of(vals)
         self.values = self.space.values(self.design)
-        self.as_fitted.discard(name.split(".")[0])
+        for n in moved:
+            self.as_fitted.discard(n.split(".")[0])
         return value
 
     def set_bounds(self, name, lo, hi):
@@ -353,7 +357,7 @@ class BladeAdapter:
         cu = self.design.curves[curve]
         if cu.segments == 0:
             return np.zeros(len(cu.r), dtype=bool)
-        free = {k: self.meta[f"{curve}.{k}"]["free"] for k in cu.keys()}
+        free = {k: self.varies(f"{curve}.{k}") for k in cu.keys()}
         if cu.segments == 2:
             groups = (("v1",), ("d1", "w23"), ("d1", "w23"), ("u4", "v4"), ("d2", "w56"), ("d2", "w56"), ("v7",))
             return np.array([any(free[k] for k in g) for g in groups])
@@ -362,15 +366,14 @@ class BladeAdapter:
 
     def n_free(self, curve=None):
         names = [n for n in self.space.all_names if curve is None or n.startswith(curve + ".")]
-        return sum(1 for n in names if self.meta[n]["free"]), len(names)
+        return sum(1 for n in names if self.varies(n)), len(names)
 
     def summary(self):
-        n, m = self.n_free()
         d = self.design
         kept = [c for c in BM.CURVES if d.curves[c].segments == 0]
         hub = (f"hub a cone, base radius {d.hub_base:.4g} m, top {d.hub_top:.4g} m, {d.hub_height:.4g} m to the tip "
                f"from x {d.hub_x:.4g} m" if d.hub_cone else f"hub height {d.hub_height:.4g} m")
-        return (f"{n} of {m} variables free; R {d.radius:.4g} m, {'blade root' if d.hub_cone else 'hub'} radius "
+        return (f"{self.free_text()}; R {d.radius:.4g} m, {'blade root' if d.hub_cone else 'hub'} radius "
                 f"{d.hub_radius:.4g} m (r/R {d.r0:.3f}), {hub}, {self.params.blades} blades; CAD: "
                 f"{self.part_label()}" + (f"; as the file (vary N): {', '.join(kept)}" if kept else ""))
 
@@ -480,7 +483,7 @@ class BladeAdapter:
             out["orig_sections"] = self._original_views()["sections"]
         except Exception:
             out["orig_sections"] = None
-        out["problems"], out["warnings"] = problems, warnings
+        out["problems"], out["warnings"] = problems, warnings + self.relation_warnings()
         if skeleton:                                          # the XCAD sections
             try:
                 out["skeleton"] = BM.blade_points(d, p, self.stations())[0].reshape(-1, 53, 3) * 1000.0
@@ -498,11 +501,11 @@ class BladeAdapter:
 
     # ---------------------------------------------------------------- output
     def free_space(self):
-        """The design space with the unticked variables held fixed: the one
-        an optimiser gets."""
+        """The design space with the unticked variables held fixed and the
+        dependent ones' relations: the one an optimiser gets."""
         fixed = {n: self.values[n] for n in self.space.all_names if not self.meta[n]["free"]}
-        return BM.BladeSpace(self.params, self.design,
-                             bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()}, fixed=fixed)
+        return self.related(BM.BladeSpace(self.params, self.design,
+                                          bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()}, fixed=fixed))
 
     CASE_KEYS = ("clearance_mm", "sections", "tip_band", "tip_sections", "hub", "part")
 

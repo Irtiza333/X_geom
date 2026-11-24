@@ -32,6 +32,11 @@ assembly. XGeom is the pre-optimization design step.
   model keeps its JSON).
 - Case outputs: `<case>.txt` (the design as a component file) in place of `<case>_params.dat` and
   `<case>_design_space.json`.
+- One structure for declaring variables in every set-up file, whatever the component (24 Nov 2026, the user:
+  every set-up file carries the same general structure for defining and declaring things; a variable is
+  independent, or dependent on others through an expression): name, value, low, high, free or held, and for a
+  dependent variable its relation to other variables (Variables, below). A component file has it on the var
+  line; the rudder-h model's set-up JSON has the same six in each slot record.
 
 ## Component file
 
@@ -54,14 +59,22 @@ assembly. XGeom is the pre-optimization design step.
 # hub           Y
 # part          sector
 # ---- curves and variables
+# ---- curve <name> <form>: table | bezier1 <points> | bezier2
+# ---- var <name> <value> <low> <high> <Y free | N held> [<relation>]: independent without a relation; dependent with one,
+# ----     an operator (< <= > >= =) and an expression of other variables, such as <= 0.5*chord.v2 + 2*chord.v3
 # var    radius     0.7     0.524  0.875  N
 # curve  pitch      bezier2
 # var    pitch.v1   1.2414  0.60   1.40   Y
+# var    pitch.v7   0.62    0.28   1.64   Y  < 0.9*pitch.v1
 # curve  skew       table
 # ---- distributions
 # r/R     P/D     c/D     t/c     f/c     skew_deg  rake/D
   0.1800  1.2414  0.2452  0.2159  0.0304  0.2758    0.0000
 ```
+
+Every component file has the same blocks in the same order, whatever its kind: the first line; kind, name and
+notes; the geometry; the settings; the curves and variables; the table. What differs between kinds is only
+which keys, curve forms and columns there are (the table below).
 
 Header lines:
 - `# XGeom component` first; `# kind`, `# name`, `# note` (free text, repeatable).
@@ -69,11 +82,15 @@ Header lines:
 - `# curve <name> <form>`: `table` (the column as it is: the cubic spline through the rows, no variables),
   `bezier1 <points>`, `bezier2` (x_blade's form, P1 to P7), `smooth2` (a blended wing body's: two cubic
   segments joined smoothly, flat at the centre line, P0 to P6), and for the hull `cst <order>`.
-- `# var <name> <value> <low> <high> <Y|N>`: one line per variable, Y free (values written to 12 figures).
+- `# var <name> <value> <low> <high> <Y|N> [<relation>, ...]`: one line per variable, the same in every kind: Y
+  free, N held (values written to 12 figures); an independent variable ends at the flag, a dependent one has
+  its relation to other variables after it (Variables, below).
 - `# vary <name> Y|N [low high]` (blade_vary.py): Y free or N held, for the curves and globals without var
   lines; hand-written, or written in a blade's table file that has them (below). A set-up has var lines
   instead.
-- `# ---- <title>`: separators, ignored. The last `#` line before the table names the columns.
+- `# ---- <title>`: separators, ignored. The last `#` line before the table names the columns. The curves and
+  variables block starts with three of them that name its two line forms (above), so a file says how its
+  variables are declared.
 
 Keys and columns:
 
@@ -159,6 +176,68 @@ is refused by name); `read_params`, `write_params` (a table file), `load_compone
 `blade_modify.py`, `wing_modify.py` and `hull_modify.py`. Examples in X_geom (the tool's defaults):
 `msc_blade.txt`, `wing.txt`, `fin.txt`, `suboff_hull.txt`, `bwb_glider.txt`.
 
+## Variables: independent and dependent
+
+Every variable of every component is declared the same way (24 Nov 2026), with six things:
+
+| | |
+|---|---|
+| name | `span`, `radius`, `H`: a global one; `chord.v2`, `LE.dx3`, `nose_r.b1`: `<curve>.<key>` |
+| value | where the design is |
+| low, high | its bounds: numbers |
+| free | Y a design variable, N held |
+| relation | none: an independent variable. One or more: a dependent variable |
+
+A relation is an operator and an expression of other variables of the same component:
+
+```
+<= 0.5*chord.v2 + 2*chord.v3      at most that            (< reads the same)
+>  pitch.u4 + 0.2                 at least that           (>= the same)
+=  chord.v0                       that value: the variable follows the others and is no design variable
+```
+
+- The expression: numbers, variable names, `+ - * /` and brackets; `0.5v4` is read as `0.5*v4`. Several
+  relations are separated by commas (`> 0.5*chord.v0, < chord.v1`); `=` stands alone.
+- Names are the var lines' names. A variable of the same curve may be named by its key (`v2` for `chord.v2`);
+  the files are written with full names.
+- A variable may depend on dependent ones, but not, in a loop, on itself (refused, the loop named). A relation
+  cannot use its own variable.
+- What it does: the variable's limits are its bounds narrowed by its relations at the other variables' present
+  values. In the tool a variable moves inside its limits, and when a variable it depends on moves it follows
+  (each dependent variable moved into its limits, in the order of their dependence). Relations that cannot
+  hold inside the bounds leave the variable on a bound, and the tool warns (the build still runs).
+- For an optimiser (`ld.space` of `load_component`, `rudder_modify.load_design_space`): `space.relations`; a
+  free dependent variable stays in the design vector with its bounds, and its relations are constraints:
+  `space.violations(x)` lists what a vector breaks (variable, text, amount), `space.project(x)` moves the
+  dependent variables into their limits. A variable with `=` leaves the vector; `to_design(x)` works it out.
+- Reading: a relation with a wrong grammar is refused with its line (`<path>, line <n>: the relation of
+  <name>: ...`), one that names no variable or closes a loop with the file's path. A file whose design breaks
+  one of its relations loads as it is written (`space.design_violations(design)` says what); the tool then
+  applies the relations and says which variables moved.
+- A relation goes with its variable: a curve given another form (points, segments) loses the relations of its
+  variables, and a relation elsewhere that names a variable now gone is dropped, which the tool says.
+
+In a component file (every kind):
+
+```
+# var    chord.v0                     120                40               150  Y
+# var    chord.v1                     108                40               150  Y  < 0.9*chord.v0
+# var    chord.v2                      90                40               150  Y  < chord.v1, > 0.25*chord.v0
+# var    pitch.v1                       2                -3                 4  Y  = pitch.v0
+```
+
+In the rudder-h model's set-up JSON (`<case>_design_space.json`), one record per variable in `space.slots`,
+`relation` only in a dependent variable's:
+
+```
+{"name": "LE.dx3", "value": -30.0, "lo": -320.0, "hi": 0.0, "free": true, "relation": "< LE.dx2"}
+```
+
+A file without relations is written as before: the var lines and the slot records of independent variables
+are unchanged. `Initial_sampling.py` does not read relations (the MSc pipeline samples para_control's own
+variables, with its own coupled limits). Code: `xgeom_relations.py` (the grammar, `limits`, `apply`,
+`violations`; `SpaceRelations` for the design spaces, `AdapterRelations` for the tool's adapters).
+
 ## Assembly file
 
 ```
@@ -202,6 +281,11 @@ is refused by name); `read_params`, `write_params` (a table file), `load_compone
 
 - The File box's Load ... reads a component file and sets the whole panel. Save set-up ... writes the component
   file; the dialog opens on the file it came from. `--space` takes the rudder-h model's JSON set-ups only.
+- Each variable's row: free | name | low | slider | high | value | where | dep (24 Nov 2026). The name is
+  what a relation calls the variable. dep unticked: independent. Ticked: a line opens under the row for its
+  relation (`> 0.5*v4`, Return sets it); the row then shows the limits the relation gives now, the slider runs
+  over them, and the variable follows the ones it depends on. With `=` the row's slider, value and free box are
+  off. Unticked again, or the relation emptied: independent.
 - From CAD ... (13 Nov 2026, `xgeom_from_cad.py`): in the File box of the blade and the hull and in the
   rudder's Set-up box. A STEP or IGES file of the component is extracted (blade_extraction.py, hull_extraction's
   stations, Rudder_geom_extraction.py with the per-section fits), every curve is fitted in each candidate form
@@ -307,3 +391,16 @@ holds the cylindrical hull or the blended wing body (its Body box). For the web 
 both additive (other files read and write as before); its adapter `xgeom_wing.BwbAdapter` has the wing's
 methods, with `segment_options` (0, 1, 3) (3: smooth2) and `segment_text(n)` for the buttons' text, and
 `preview()["mirror"]` (True: draw the body with its mirror image, y to -y).
+
+24 Nov 2026: independent and dependent variables (Variables, above): the var line takes a relation after the
+flag, the same in every kind; the rudder-h model's set-up JSON takes `relation` in a slot; the curves and
+variables block starts with title lines that name its line forms (the five samples re-saved with them;
+`bwb_glider.txt` also gains `# half N` and `# cap_loops 40`, the defaults Save set-up writes). For the web
+app: additive. A file with no dependent variable differs only in those separator lines, which every reader
+skips; one with a relation needs this version to read (an older reader refuses the longer var line). New
+module `xgeom_relations.py`, which `xgeom_files`, the four `*_modify` modules and the four adapters import (add
+it to the copy list). New adapter methods `relation(name)`, `set_relation(name, text)`, `limits(name)`,
+`is_dependent(name)`, `is_defined(name)`, `varies(name)`, `relation_notes()`; `meta[name]` has `"rel"` for a
+dependent variable only; `set(name, value)` keeps a variable inside `limits(name)` and returns the value used,
+as before; `n_free()` leaves out a variable defined with `=`; the hull's and the rudder's `preview()` gain
+`"warnings"` (relations that cannot hold), which the blade's and the wing's already had.

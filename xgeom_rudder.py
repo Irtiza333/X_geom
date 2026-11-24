@@ -28,6 +28,8 @@ An adapter gives the tool:
     title, names, summary()                   what there is to edit, the line under the title
     describe(curve), order(curve), joins      a curve's text, its order, whether it has a join switch
     get / bounds / is_free / set / set_bounds / set_free        one variable
+    relation / set_relation / limits / is_dependent             a dependent variable: its relation to others,
+                                              the limits it has now (xgeom_relations.AdapterRelations)
     set_order / set_tangent / set_degree      the shape of the space (the last two rudder only; set_tangent_all
                                               and tangent_state for every curve at once)
     curve_rows(curve), row_info(name), n_free()   the rows of one curve (xgeom_common.Row)
@@ -51,6 +53,7 @@ import numpy as np
 
 import bezier_section as BS
 import rudder_modify as RM
+import xgeom_relations as REL
 from xgeom_common import BLUE, GREY, GRID, INK2, RED, SECTION_COLORS, Row, fit_box, keep_fitted
 MAX_DEGREE = 12
 MAX_ORDER = 12
@@ -78,7 +81,7 @@ def _strip_frac(value):
     return [float(v) for v in value] if np.ndim(value) else float(value)
 
 
-class RudderAdapter:
+class RudderAdapter(REL.AdapterRelations):
     joins = True                  # curves join the original at H: the tool offers the tangent switch
     build_label = "XCAD"
 
@@ -137,8 +140,9 @@ class RudderAdapter:
 
     def _rebuild(self):
         """The space for the present degree, orders and joins, keeping the
-        bounds and free flags of every slot that is still there. New slots of
-        P1x start held (unticked): P1x = 0 keeps the LE round."""
+        bounds, free flags and relations of every slot that is still there.
+        New slots of P1x start held (unticked): P1x = 0 keeps the LE round.
+        The dependent variables then follow (xgeom_relations)."""
         h = dict(h_min=self.settings["h_min"], h_max=self.settings["h_max"])
         full = RM.DesignSpace(self.orig, self.orders, self.join, **h)
         self.meta = {n: self.meta.get(n, {"lo": float(lo), "hi": float(hi), "free": not n.startswith("P1x.")})
@@ -147,6 +151,7 @@ class RudderAdapter:
         self.space = RM.DesignSpace(self.orig, self.orders, self.join,
                                     bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()}, **h)
         self.values = self.space.values(self.design)
+        self.follow(note=True)
 
     def get(self, name):
         return self.values[name]
@@ -158,11 +163,9 @@ class RudderAdapter:
         return self.meta[name]["free"]
 
     def set(self, name, value):
-        """Set one variable; returns the value used (clamped to its bounds)."""
-        lo, hi = self.bounds(name)
-        value = float(min(max(value, lo), hi))
-        vals = dict(self.values)
-        vals[name] = value
+        """Set one variable; returns the value used (kept inside its limits: its bounds and, a dependent
+        variable, its relations). The variables that depend on it follow."""
+        vals, value, _ = self._moved(name, value)
         self.design = self.space.design_of(vals)
         self.values = self.space.values(self.design)
         return value
@@ -322,13 +325,12 @@ class RudderAdapter:
 
     def n_free(self, curve=None):
         names = [n for n in self.space.all_names if curve is None or n.startswith(curve + ".")]
-        return sum(1 for n in names if self.meta[n]["free"]), len(names)
+        return sum(1 for n in names if self.varies(n)), len(names)
 
     def summary(self):
         """The line under the title."""
-        n, m = self.n_free()
         st = self.settings
-        return (f"{n} of {m} variables free; H {self.design.H:.2f} mm in [{st['h_min']:.4g}, {st['h_max']:.4g}]; "
+        return (f"{self.free_text()}; H {self.design.H:.2f} mm in [{st['h_min']:.4g}, {st['h_max']:.4g}]; "
                 f"full height {self.span:.1f} mm; sections of degree {self.degree}")
 
     def describe(self, curve):
@@ -339,7 +341,8 @@ class RudderAdapter:
 
     # ---------------------------------------------------------------- preview
     def preview(self, skeleton=False):
-        """What the live views draw: the pinned design, its problems, the
+        """What the live views draw: the pinned design, its problems, its
+        warnings (the relations of dependent variables that do not hold), the
         curves, N_VIEW sections from the root to H, the tracks of the section
         control points along the span, and (skeleton=True) the loops of the
         3D sections tab."""
@@ -356,8 +359,8 @@ class RudderAdapter:
             sections = str(exc)
             if not problems:                  # the model builds, the sections as written do not (too thin)
                 problems = [sections]
-        out = {"design": d, "problems": problems, "yy": yy, "curves": curves, "sections": sections,
-               "tracks": self.tracks(d)}
+        out = {"design": d, "problems": problems, "warnings": self.relation_warnings(), "yy": yy, "curves": curves,
+               "sections": sections, "tracks": self.tracks(d)}
         if skeleton:
             out["skeleton"] = self.skeleton(problems)
         out["seconds"] = time.time() - t0
@@ -418,20 +421,22 @@ class RudderAdapter:
 
     # ---------------------------------------------------------------- output
     def free_space(self):
-        """The design space with the unticked variables held fixed: the one
-        an optimiser gets."""
+        """The design space with the unticked variables held fixed and the
+        dependent ones' relations: the one an optimiser gets."""
         fixed = {n: self.values[n] for n in self.space.all_names if not self.meta[n]["free"]}
-        return RM.DesignSpace(self.orig, self.orders, self.join,
-                              bounds={n: (self.meta[n]["lo"], self.meta[n]["hi"]) for n in self.space.all_names},
-                              h_min=self.settings["h_min"], h_max=self.settings["h_max"], fixed=fixed)
+        return self.related(RM.DesignSpace(
+            self.orig, self.orders, self.join,
+            bounds={n: (self.meta[n]["lo"], self.meta[n]["hi"]) for n in self.space.all_names},
+            h_min=self.settings["h_min"], h_max=self.settings["h_max"], fixed=fixed))
 
     def space_record(self):
         """The set-up as plain data: the design space (every variable with its
-        value, bounds and free flag, the curves' orders and joins, the section
-        degree), the settings and the input files. rudder_modify.
-        load_design_space reads it back for the optimiser. No time stamp (20 Nov
-        2026, Eddie's interface note: an unchanged set-up saves to the same
-        bytes); set-ups written before still carry "written", which nothing reads."""
+        value, bounds, free flag and, a dependent one, its relation; the
+        curves' orders and joins, the section degree), the settings and the
+        input files. rudder_modify.load_design_space reads it back for the
+        optimiser. No time stamp (20 Nov 2026, Eddie's interface note: an
+        unchanged set-up saves to the same bytes); set-ups written before still
+        carry "written", which nothing reads."""
         return {"geometry": "rudder",
                 "settings": dict(self.settings, height_scale=self.orig.scale, span_mm=self.span),
                 "files": dict(self.files), "space": self.free_space().to_dict(self.design)}
@@ -479,8 +484,7 @@ class RudderAdapter:
             space, design = RM.DesignSpace.from_dict(self.orig, rec["space"])
             self.orig = space.orig
             self.orders, self.join, self.design = dict(space.orders), dict(space.join), design
-            self.meta = {q["name"]: {"lo": q["lo"], "hi": q["hi"], "free": q["free"]}
-                         for q in rec["space"]["slots"]}
+            self.meta = self.meta_of(space)                  # bounds, free flags, the dependent ones' relations
             self.settings["h_min"], self.settings["h_max"] = self.meta["H"]["lo"], self.meta["H"]["hi"]
             self._rebuild()
             self.setup_file = os.path.abspath(path)
@@ -644,7 +648,7 @@ class RudderViews:
             if k == 0 or vname not in self.a.meta:
                 kinds.append("pinned")
             else:
-                kinds.append("free" if self.a.meta[vname]["free"] else "fixed")
+                kinds.append("free" if self.a.varies(vname) else "fixed")
         kinds = np.array(kinds)
         return pts, {k: pts[kinds == k] for k in ("free", "fixed", "pinned")}
 
