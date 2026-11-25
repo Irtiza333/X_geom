@@ -227,24 +227,39 @@ Each variable:  free | name | low | slider | high | value | where | dep
               wing, fin: mm, deg, t/c, f/c, a change in fractions of the chord
     where     rudder: the height; blade: r/R; hull: the x it sits at (m); wing,
               fin: y along the span (mm), the planform area for the span
+    low, high the bounds: each a number, or (25 Nov 2026) an expression of other
+              variables, such as v1 or 0.9*chord.v0 (numbers, names, + - * /,
+              brackets): a dependent bound, as P4's pitch between P1's and the
+              cap in the MSc propeller optimisation. The variable then lies
+              between its bounds wherever the others are: when one of them moves
+              it keeps its place between its bounds (the fraction of the way
+              from low to high), and that fraction, 0 to 1, is what an optimiser
+              varies (the set-up's design vector), so every sample lies inside
+              its bounds. An expression longer than its box is shown in full on
+              a line under the row. Bounds may cross (low above high) where a
+              number faces an expression; the tool then warns.
     dep       unticked: an independent variable, a number within low .. high.
-              Ticked: a dependent one (24 Nov 2026, xgeom_relations.py): the line
-              that opens under it takes its relation to other variables, an
-              operator (< <= > >= =) and an expression of them (numbers, names,
-              + - * /, brackets; 0.5v4 is 0.5*v4), such as > 0.5*v4 or
-              <= 0.5*v2 + 2*chord.v3; several separated by commas (> 0.5*v0,
-              < v1). Return sets it. The variable then stays inside low .. high
-              and its relations (the limits they give now are shown beside the
-              relation, and the slider runs over them), and when a variable it
-              depends on moves it follows. With = it takes the expression's
-              value and is no design variable. A variable may depend on
-              dependent ones, but not in a loop. Relations that cannot hold
-              inside low .. high leave the variable on a bound, with a warning
-              (the build still runs). An empty relation, or dep unticked: the
-              variable is independent again. Saved with the set-up: the var
-              line's relation in a component file, "relation" in the rudder's
-              set-up; a relation whose variable is gone (a curve's new form) is
-              dropped, which the status bar says.
+              Ticked: a dependent one (24 Nov 2026, xgeom_relations.py), through
+              a dependent bound (above) or a relation: the line that opens under
+              the row takes its relation to other variables, an operator
+              (< <= > >= =) and an expression of them (0.5v4 is 0.5*v4), such
+              as > 0.5*v4 or <= 0.5*v2 + 2*chord.v3; several separated by commas
+              (> 0.5*v0, < v1). Return sets it. A relation is a condition on top
+              of the bounds: the variable stays where it is until the relation
+              would break and then follows (an optimiser checks it, or projects
+              onto it). With = the variable takes the expression's value and is
+              no design variable. The line shows the limits the variable has
+              now (its bounds, narrowed by its relations), and the slider runs
+              over them. A variable may depend on dependent ones, but not in a
+              loop. Relations that cannot hold inside low .. high leave the
+              variable on a bound, with a warning (the build still runs). dep
+              unticked: independent again (the relation
+              dropped, the dependent bounds numbers where they are). Saved with
+              the set-up: on the var line of a component file (the low and high
+              columns, the relation after the flag), in the rudder's set-up as
+              "lo_expr", "hi_expr" and "relation"; an expression whose variable
+              is gone (a curve's new form) is dropped, which the status bar
+              says.
 Right panel
     Design       rudder: planform, the picked curve against the original, and in
                  3D five sections from the root to H with their control polygons
@@ -462,16 +477,27 @@ def file_kind(path):
 
 
 def grid_row(r):
-    """The grid row of line r of a box of variables (0 the header): each line takes two, a variable's own and,
-    under it, the relation of a dependent one (hidden for an independent one)."""
-    return 2 * r
+    """The grid row of line r of a box of variables (0 the header): each line takes three, a variable's own
+    and, under it, for a dependent one its relation and (a bound's expression too long for its box) its bounds
+    in full; both hidden for an independent one."""
+    return 3 * r
+
+
+BOX = 8                                        # the characters a low or high box shows
+
+
+DEPENDENT_HINT = ("low, high: a number, or an expression of other variables (v1, 0.9*chord.v0): a dependent bound.  "
+                  "dep: a relation to other variables (> 0.5*v4).")
 
 
 class VarRow:
-    """free | name | (label) | low | slider | high | value | where | dep, for one variable. dep ticked: the
-    variable depends on others, and the line under it takes its relation to them ('> 0.5*v4', '<= 0.5*v2 +
-    2*chord.v3', '= v0'; xgeom_relations.py) and shows the limits that gives now; the slider then runs over
-    those limits. Unticked: independent, within low .. high."""
+    """free | name | (label) | low | slider | high | value | where | dep, for one variable. low and high each
+    take a number or an expression of other variables ('v1', '0.9*chord.v0': a dependent bound; the variable
+    then keeps its place between its bounds when the others move). dep is ticked for a variable that depends
+    on others, through a bound or a relation; the line under it takes its relation to them ('> 0.5*v4', '<=
+    0.5*v2 + 2*chord.v3', '= v0'; xgeom_relations.py) and shows the limits it has now, over which the slider
+    runs; a line under that has the bounds in full when a box cuts one. Unticked: independent, numbers for low
+    and high and no relation."""
 
     def __init__(self, app, parent, r, spec):
         self.app, self.name, self.digits = app, spec.name, spec.digits
@@ -485,8 +511,8 @@ class VarRow:
         ttk.Label(parent, text=self.name.split(".")[-1]).grid(row=g, column=1, sticky="w", padx=(0, 6))
         self.label = ttk.Label(parent, text=spec.label, width=12)
         self.label.grid(row=g, column=2, sticky="w")
-        self.lo = ttk.Entry(parent, width=8, justify="right")
-        self.hi = ttk.Entry(parent, width=8, justify="right")
+        self.lo = ttk.Entry(parent, width=BOX, justify="right")
+        self.hi = ttk.Entry(parent, width=BOX, justify="right")
         lo, hi = ad.bounds(self.name)
         self.scale = ttk.Scale(parent, from_=lo, to=hi, orient="horizontal", length=120, command=self.on_scale)
         self.val = ttk.Entry(parent, width=9, justify="right")
@@ -502,6 +528,8 @@ class VarRow:
                           (self.rel_info, dict(column=6, columnspan=3, sticky="w", padx=3)))
         for w, opts in self._rel_line:
             opts["row"] = g + 1
+        self.full = ttk.Label(parent, text="", foreground=INK2)      # the bounds in full, when a box cuts one
+        self._full_at = dict(row=g + 2, column=2, columnspan=COLS - 2, sticky="w", padx=4, pady=(0, 3))
         for e, fn in ((self.lo, self.on_bounds), (self.hi, self.on_bounds), (self.val, self.on_value),
                       (self.rel, self.on_relation)):
             e.bind("<Return>", fn)
@@ -523,10 +551,10 @@ class VarRow:
             if slider:
                 self.scale.set(v)
             self.val.state(["!disabled"])
-            for e, x in ((self.lo, lo), (self.hi, hi), (self.val, v)):
+            for e, x in zip((self.lo, self.hi, self.val), self._bounds_shown() + (f"{v:.{self.digits}f}",)):
                 if focus is not e:
                     e.delete(0, "end")
-                    e.insert(0, f"{x:.{self.digits}f}")
+                    e.insert(0, x)
             self.val.state(["disabled" if defined else "!disabled"])        # '=': it follows the others
             self.free_box.state(["disabled" if defined else "!disabled"])
             self.info.configure(text=ad.row_info(self.name))
@@ -535,9 +563,15 @@ class VarRow:
         finally:
             self._busy = False
 
+    def _bounds_shown(self):
+        """What the low and high boxes show: a number, or a dependent bound's expression."""
+        ad = self.app.ad
+        return tuple(f"{b:.{self.digits}f}" if t is None else t
+                     for b, t in zip(ad.bounds(self.name), ad.bound_text(self.name)))
+
     def _relation_line(self, v, low, high, dep, defined, focus):
         """The line under the row: there for a dependent variable (and once dep is ticked), with its relation
-        and what it gives now: the limits, the value it follows ('='), or that it cannot hold."""
+        and what the variable has now: its limits, the value it follows ('='), or no room."""
         ad, d = self.app.ad, self.digits
         show = dep or self._open
         self.dep.set(show)
@@ -546,6 +580,12 @@ class VarRow:
                 w.grid(**opts)
             else:
                 w.grid_remove()
+        long = [f"{w} {t}" for w, t in zip(("low", "high"), ad.bound_text(self.name)) if t and len(t) > BOX]
+        if long:                                         # an expression its box cuts: here in full
+            self.full.configure(text="bounds:  " + ",  ".join(long))
+            self.full.grid(**self._full_at)
+        else:
+            self.full.grid_remove()
         if not show:
             return
         if focus is not self.rel:
@@ -560,7 +600,7 @@ class VarRow:
         elif defined:
             self.rel_info.configure(text=f"now {v:.{d}f}", foreground=INK2)
         elif high < low:
-            self.rel_info.configure(text="cannot hold in low .. high", foreground=RED)
+            self.rel_info.configure(text="no room now: low above high", foreground=RED)
         else:
             self.rel_info.configure(text=f"now {low:.{d}f} .. {high:.{d}f}", foreground=INK2)
 
@@ -577,13 +617,37 @@ class VarRow:
             self.app.set_value(self.name, v, None)
 
     def on_bounds(self, _event=None):
+        """The low or high box changed (Return, or the box left): a number, or an expression of other variables
+        ('v1', '0.9*chord.v0': a dependent bound). A text that is neither is named in the status bar and
+        changes nothing. A box left as it is shown keeps its bound exactly (not the rounded number)."""
+        ad = self.app.ad
         try:
-            lo, hi = float(self.lo.get()), float(self.hi.get())
-        except ValueError:
-            return self.refresh()
-        if (lo, hi) != tuple(round(b, self.digits) for b in self.app.ad.bounds(self.name)):
-            self.app.guard(lambda: self.app.ad.set_bounds(self.name, lo, hi))
-            self.app.after_change()
+            typed = (self.lo.get().strip(), self.hi.get().strip())
+        except tk.TclError:                              # the row is gone (panel rebuilt)
+            return
+        given, changed = [], False
+        for t, s, b, e in zip(typed, self._bounds_shown(), ad.bounds(self.name), ad.bound_text(self.name)):
+            same = t == s
+            if not same and e is None:                   # the same number, written another way ('0.5', '.50')
+                try:
+                    same = float(t) == round(b, self.digits)
+                except ValueError:
+                    pass
+            given.append((b if e is None else e) if same else t)
+            changed = changed or not same
+        if not changed:
+            return
+        try:
+            ad.set_bounds(self.name, *given)
+        except ValueError as exc:                        # no bound, or one refused: nothing has changed
+            self.app.say(f"{self.name}: {exc}", error=True)
+            return
+        except Exception as exc:                         # keep the tool alive
+            self.app.say(f"{type(exc).__name__}: {exc}", error=True)
+        for e, x in zip((self.lo, self.hi), self._bounds_shown()):       # as the tool writes it ('0.9*v0')
+            e.delete(0, "end")
+            e.insert(0, x)
+        self.app.after_change()
 
     def on_free(self):
         self.app.ad.set_free(self.name, self.free.get())
@@ -592,10 +656,16 @@ class VarRow:
 
     def on_dep(self):
         """The dep switch. Ticked: the relation line opens, and the variable depends on others once a relation
-        is entered there. Unticked: independent again (its relation dropped)."""
+        is entered there (or an expression in its low or high box). Unticked: independent again, its relation
+        dropped and its dependent bounds numbers, where they are now."""
         self._open = bool(self.dep.get())
         if not self._open and self.app.ad.is_dependent(self.name):
-            self.app.guard(lambda: self.app.ad.set_relation(self.name, ""))
+            try:
+                self.app.ad.set_independent(self.name)
+            except Exception as exc:                     # refused: bounds that cross cannot be numbers
+                self.app.say(str(exc) if isinstance(exc, ValueError) else f"{type(exc).__name__}: {exc}", error=True)
+                self.refresh(slider=False)               # dep stays ticked
+                return
             self.app.after_change()
             return
         self.refresh(slider=False)
@@ -954,6 +1024,7 @@ class App:
                 lab = ttk.Label(grid, text=spec.text, foreground=INK2)
                 lab.grid(row=grid_row(r), column=3, columnspan=COLS - 3, sticky="w")
                 self.pinned.append(lab)
+        ttk.Label(box, text=DEPENDENT_HINT, foreground=INK2, wraplength=590, justify="left").pack(fill="x", padx=4)
 
         for w in self.outbar.winfo_children():
             w.destroy()

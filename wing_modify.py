@@ -1071,8 +1071,10 @@ class WingSpace(REL.SpaceRelations):
              curve its group
     fixed    {slot: value} of the held slots (not in the vector); with free given instead (curve names and
              "span"), every other slot is held at the design's value
-    Dependent variables (xgeom_relations.SpaceRelations): set_relations({slot: relation text}), relations,
-    violations(x), project(x); a slot defined with '=' leaves the vector (full_vector works it out).
+    Dependent variables (xgeom_relations.SpaceRelations): set_relations (relations, dependent bounds),
+    relations, dependent_bounds, violations(x), project(x). A free slot with a dependent bound is in the vector as
+    its fraction between its bounds (factors; its row of bounds 0 .. 1): to_design places it, to_vector gives it
+    back. A slot defined with '=' leaves the vector (full_vector works it out).
     """
 
     def __init__(self, params, design, bounds=None, fixed=None, free=None):
@@ -1143,16 +1145,11 @@ class WingSpace(REL.SpaceRelations):
         return {name: float(design.span) if c is None else design.curves[c].get(k)
                 for (c, k), name in zip(self._slots, self.all_names)}
 
-    def to_vector(self, design):
-        vals = self.values(design)
-        return np.array([vals[n] for n in self.names])
-
     def to_dict(self, design):
         vals = self.values(design)
         return {"forms": {c: f[0] for c, f in self.forms.items()}, "orders": {c: f[1] for c, f in self.forms.items()},
                 "changes": self.changes, "slots": self.slot_records(vals),
-                "vector": {"names": self.names, "values": [vals[n] for n in self.names],
-                           "bounds": self.bounds.tolist()}}
+                "vector": self.vector_record(vals)}
 
     @classmethod
     def from_dict(cls, params, rec):
@@ -1166,7 +1163,7 @@ class WingSpace(REL.SpaceRelations):
         bounds = {q["name"]: (q["lo"], q["hi"]) for q in rec["slots"]}
         fixed = {q["name"]: q["value"] for q in rec["slots"] if not q["free"]}
         space = cls(params, tmpl, bounds, fixed)
-        space.set_relations({q["name"]: q["relation"] for q in rec["slots"] if q.get("relation")})
+        space.set_slot_relations(rec["slots"])
         return space, space.design_of(vals)
 
 
@@ -1284,9 +1281,9 @@ def _component_design(comp, params, orders=None, segments=None):
 
 
 def _component_space(comp, params, design, free=None):
-    """The WingSpace of a component: each variable's bounds, free flag and relation (a dependent variable's)
-    from its var line; one with none: default_bounds (its curve's vary range for the values) and free as the
-    vary lines say (with none: the names in free)."""
+    """The WingSpace of a component: each variable's bounds (numbers, or a dependent bound's expression), free
+    flag and relation from its var line; one with none: default_bounds (its curve's vary range for the values)
+    and free as the vary lines say (with none: the names in free)."""
     names = set(design.names) | {"span"}
     bad = sorted(set(comp.vary) - names)
     if bad:
@@ -1303,7 +1300,8 @@ def _component_space(comp, params, design, free=None):
     fixed = {n: vals[n] for n in full.all_names
              if not (comp.vars[n].free if n in comp.vars else n.split(".")[0] in free0)}
     return WingSpace(params, design, bounds=bounds, fixed=fixed).set_relations(
-        {n: q.relation for n, q in comp.vars.items() if q.relation}, comp.path)
+        {n: q.relation for n, q in comp.vars.items() if q.relation}, comp.path,
+        {n: (q.lo_expr, q.hi_expr) for n, q in comp.vars.items() if q.lo_expr or q.hi_expr}, vals)
 
 
 def load_component(path, orders=None, segments=None, free=None):
@@ -1311,12 +1309,13 @@ def load_component(path, orders=None, segments=None, free=None):
     (each curve as its var lines give it; a curve without them fitted to its column as fit_design fits it,
     orders and segments, or as the table has it), the design space (every variable, the held ones fixed; a
     variable without a var line free as the vary lines say, else as the names in free; the dependent ones with
-    their relations, ld.space.relations), the file's settings (SETTING_TYPES), its name and notes. The kind is
-    the file's. The design is the file's as it is: ld.space.design_violations(ld.design) says what it breaks.
+    their relations and dependent bounds, ld.space.relations and ld.space.dependent_bounds), the file's
+    settings (SETTING_TYPES), its name and notes. The kind is the file's. The design is the file's as it is:
+    ld.space.design_violations(ld.design) says what it breaks.
 
         ld = load_component("fin.txt")
-        x0, bounds = ld.space.to_vector(ld.design), ld.space.bounds
-        d = ld.space.to_design(x)
+        x0, bounds = ld.space.to_vector(ld.design), ld.space.bounds      # a variable with a dependent bound: its
+        d = ld.space.to_design(x)                                        # fraction between its bounds, 0 .. 1
         broken = ld.space.violations(x)                # of the dependent variables' relations ([]: none)
     """
     comp = XF.read_component(path)

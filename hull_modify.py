@@ -521,8 +521,10 @@ class HullSpace(REL.SpaceRelations):
     bounds   overrides of default_bounds by slot
     fixed    {slot: value} of the held slots (not in the vector); with free given instead (globals and curve
              names, default DEFAULT_FREE), every other slot is held at the design's value
-    Dependent variables (xgeom_relations.SpaceRelations): set_relations({slot: relation text}), relations,
-    violations(x), project(x); a slot defined with '=' leaves the vector (full_vector works it out).
+    Dependent variables (xgeom_relations.SpaceRelations): set_relations (relations, dependent bounds),
+    relations, dependent_bounds, violations(x), project(x). A free slot with a dependent bound is in the vector as
+    its fraction between its bounds (factors; its row of bounds 0 .. 1): to_design places it, to_vector gives it
+    back. A slot defined with '=' leaves the vector (full_vector works it out).
     """
 
     def __init__(self, design, bounds=None, fixed=None, free=None):
@@ -554,10 +556,6 @@ class HullSpace(REL.SpaceRelations):
         return {n: float(getattr(design, k)) if c is None else design.curves[c].get(k)
                 for (c, k), n in zip(self._slots, self.all_names)}
 
-    def to_vector(self, design):
-        vals = self.values(design)
-        return np.array([vals[n] for n in self.names])
-
     def to_design(self, x):
         return self.design_of(dict(zip(self.all_names, self.full_vector(x))))
 
@@ -577,8 +575,7 @@ class HullSpace(REL.SpaceRelations):
     def to_dict(self, design):
         vals = self.values(design)
         return {"axisymmetric": self.axisymmetric, "orders": self.orders, "slots": self.slot_records(vals),
-                "vector": {"names": self.names, "values": [vals[n] for n in self.names],
-                           "bounds": self.bounds.tolist()}}
+                "vector": self.vector_record(vals)}
 
     @classmethod
     def from_dict(cls, rec):
@@ -595,7 +592,7 @@ class HullSpace(REL.SpaceRelations):
             d.rp, d.rpe = vals["rp"], vals["rpe"]
         space = cls(d, {q["name"]: (q["lo"], q["hi"]) for q in rec["slots"]},
                     {q["name"]: q["value"] for q in rec["slots"] if not q["free"]})
-        space.set_relations({q["name"]: q["relation"] for q in rec["slots"] if q.get("relation")})
+        space.set_slot_relations(rec["slots"])
         return space, d
 
 
@@ -731,9 +728,9 @@ def _component_design(comp, params, orders=None):
 
 
 def _component_space(comp, design, free=None):
-    """The HullSpace of a hull component: each variable's bounds, free flag and relation (a dependent
-    variable's) from its var line; one with none: default_bounds (a vary range for a length or a radius) and free
-    as the vary lines say (with none: the names in free, default DEFAULT_FREE)."""
+    """The HullSpace of a hull component: each variable's bounds (numbers, or a dependent bound's expression),
+    free flag and relation from its var line; one with none: default_bounds (a vary range for a length or a
+    radius) and free as the vary lines say (with none: the names in free, default DEFAULT_FREE)."""
     names = set(global_slots(design)) | set(design.curves)
     bad = sorted(set(comp.vary) - names)
     if bad:
@@ -751,7 +748,8 @@ def _component_space(comp, design, free=None):
     fixed = {n: vals[n] for n in full.all_names
              if not (comp.vars[n].free if n in comp.vars else n.split(".")[0] in free0)}
     return HullSpace(design, bounds=bounds, fixed=fixed).set_relations(
-        {n: q.relation for n, q in comp.vars.items() if q.relation}, comp.path)
+        {n: q.relation for n, q in comp.vars.items() if q.relation}, comp.path,
+        {n: (q.lo_expr, q.hi_expr) for n, q in comp.vars.items() if q.lo_expr or q.hi_expr}, vals)
 
 
 def load_component(path, orders=None, free=None):

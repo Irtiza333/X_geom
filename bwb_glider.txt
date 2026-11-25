@@ -19,8 +19,11 @@
 # cap_loops     40
 # ---- curves and variables
 # ---- curve <name> <form>: table | bezier1 <points> | smooth2
-# ---- var <name> <value> <low> <high> <Y free | N held> [<relation>]: independent without a relation; dependent with one,
-# ----     an operator (< <= > >= =) and an expression of other variables, such as <= 0.5*chord.v2 + 2*chord.v3
+# ---- var <name> <value> <low> <high> <Y free | N held> [<relation>]
+# ----     independent: numbers for low and high, no relation
+# ----     dependent:   low or high an expression of other variables (one word, such as 0.9*chord.v0),
+# ----                  or a relation after the flag: an operator (< <= > >= =) and an expression,
+# ----                  such as <= 0.5*chord.v2 + 2*chord.v3
 # var    span                         500               250               750  Y
 # curve  pitch         bezier1 4
 # var    pitch.d1          0.333333333333              0.01              0.99  Y

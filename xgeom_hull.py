@@ -115,9 +115,6 @@ class HullAdapter(REL.AdapterRelations):
     def get(self, name):
         return self.values[name]
 
-    def bounds(self, name):
-        return self.meta[name]["lo"], self.meta[name]["hi"]
-
     def is_free(self, name):
         return self.meta[name]["free"]
 
@@ -132,7 +129,9 @@ class HullAdapter(REL.AdapterRelations):
         return value
 
     def set_bounds(self, name, lo, hi):
-        lo, hi = float(lo), float(hi)
+        """A variable's bounds: each a number, or an expression of other variables (a dependent bound, such
+        as '0.9*v0': xgeom_relations). Returns them as numbers at the present design."""
+        lo, hi, keep = self._bounds_given(name, lo, hi)
         if not lo < hi:
             raise ValueError("the lower bound must be below the upper one")
         if name in ("nose", "tail", "r", "rp") and lo <= 0.0:
@@ -141,6 +140,7 @@ class HullAdapter(REL.AdapterRelations):
             raise ValueError("a length or a radius is not negative")
         if name.split(".")[-1] in ("N1", "N2") and lo <= 0.0:
             raise ValueError("an exponent is positive")
+        keep()                                      # the dependent bounds' expressions (none: numbers)
         self.meta[name].update(lo=lo, hi=hi)
         self._rebuild()
         v = self.values[name]

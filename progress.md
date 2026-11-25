@@ -923,6 +923,47 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   (the grammar, limits and following, every design space, the files, the adapters, the rows; in the Rudder
   folder the module and the rudder), tool 74, wing 79, files 60, hull 65, blade 79 with the window, modify 136,
   hull_modify 17; the contract test passes (its one note as before).
+- Dependent bounds (25 Nov 2026; the user: "the bounds should also be able to be dependent, like is the case in
+  my msc prop optimization. Look at that as an example"). The MSc pipeline (Prop_hull:
+  para_control_bez_updated.py, blade_design.py, gp_infill_from_training_data.py) bounds a control point between
+  other points and samples its fraction: P4's pitch is p1y + (max_pitch - p1y) y4_frac, P2 and P5 sit at the
+  fractions d1 and d2 between P4 and the ends, and the design variables are those fractions, each 0 to 1 (its
+  "design vars" against its "con points"). XGeom now has the same for any variable: low or high may be an
+  expression of other variables in place of a number (`pitch.v4` with low `pitch.v1` and high 1.4 is the MSc's
+  y4_frac; the self-check compares to_design with the MSc formula). The variable keeps its place between its
+  bounds, the fraction of the way from low to high, when the others move, and that fraction is its entry in the
+  design vector, with the bounds 0, 1, so a vector inside its bounds is a design inside its bounds. A relation
+  (24 Nov) stays what it was: a condition on top of the bounds that an optimiser checks or projects onto (the
+  MSc's coupled limits). `xgeom_relations.py`: `Expression`, `parse_bound` (a number, or an expression: one
+  word, no blanks), `bounds_at`, `places`, `crossed`; `order`, `limits`, `nearest` and `apply` take the bounds'
+  expressions, and `apply(kept=places)` moves a variable whose bounds moved to its place. Bounds can cross (low
+  above high) where a number faces an expression: reported like a broken relation (`violations`, the tool's
+  warnings); the build still runs. Files: the low and high words of the var line take an expression (`# var
+  pitch.v4 1.29 pitch.v1 1.4 Y`; written with full names; `xgeom_files.Var.lo_expr`, `hi_expr`), and the block's
+  title lines now say what makes a variable independent or dependent. A bound with blanks or a wrong grammar
+  (with its line), a name that is no variable, a loop, or a bound that divides by zero at the file's design is
+  refused with the file named. The rudder-h set-up JSON: `lo_expr`, `hi_expr` in a slot beside the numbers,
+  `fractions` in its vector; H keeps numbers (h_min, h_max). Design spaces (`SpaceRelations`):
+  `set_relations(texts, where, bounds, values)`, `dependent_bounds`, `factors` (the vector's variables that are
+  fractions), `bound_text`, `bounds_of(values)`, `vector_of`; `to_vector` is the mixin's one copy; a held
+  variable with a dependent bound keeps its fraction; `violations` names crossed bounds too; `project` keeps
+  the fractions. `blade_modify.outside_bounds` takes the bounds where the design puts them. Adapters
+  (`AdapterRelations`): `bounds(name)` is the mixin's and works a dependent bound out where the design is;
+  `set_bounds` takes a number or an expression for each side (the adapters' own checks at the present design);
+  new `bound_text`, `set_independent`; `set()` and `follow()` keep the places. The tool: the low and high boxes
+  take a number or an expression (a text that is neither is named in the status bar), dep is ticked for a
+  variable with a dependent bound too, the line under the row shows its limits now, a bound too long for its
+  box is shown in full under that, and a line under the curve's table says what the boxes and dep take; dep
+  unticked makes the bounds numbers where they are. The five samples re-saved (their title lines only). For
+  the web app: additive (docs/keeping-interfaces-stable.md). `bounds(name)` returns numbers as before and
+  `meta[name]["lo"]`, `["hi"]` hold them; `meta[name]` has `"lo_expr"`, `"hi_expr"` for a dependent bound only;
+  `set_bounds` given numbers makes the bounds numbers, so a caller that wants to keep a dependent bound passes
+  its text back (`bound_text(name)`); `is_dependent` is true for a dependent bound; `preview()["warnings"]` also
+  names crossed bounds; a file with a dependent bound needs this version to read. `Initial_sampling.py` is
+  unchanged (it samples para_control's own fractions). Tests: `_xgeom_relations_test.py` 131 with the window
+  (was 69; new: the grammar of a bound, places and following, the spaces' fractions, the MSc y4_frac, the
+  files, the adapters, the rudder's JSON, the boxes; in the Rudder folder 42), tool 74, wing 79, files 60, hull
+  65, blade 79 with the window, modify 136, hull_modify 17; the contract test passes (its one note as before).
 
 ## Next steps
 
@@ -941,8 +982,8 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   designs with the problem checks, couple to CFD. `Initial_sampling.py` varies pitch and chord only (x_blade_new's
   form); other parameters flagged Y are reported, not sampled.
 - Dependent variables: the rudder-h set-up as a text file with the component files' layout (it is JSON, with
-  the same variable records), if the user wants it; relations in `Initial_sampling.py` when a campaign needs
-  them.
+  the same variable records), if the user wants it; `Initial_sampling.py` sampling a set-up's own design vector
+  (its fractions and relations) when a campaign needs it (it samples para_control's variables today).
 - Rudder: the tip tilt and cap parameters into the design space. If the mesher draws the tip's rounded edge
   the way it drew the TE: a band of its own for it (as the TE strip now is for the TE's round).
 - Open items: section-fit bounds (X2 on its bound) and an LE-radius constraint; plain-named rudder outputs are

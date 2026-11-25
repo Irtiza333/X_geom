@@ -156,9 +156,6 @@ class RudderAdapter(REL.AdapterRelations):
     def get(self, name):
         return self.values[name]
 
-    def bounds(self, name):
-        return self.meta[name]["lo"], self.meta[name]["hi"]
-
     def is_free(self, name):
         return self.meta[name]["free"]
 
@@ -171,8 +168,12 @@ class RudderAdapter(REL.AdapterRelations):
         return value
 
     def set_bounds(self, name, lo, hi):
-        lo, hi = float(lo), float(hi)
+        """A variable's bounds: each a number, or an expression of other variables (a dependent bound, such
+        as '0.9*v0': xgeom_relations). Returns them as numbers at the present design."""
+        lo, hi, keep = self._bounds_given(name, lo, hi)
         if name == "H":
+            if keep.dependent:
+                raise ValueError("the bounds of H are numbers (h_min, h_max)")
             top = self.settings["z_top"]
             if not 0.0 < lo < hi <= top + 1e-9:
                 raise ValueError(f"H bounds must satisfy 0 < low < high <= {top:.4f} mm (the top horizontal section)")
@@ -181,6 +182,7 @@ class RudderAdapter(REL.AdapterRelations):
             raise ValueError("the lower bound must be below the upper one")
         if re.search(r"\.d\d+$", name) and not 0.0 <= lo < hi <= 1.0:
             raise ValueError("a height fraction d lies in [0, 1]")
+        keep()                                      # the dependent bounds' expressions (none: numbers)
         self.meta[name].update(lo=lo, hi=hi)
         self._rebuild()
         v = self.values[name]

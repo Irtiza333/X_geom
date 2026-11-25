@@ -697,9 +697,12 @@ class DesignSpace(REL.SpaceRelations):
     all_names / all_bounds cover every slot, names / bounds the free ones;
     len(space) is the number of design variables.
 
-    Dependent variables (xgeom_relations.SpaceRelations): set_relations({slot:
-    relation text}), relations, violations(x), project(x); a slot defined
-    with '=' leaves the vector (full_vector works it out)."""
+    Dependent variables (xgeom_relations.SpaceRelations): set_relations
+    (relations, dependent bounds), relations, dependent_bounds, violations(x),
+    project(x). A free slot with a dependent bound is in the vector as its
+    fraction between its bounds (factors; its row of bounds 0 .. 1): to_design
+    places it, to_vector gives it back. A slot defined with '=' leaves the
+    vector (full_vector works it out)."""
 
     def __init__(self, orig, orders=None, join="G1", weights=None, bounds=None, h_min=None, h_max=None,
                  fixed=None):
@@ -791,15 +794,13 @@ class DesignSpace(REL.SpaceRelations):
                 out[name] = float(cd.v[k])
         return out
 
-    def to_vector(self, design):
-        vals = self.values(design)
-        return np.array([vals[n] for n in self.names])
-
     def to_dict(self, design):
         """The space and a design in it, as plain data (JSON): the section
         degree, orders, joins, weights, every slot with its value, bounds,
-        whether it is free and (a dependent variable) its relation, and the
-        design vector (names, values, bounds). from_dict reads it back."""
+        whether it is free and (a dependent variable) its relation and the
+        expressions of its dependent bounds, and the design vector (names,
+        values, bounds; a slot with a dependent bound as its fraction between
+        its bounds). from_dict reads it back."""
         vals = self.values(design)
         return {"z_top_mm": self.orig.z_top, "h_min_mm": float(self.all_bounds[0, 0]),
                 "h_max_mm": float(self.all_bounds[0, 1]),
@@ -807,8 +808,7 @@ class DesignSpace(REL.SpaceRelations):
                 "orders": {c: int(self.orders[c]) for c in self.curves}, "join": dict(self.join),
                 "weights": {c: (None if self.weights[c] is None else self.weights[c].tolist()) for c in self.curves},
                 "slots": self.slot_records(vals),
-                "vector": {"names": self.names, "values": [vals[n] for n in self.names],
-                           "bounds": self.bounds.tolist()}}
+                "vector": self.vector_record(vals)}
 
     @classmethod
     def from_dict(cls, orig, rec):
@@ -816,12 +816,14 @@ class DesignSpace(REL.SpaceRelations):
         orig at the record's section degree."""
         orig = orig.at_degree(int(rec.get("degree", orig.degree)))
         slots = rec["slots"]
+        if any(q["name"] == "H" and (q.get("lo_expr") or q.get("hi_expr")) for q in slots):
+            raise ValueError("the bounds of H are numbers (h_min, h_max)")
         bounds = {q["name"]: (q["lo"], q["hi"]) for q in slots}
         fixed = {q["name"]: q["value"] for q in slots if not q["free"]}
         weights = {c: w for c, w in (rec.get("weights") or {}).items() if w is not None}
         space = cls(orig, rec["orders"], rec["join"], weights, bounds, h_min=bounds["H"][0], h_max=bounds["H"][1],
                     fixed=fixed)
-        space.set_relations({q["name"]: q["relation"] for q in slots if q.get("relation")})
+        space.set_slot_relations(slots)
         return space, space.design_of({q["name"]: q["value"] for q in slots})
 
 
@@ -1679,9 +1681,8 @@ def write_case(out_dir, case, design, orig, original_xcad, n_sec=50, num_pts=200
                                      "slope_per_mm": float(orig.slope(c, d.H)[0])} for c in orig.names}},
            "xcad": {k: v for k, v in xinfo.items() if k != "path"},
            "files": {k: os.path.basename(v) for k, v in p.items()}}
-    if space is not None:
-        rec["vector"] = {"names": space.names, "values": space.to_vector(d).tolist(),
-                         "bounds": space.bounds.tolist()}
+    if space is not None:                                 # names, values, bounds; "fractions" when any
+        rec["vector"] = space.vector_record(space.values(d))
     with open(p["json"], "w") as fh:
         json.dump(rec, fh, indent=1)
     if plot:

@@ -37,6 +37,10 @@ assembly. XGeom is the pre-optimization design step.
   independent, or dependent on others through an expression): name, value, low, high, free or held, and for a
   dependent variable its relation to other variables (Variables, below). A component file has it on the var
   line; the rudder-h model's set-up JSON has the same six in each slot record.
+- A bound may itself depend on other variables (25 Nov 2026, the user: "the bounds should also be able to be
+  dependent, like is the case in my msc prop optimization"): low or high is then an expression in place of a
+  number, the variable keeps its place between its bounds, and its entry in an optimiser's design vector is
+  that place, the fraction 0 to 1, as the MSc pipeline's y4_frac, d1 and d2 are.
 
 ## Component file
 
@@ -60,12 +64,16 @@ assembly. XGeom is the pre-optimization design step.
 # part          sector
 # ---- curves and variables
 # ---- curve <name> <form>: table | bezier1 <points> | bezier2
-# ---- var <name> <value> <low> <high> <Y free | N held> [<relation>]: independent without a relation; dependent with one,
-# ----     an operator (< <= > >= =) and an expression of other variables, such as <= 0.5*chord.v2 + 2*chord.v3
-# var    radius     0.7     0.524  0.875  N
+# ---- var <name> <value> <low> <high> <Y free | N held> [<relation>]
+# ----     independent: numbers for low and high, no relation
+# ----     dependent:   low or high an expression of other variables (one word, such as 0.9*chord.v0),
+# ----                  or a relation after the flag: an operator (< <= > >= =) and an expression,
+# ----                  such as <= 0.5*chord.v2 + 2*chord.v3
+# var    radius     0.7     0.524     0.875  N
 # curve  pitch      bezier2
-# var    pitch.v1   1.2414  0.60   1.40   Y
-# var    pitch.v7   0.62    0.28   1.64   Y  < 0.9*pitch.v1
+# var    pitch.v1   1.2414  0.60      1.25   Y
+# var    pitch.v4   1.2912  pitch.v1  1.40   Y
+# var    pitch.v7   0.62    0.28      1.64   Y  < 0.9*pitch.v1
 # curve  skew       table
 # ---- distributions
 # r/R     P/D     c/D     t/c     f/c     skew_deg  rake/D
@@ -83,14 +91,16 @@ Header lines:
   `bezier1 <points>`, `bezier2` (x_blade's form, P1 to P7), `smooth2` (a blended wing body's: two cubic
   segments joined smoothly, flat at the centre line, P0 to P6), and for the hull `cst <order>`.
 - `# var <name> <value> <low> <high> <Y|N> [<relation>, ...]`: one line per variable, the same in every kind: Y
-  free, N held (values written to 12 figures); an independent variable ends at the flag, a dependent one has
-  its relation to other variables after it (Variables, below).
+  free, N held (values written to 12 figures). low and high are each a number, or an expression of other
+  variables written as one word (a dependent bound). An independent variable has numbers and ends at the flag;
+  a dependent one has an expression as a bound, a relation to other variables after the flag, or both
+  (Variables, below).
 - `# vary <name> Y|N [low high]` (blade_vary.py): Y free or N held, for the curves and globals without var
   lines; hand-written, or written in a blade's table file that has them (below). A set-up has var lines
   instead.
 - `# ---- <title>`: separators, ignored. The last `#` line before the table names the columns. The curves and
-  variables block starts with three of them that name its two line forms (above), so a file says how its
-  variables are declared.
+  variables block starts with title lines that name its two line forms and what makes a variable independent
+  or dependent (above), so a file says how its variables are declared.
 
 Keys and columns:
 
@@ -178,17 +188,36 @@ is refused by name); `read_params`, `write_params` (a table file), `load_compone
 
 ## Variables: independent and dependent
 
-Every variable of every component is declared the same way (24 Nov 2026), with six things:
+Every variable of every component is declared the same way (24 Nov 2026; dependent bounds 25 Nov 2026), with
+six things:
 
 | | |
 |---|---|
 | name | `span`, `radius`, `H`: a global one; `chord.v2`, `LE.dx3`, `nose_r.b1`: `<curve>.<key>` |
 | value | where the design is |
-| low, high | its bounds: numbers |
+| low, high | its bounds: each a number, or an expression of other variables (a dependent bound) |
 | free | Y a design variable, N held |
-| relation | none: an independent variable. One or more: a dependent variable |
+| relation | optional: a condition on top of the bounds |
 
-A relation is an operator and an expression of other variables of the same component:
+A variable is independent when its bounds are numbers and it has no relation. It is dependent when it depends
+on other variables of the same component, in one or both of two ways.
+
+A dependent bound is an expression in place of the number for low or for high:
+
+```
+low   pitch.v1           P4's pitch not under P1's
+high  0.9*chord.v0       at most 0.9 of the root chord
+```
+
+The variable then lies between its bounds wherever the other variables are. When one of them moves it keeps its
+place between its bounds, the fraction of the way from low to high, and that fraction, 0 to 1, is the
+variable's entry in an optimiser's design vector: a vector inside its bounds gives a design inside its bounds,
+with nothing to check or repair. This is how the MSc propeller optimisation bounds its control points
+(para_control_bez_updated.py): P4's pitch is `p1y + (max_pitch - p1y) * y4_frac`, so `pitch.v4` with low
+`pitch.v1` and high `1.4` has the MSc's `y4_frac` as its vector entry (the self-check compares the two). P2 and
+P5 need nothing: the 2-segment form's `d1` and `d2` are those fractions already.
+
+A relation is an operator and an expression, after the flag:
 
 ```
 <= 0.5*chord.v2 + 2*chord.v3      at most that            (< reads the same)
@@ -196,47 +225,78 @@ A relation is an operator and an expression of other variables of the same compo
 =  chord.v0                       that value: the variable follows the others and is no design variable
 ```
 
-- The expression: numbers, variable names, `+ - * /` and brackets; `0.5v4` is read as `0.5*v4`. Several
-  relations are separated by commas (`> 0.5*chord.v0, < chord.v1`); `=` stands alone.
+A relation is a condition on top of the bounds. The variable stays in the design vector as its own value, and
+an optimiser checks the relation or projects the vector onto it (the MSc pipeline's coupled limits, chord_sum
+and pitch_diff, with reject or project). In the tool the variable stays where it is until the relation would
+break, and is then moved onto it.
+
+Which one: a dependent bound when the variable's range itself moves with another variable and every sample
+should lie inside it (the sampling stays a box); a relation for a limit that binds only sometimes, or to tie a
+variable to others exactly (`=`).
+
+- The expression: numbers, variable names, `+ - * /` and brackets; `0.5v4` is read as `0.5*v4`. A bound is one
+  word, written without blanks (`0.9*chord.v0`), because blanks separate the var line's columns; a relation,
+  the last thing on the line, may have blanks. Several relations are separated by commas (`> 0.5*chord.v0, <
+  chord.v1`); `=` stands alone.
 - Names are the var lines' names. A variable of the same curve may be named by its key (`v2` for `chord.v2`);
   the files are written with full names.
-- A variable may depend on dependent ones, but not, in a loop, on itself (refused, the loop named). A relation
-  cannot use its own variable.
-- What it does: the variable's limits are its bounds narrowed by its relations at the other variables' present
-  values. In the tool a variable moves inside its limits, and when a variable it depends on moves it follows
-  (each dependent variable moved into its limits, in the order of their dependence). Relations that cannot
-  hold inside the bounds leave the variable on a bound, and the tool warns (the build still runs).
-- For an optimiser (`ld.space` of `load_component`, `rudder_modify.load_design_space`): `space.relations`; a
-  free dependent variable stays in the design vector with its bounds, and its relations are constraints:
-  `space.violations(x)` lists what a vector breaks (variable, text, amount), `space.project(x)` moves the
-  dependent variables into their limits. A variable with `=` leaves the vector; `to_design(x)` works it out.
-- Reading: a relation with a wrong grammar is refused with its line (`<path>, line <n>: the relation of
-  <name>: ...`), one that names no variable or closes a loop with the file's path. A file whose design breaks
-  one of its relations loads as it is written (`space.design_violations(design)` says what); the tool then
-  applies the relations and says which variables moved.
-- A relation goes with its variable: a curve given another form (points, segments) loses the relations of its
-  variables, and a relation elsewhere that names a variable now gone is dropped, which the tool says.
+- A variable may depend on dependent ones, but not, in a loop, on itself, through bounds, relations or both
+  (refused, the loop named). An expression cannot use its own variable.
+- What it does: the variable's limits are its bounds (a dependent one where the other variables put it now)
+  narrowed by its relations. In the tool a variable moves inside its limits, and when a variable it depends on
+  moves it follows, in the order of their dependence: one with a dependent bound to its place between its
+  bounds, one whose relation would break onto it. Relations that cannot hold inside the bounds leave the
+  variable on a bound. Bounds can cross, low above high, where a number faces an expression (low 40, high
+  `chord.v1`, and `chord.v1` under 40); bounds such as `0.5*chord.v0` .. `chord.v0` (a chord is positive), or
+  ranges that do not overlap (the MSc's: P1's pitch up to 1.25, P4's from it to 1.4), never do. The tool warns
+  of both (the build still runs).
+- For an optimiser (`ld.space` of `load_component`, `rudder_modify.load_design_space`): `space.factors` names
+  the free variables with a dependent bound; their entries of the design vector are fractions and their rows of
+  `space.bounds` are 0, 1. `to_design(x)` places them, in the order of their dependence, `to_vector(design)`
+  gives them back, and `space.bounds_of(values)` has every variable's bounds at a design. A held variable with
+  a dependent bound keeps the fraction it has in the set-up's design. (`to_design` and `to_vector` are what the
+  MSc pipeline's `designvars_to_conpoints` and `conpoints_to_designvars` are.) A free variable with relations stays in
+  the vector as its value, and its relations are constraints: `space.violations(x)` lists what a vector breaks
+  (a relation that does not hold, bounds that cross: variable, text, amount) and `space.project(x)` moves the
+  variables onto their relations (fractions kept). A variable with `=` leaves the vector; `to_design(x)` works
+  it out.
+- Reading: a bound or a relation with a wrong grammar is refused with its line (`<path>, line <n>: the low
+  bound of <name>: ...`, `... the relation of <name>: ...`), one that names no variable or closes a loop with
+  the file's path. A dependent bound's number is its expression's value at the file's design. A file whose
+  design breaks one of its relations loads as it is written (`space.design_violations(design)` says what); the
+  tool then applies the relations and says which variables moved.
+- A dependent bound or a relation goes with its variable: a curve given another form (points, segments) loses
+  those of its variables, and one elsewhere that names a variable now gone is dropped (the relation gone, the
+  bound the number it last had), which the tool says.
+- The rudder-h model's H keeps numbers for its bounds (h_min, h_max).
 
 In a component file (every kind):
 
 ```
 # var    chord.v0                     120                40               150  Y
-# var    chord.v1                     108                40               150  Y  < 0.9*chord.v0
+# var    chord.v1                     100      0.5*chord.v0          chord.v0  Y
 # var    chord.v2                      90                40               150  Y  < chord.v1, > 0.25*chord.v0
 # var    pitch.v1                       2                -3                 4  Y  = pitch.v0
 ```
 
-In the rudder-h model's set-up JSON (`<case>_design_space.json`), one record per variable in `space.slots`,
-`relation` only in a dependent variable's:
+In the rudder-h model's set-up JSON (`<case>_design_space.json`), one record per variable in `space.slots`.
+`lo` and `hi` are always numbers (a dependent bound's: its value at the set-up's design); `lo_expr`, `hi_expr`
+and `relation` are only in the record of a variable that has one:
 
 ```
-{"name": "LE.dx3", "value": -30.0, "lo": -320.0, "hi": 0.0, "free": true, "relation": "< LE.dx2"}
+{"name": "LE.dx2", "value": -200.0, "lo": -320.0, "hi": 0.0, "free": true, "relation": "> -2.5*H"}
+{"name": "LE.dx3", "value": -50.0, "lo": -200.0, "hi": 0.0, "free": true, "lo_expr": "LE.dx2"}
 ```
 
-A file without relations is written as before: the var lines and the slot records of independent variables
-are unchanged. `Initial_sampling.py` does not read relations (the MSc pipeline samples para_control's own
-variables, with its own coupled limits). Code: `xgeom_relations.py` (the grammar, `limits`, `apply`,
-`violations`; `SpaceRelations` for the design spaces, `AdapterRelations` for the tool's adapters).
+`space.vector` (names, values, bounds) has a variable with a dependent bound as its fraction, with the bounds
+0, 1, and names those variables in `fractions`.
+
+A file without dependent variables is written as before: the var lines and the slot records of independent
+variables are unchanged. `Initial_sampling.py` reads neither dependent bounds nor relations (the MSc pipeline
+samples para_control's own variables, which are these fractions already, with its own coupled limits). Code:
+`xgeom_relations.py` (the grammar: `parse`, `parse_bound`; `bounds_at`, `places`, `limits`, `apply`,
+`violations`, `crossed`; `SpaceRelations` for the design spaces, `AdapterRelations` for the tool's adapters).
+The self-check is `_xgeom_relations_test.py`.
 
 ## Assembly file
 
@@ -282,10 +342,13 @@ variables, with its own coupled limits). Code: `xgeom_relations.py` (the grammar
 - The File box's Load ... reads a component file and sets the whole panel. Save set-up ... writes the component
   file; the dialog opens on the file it came from. `--space` takes the rudder-h model's JSON set-ups only.
 - Each variable's row: free | name | low | slider | high | value | where | dep (24 Nov 2026). The name is
-  what a relation calls the variable. dep unticked: independent. Ticked: a line opens under the row for its
-  relation (`> 0.5*v4`, Return sets it); the row then shows the limits the relation gives now, the slider runs
-  over them, and the variable follows the ones it depends on. With `=` the row's slider, value and free box are
-  off. Unticked again, or the relation emptied: independent.
+  what an expression calls the variable. The low and high boxes take a number or an expression of other
+  variables (`v1`, `0.9*chord.v0`; 25 Nov 2026): a dependent bound, shown in the box as the tool writes it, and
+  in full on a line under the row when the box cuts it. dep unticked: independent. Ticked (by hand, or because
+  a bound is an expression): a line opens under the row for a relation (`> 0.5*v4`, Return sets it) and shows
+  the limits the variable has now; the slider runs over them, and the variable follows the ones it depends on.
+  With `=` the row's slider, value and free box are off. Unticked again: independent, the relation dropped and
+  the dependent bounds numbers where they are.
 - From CAD ... (13 Nov 2026, `xgeom_from_cad.py`): in the File box of the blade and the hull and in the
   rudder's Set-up box. A STEP or IGES file of the component is extracted (blade_extraction.py, hull_extraction's
   stations, Rudder_geom_extraction.py with the per-section fits), every curve is fitted in each candidate form
@@ -404,3 +467,19 @@ it to the copy list). New adapter methods `relation(name)`, `set_relation(name, 
 dependent variable only; `set(name, value)` keeps a variable inside `limits(name)` and returns the value used,
 as before; `n_free()` leaves out a variable defined with `=`; the hull's and the rudder's `preview()` gain
 `"warnings"` (relations that cannot hold), which the blade's and the wing's already had.
+
+25 Nov 2026: dependent bounds (Variables, above): the low or high word of a var line may be an expression of
+other variables; the rudder-h model's set-up JSON takes `lo_expr` and `hi_expr` in a slot and `fractions` in
+its vector; the title lines of the curves and variables block say what makes a variable independent or
+dependent (the five samples re-saved with them, nothing else in them changed). For the web app: additive. A
+file with no dependent bound differs only in the separator lines; one with a dependent bound needs this
+version to read (an older reader takes low and high as numbers only). `bounds(name)` returns numbers as before,
+a dependent bound where the design puts it now, and `meta[name]["lo"]`, `["hi"]` hold the same numbers;
+`meta[name]` has `"lo_expr"`, `"hi_expr"` for a dependent bound only. `set_bounds(name, low, high)` takes
+numbers as before, or an expression's text for either; given numbers, it makes the bounds numbers, so a
+caller that wants to keep a dependent bound passes its text back, from the new `bound_text(name)` ((low, high)
+texts, None for a number; `short=False` for full names). New `set_independent(name)` (the relation dropped,
+the bounds numbers where they are); `is_dependent(name)` is true for a dependent bound too; `set(name, value)`
+moves the variables whose bounds use `name` with it; `preview()["warnings"]` also names bounds that cross. The
+spaces: `factors`, `dependent_bounds`, `bound_text(name)`, `bounds_of(values)`; `to_vector` and `to_design`
+carry the fractions; `xgeom_files.Var` has `lo_expr` and `hi_expr` (`''` for a number).

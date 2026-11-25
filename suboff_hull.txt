@@ -12,8 +12,11 @@
 # half          N
 # ---- curves and variables
 # ---- curve <name> <form>: cst <order>
-# ---- var <name> <value> <low> <high> <Y free | N held> [<relation>]: independent without a relation; dependent with one,
-# ----     an operator (< <= > >= =) and an expression of other variables, such as <= 0.5*nose_r.b1 + 2*nose_r.b2
+# ---- var <name> <value> <low> <high> <Y free | N held> [<relation>]
+# ----     independent: numbers for low and high, no relation
+# ----     dependent:   low or high an expression of other variables (one word, such as 0.9*nose_r.b0),
+# ----                  or a relation after the flag: an operator (< <= > >= =) and an expression,
+# ----                  such as <= 0.5*nose_r.b1 + 2*nose_r.b2
 # var    nose                1.0159999             0.507             1.524  Y
 # var    middle                2.22885                 0             3.344  Y
 # var    tail                1.0160002             0.508             1.525  Y
