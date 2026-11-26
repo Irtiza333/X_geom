@@ -17,7 +17,6 @@ other components are not (the Rudder folder: no wing_modify.py), the module and 
 
 import filecmp
 import importlib.util
-import json
 import os
 import shutil
 import sys
@@ -947,13 +946,20 @@ def test_bound_adapters(tmp):
 
 
 def test_rudder(tmp):
-    print("\nthe rudder modified below H (rudder_modify.DesignSpace, xgeom_rudder.RudderAdapter, its set-up JSON)")
+    print("\nthe rudder modified below H (rudder_modify.DesignSpace, xgeom_rudder.RudderAdapter, its set-up file)")
     missing = [f for f in RUDDER_FILES if not os.path.exists(os.path.join(HERE, f))]
     if missing:
         print("       skipped, not here: " + ", ".join(missing))
         return
     import rudder_modify as RM
+    import xgeom_files as XF
     import xgeom_rudder as XR
+
+    def same_but_name(a, b):
+        """Two component files alike but for the name they carry (their file names')."""
+        na, nb = (os.path.splitext(os.path.basename(f))[0].encode() for f in (a, b))
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            return fa.read() == fb.read().replace(nb, na)
     ad = XR.RudderAdapter()
     n0 = ad.n_free()[0]
     ad.set_relation("LE.dx3", "< dx2")
@@ -966,28 +972,31 @@ def test_rudder(tmp):
     h = ad.set("H", 60.0)
     check("H lowered: the LE point that depends on it follows (at least -0.5 H); the one under it stays",
           [h, ad.get("LE.dx2"), ad.get("LE.dx3")], [60.0, -30.0, -40.0], 1e-9)
-    p1 = ad.save_space(os.path.join(tmp, "rudder_design_space.json"))
+    p1 = ad.save_file(os.path.join(tmp, "rudder_rel.txt"))
+    comp = XF.read_component(p1)
     with open(p1) as fh:
-        rec = json.load(fh)
-    rel = {q["name"]: q["relation"] for q in rec["space"]["slots"] if "relation" in q}
-    check('the set-up JSON: "relation" in the slot of a dependent variable (names in full), no key in the others',
-          [rel == {"LE.dx2": "> -0.5*H", "LE.dx3": "< LE.dx2", "P2z.v3": "= P2z.v2"},
-           "P2z.v3" in rec["space"]["vector"]["names"], len(rec["space"]["vector"]["names"])], [1, 0, n0 - 1], 0)
+        tails = {ln.split()[2]: " ".join(ln.split()[7:]) for ln in fh.read().splitlines() if ln.startswith("# var")}
+    check("the set-up file (kind rudder_h): the relation after the flag on a dependent variable's var line (names "
+          "in full), nothing after it on the others",
+          [comp.kind == "rudder_h", {n: t for n, t in tails.items() if t}
+           == {"LE.dx2": "> -0.5*H", "LE.dx3": "< LE.dx2", "P2z.v3": "= P2z.v2"}, len(tails) == len(comp.vars)],
+          [1, 1, 1], 0)
     ad2 = XR.RudderAdapter()
-    ad2.load_space(p1)
-    p2 = ad2.save_space(os.path.join(tmp, "rudder_again_design_space.json"))
-    check("the set-up loaded: the relations and the design back; saved again, the same file",
+    ad2.load_params(p1)
+    p2 = ad2.save_file(os.path.join(tmp, "rudder_rel_again.txt"))
+    check("the set-up loaded: the relations and the design back; saved again, the same file but for its name",
           [{n: ad2.relation(n) for n in ad2.meta if ad2.is_dependent(n)}
            == {"LE.dx2": "> -0.5*H", "LE.dx3": "< dx2", "P2z.v3": "= v2"},
-           max(abs(ad2.get(n) - ad.get(n)) for n in ad.meta), filecmp.cmp(p1, p2, shallow=False)], [1, 0.0, 1], 1e-9)
-    space, design, _ = RM.load_design_space(p1)
+           max(abs(ad2.get(n) - ad.get(n)) for n in ad.meta), same_but_name(p1, p2)], [1, 0.0, 1], 1e-9)
+    space, design = RM.load_component(p1).space, RM.load_component(p1).design
     x = space.to_vector(design)
     x1 = x.copy()
     x1[space.names.index("LE.dx3")] = 0.0
-    check("for an optimiser (load_design_space): the relations, what a vector breaks, the vector projected",
-          [sorted(space.relations) == ["LE.dx2", "LE.dx3", "P2z.v3"], len(space.violations(x)),
-           [n for n, _, _ in space.violations(x1)] == ["LE.dx3"], space.project(x1)[space.names.index("LE.dx3")]],
-          [1, 0, 1, -30.0], 1e-9)
+    check("for an optimiser (rudder_modify.load_component): the relations, the variable defined with '=' out of "
+          "the vector, what a vector breaks, the vector projected",
+          [sorted(space.relations) == ["LE.dx2", "LE.dx3", "P2z.v3"], "P2z.v3" in space.names, len(space.names),
+           len(space.violations(x)), [n for n, _, _ in space.violations(x1)] == ["LE.dx3"],
+           space.project(x1)[space.names.index("LE.dx3")]], [1, 0, n0 - 1, 0, 1, -30.0], 1e-9)
     ad2.set_order("LE", 4)
     check("the LE curve with another number of control points: its relations go with its variables",
           sorted(n for n in ad2.meta if ad2.is_dependent(n)) == ["P2z.v3"], 1, 0)
@@ -1001,39 +1010,45 @@ def test_rudder(tmp):
     check("the bounds of H stay numbers (h_min, h_max)",
           ["the bounds of H are numbers" in message(ar.set_bounds, "H", "-0.1*LE.dx2", 80), ar.is_dependent("H")],
           [1, 0], 0)
-    p1 = ar.save_space(os.path.join(tmp, "rudder_bnd_design_space.json"))
+    p1 = ar.save_file(os.path.join(tmp, "rudder_bnd.txt"))
+    var = XF.read_component(p1).vars
     with open(p1) as fh:
-        rec = json.load(fh)
-    slot = {q["name"]: q for q in rec["space"]["slots"]}
-    vec = rec["space"]["vector"]
-    k = vec["names"].index("LE.dx3")
-    check('the set-up JSON: "lo_expr" in the slot beside the numbers (names in full), "fractions" in the vector, '
-          'the variable there as its fraction, 0 .. 1',
-          [slot["LE.dx3"]["lo_expr"] == "LE.dx2", "hi_expr" in slot["LE.dx3"], slot["LE.dx3"]["lo"],
-           slot["LE.dx3"]["hi"],
-           vec["fractions"] == ["LE.dx3"], vec["values"][k], *vec["bounds"][k],
-           sum("lo_expr" in q or "hi_expr" in q for q in rec["space"]["slots"])],
-          [1, 0, -200.0, 0.0, 1, 0.75, 0.0, 1.0, 1], 1e-9)
-    ar2 = XR.RudderAdapter()
-    ar2.load_space(p1)
-    p2 = ar2.save_space(os.path.join(tmp, "rudder_bnd_again_design_space.json"))
-    space, design, _ = RM.load_design_space(p1)
+        words = {ln.split()[2]: ln.split() for ln in fh.read().splitlines() if ln.startswith("# var")}
+    space, design = RM.load_component(p1).space, RM.load_component(p1).design
     x = space.to_vector(design)
+    k = space.names.index("LE.dx3")
+    check("the set-up file: the expression in the place of the low bound on the var line (names in full), the "
+          "high bound its number; for an optimiser (rudder_modify.load_component) the variable is its fraction, "
+          "0 .. 1",
+          [words["LE.dx3"][4] == "LE.dx2", var["LE.dx3"].lo_expr == "LE.dx2", var["LE.dx3"].hi_expr == "",
+           var["LE.dx3"].lo, var["LE.dx3"].hi, space.factors == ["LE.dx3"], x[k], *space.bounds[k],
+           sum(bool(q.lo_expr or q.hi_expr) for q in var.values())],
+          [1, 1, 1, -200.0, 0.0, 1, 0.75, 0.0, 1.0, 1], 1e-9)
+    ar2 = XR.RudderAdapter()
+    ar2.load_params(p1)
+    p2 = ar2.save_file(os.path.join(tmp, "rudder_bnd_again.txt"))
     x[space.names.index("LE.dx2")] = -80.0
-    check("the set-up loaded: the bound and the design back, saved again the same file; for an optimiser "
-          "(load_design_space) the variable is a fraction of the way from dx2 to 0",
-          [ar2.bound_text("LE.dx3") == ("dx2", None), ar2.get("LE.dx3"), filecmp.cmp(p1, p2, shallow=False),
-           space.factors == ["LE.dx3"], space.values(space.to_design(x))["LE.dx3"]], [1, -50.0, 1, 1, -20.0], 1e-9)
-    rec["space"]["slots"][0]["lo_expr"] = "-0.1*LE.dx2"
-    check("a set-up edited by hand to give H a dependent bound is refused",
-          [rec["space"]["slots"][0]["name"] == "H",
-           "the bounds of H are numbers" in message(RM.DesignSpace.from_dict, ar.orig, rec["space"])], [1, 1], 0)
-    old = RM.DesignSpace(ad.orig, ad.orders, ad.join, h_min=ad.settings["h_min"], h_max=ad.settings["h_max"])
-    rec = old.to_dict(ad.design)
-    check("a set-up without dependent variables is written as before (no relation, lo_expr or hi_expr key in any "
-          "slot, no fractions in the vector)",
-          [sum(k in q for q in rec["slots"] for k in ("relation", "lo_expr", "hi_expr")), "fractions" in rec["vector"]],
-          [0, 0], 0)
+    check("the set-up loaded: the bound and the design back, saved again the same file but for its name; a vector "
+          "with dx2 moved puts the variable the same fraction of the way from dx2 to 0",
+          [ar2.bound_text("LE.dx3") == ("dx2", None), ar2.get("LE.dx3"), same_but_name(p1, p2),
+           space.values(space.to_design(x))["LE.dx3"]], [1, -50.0, 1, -20.0], 1e-9)
+    with open(p1) as fh:
+        text = fh.read()
+    h_line = next(ln for ln in text.splitlines() if ln.startswith("# var") and ln.split()[2] == "H")
+    parts = h_line.split()
+    parts[4] = "-0.1*LE.dx2"
+    p3 = os.path.join(tmp, "rudder_h_bound.txt")
+    with open(p3, "w") as fh:
+        fh.write(text.replace(h_line, " ".join(parts)))
+    check("a set-up edited by hand to give H a dependent bound is refused (the model and the adapter)",
+          ["the bounds of H are numbers" in message(RM.load_component, p3),
+           "the bounds of H are numbers" in message(ar2.load_params, p3), ar2.get("LE.dx3")], [1, 1, -50.0], 1e-9)
+    with open(XR.RudderAdapter().save_file(os.path.join(tmp, "rudder_plain.txt"))) as fh:
+        plain = [ln.split() for ln in fh.read().splitlines() if ln.startswith("# var")]
+    check("a set-up without dependent variables: every var line is name, value, low, high and the flag, numbers "
+          "for the bounds",
+          [all(len(w) == 7 for w in plain), sum(message(float, w[k]) != "" for w in plain for k in (3, 4, 5))],
+          [1, 0], 0)
 
 
 # --------------------------------------------------------------------------

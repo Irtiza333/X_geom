@@ -26,6 +26,7 @@ import numpy as np
 import bezier_section as BS
 import replica_funcs as RF
 import rudder_modify as RM
+import xgeom_files as XF
 
 _FAILED = []
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -41,6 +42,12 @@ def check(name, got, want, tol):
     if not ok:
         _FAILED.append(name)
     print(f"  {'ok ' if ok else 'FAIL'}  {name:<62s} max error {err:.3e}   (tol {tol:.0e})")
+
+
+def set_up(p, degree=RM.BASE_DEGREE):
+    """The RudderParams of a rudder's files (write_synthetic's, or REAL's paths)."""
+    return RM.RudderParams({"corner_points": p["corner"], "section_table": p["table"], "xcad_original": p["xcad"],
+                            "stack": p["stack"]}, degree)
 
 
 def raises(name, fn, exc=ValueError):
@@ -352,11 +359,22 @@ def test_original_and_designs(p):
     ds = sp.to_design(xs)
     check("fixed slots take their values in to_design (H 70, P3x C2 0.31)", [ds.H, ds.curves["P3x"].v[2]],
           [70.0, 0.31], 1e-12)
-    rec = sp.to_dict(ds)
-    sp2, ds2 = RM.DesignSpace.from_dict(orig, rec)
-    check("to_dict / from_dict: same variables, bounds and design",
-          [sp2.names == sp.names, np.abs(sp2.bounds - sp.bounds).max(), np.abs(sp2.to_vector(ds2) - sp.to_vector(ds)).max()],
-          [1, 0, 0], 1e-12)
+    folder = os.path.dirname(p["corner"])                  # beside the rudder's files: their names alone in it
+    f = RM.write_component(os.path.join(folder, "s.txt"), ds, sp, set_up(p))
+    ld = RM.load_component(f)
+    with open(f, "rb") as fh:
+        first = fh.read()
+    with open(RM.write_component(os.path.join(folder, "again.txt"), ld.design, ld.space, ld.params, name="s"),
+              "rb") as fh:
+        second = fh.read()
+    sp2, ds2 = ld.space, ld.design
+    check("write_component / load_component (the set-up as a component file of kind rudder_h): same variables, "
+          "bounds, held values and design; written again from what was read, the same bytes (LF only)",
+          [ld.kind == "rudder_h", sp2.names == sp.names, np.abs(sp2.bounds - sp.bounds).max(),
+           np.abs(sp2.to_vector(ds2) - sp.to_vector(ds)).max(), ds2.H, ds2.curves["P3x"].v[2], first == second,
+           b"\r" in first, os.path.isabs(ld.params.files["stack"]),
+           ("# stack         " + os.path.basename(p["stack"]) + "\n").encode() in first],
+          [1, 1, 0, 0, 70.0, 0.31, 1, 0, 1, 1], 1e-9)
     raises("fixing a slot the space does not have raises", lambda: RM.DesignSpace(orig, fixed={"LE.dx9": 0.0}))
     one = RM.section_at(base, orig, secs[17].y, 200, R_TE, index=18)
     check("section_at gives the section modified_sections builds there", np.abs(one.selig - secs[17].selig).max(), 0.0, 1e-12)
@@ -395,10 +413,11 @@ def test_original_and_designs(p):
     check("and back to 4: the thickness format again", all(s.params() is not None for s in
                                                           RM.modified_sections(d4, o4, 50, 200, R_TE)), 1, 0)
     sp6 = RM.DesignSpace(o6)
-    rec6 = sp6.to_dict(d6)
-    sp6b, d6b = RM.DesignSpace.from_dict(orig, rec6)
-    check("a degree-6 space: 45 slots, read back from its record through the degree-4 original",
-          [len(sp6), sp6b.orig.degree, np.abs(sp6b.to_vector(d6b) - sp6.to_vector(d6)).max()], [45, 6, 0], 1e-12)
+    with tempfile.TemporaryDirectory() as tmp:
+        ld6 = RM.load_component(RM.write_component(os.path.join(tmp, "s6.txt"), d6, sp6, set_up(p, 6)))
+    check("a degree-6 space: 45 slots, read back from its component file (the degree on its geometry lines)",
+          [len(sp6), ld6.space.orig.degree, ld6.params.degree,
+           np.abs(ld6.space.to_vector(ld6.design) - sp6.to_vector(d6)).max()], [45, 6, 6, 0], 1e-9)
     raises("pin refuses a design of another degree", lambda: RM.pin(d6, orig))
     return orig, base, secs
 
@@ -452,13 +471,6 @@ def test_xcad_and_writers(p, orig, base, secs):
               [20.0, R_TE, 4], 0.0)
         back = RM.modified_sections(RM.design_from_record(rec["design"]), orig, 50, 200, R_TE)
         check("design.json: the design read back gives the same sections",
-              max(np.abs(a.selig - b.selig).max() for a, b in zip(back, secs)), 0.0, 1e-12)
-        old = {"H_mm": Z_OPT, "curves": {c: {"s": list(base.curves[n].s), "value": list(base.curves[n].v),
-                                               "weights": [1.0] * 4, "join": "G1"}
-                                           for c, n in (("LE", "LE"), ("T1", "P1z"), ("X1", "P2x"), ("X2", "P3x"),
-                                                        ("T2", "P3z"))}}
-        back = RM.modified_sections(RM.design_from_record(old), orig, 50, 200, R_TE)
-        check("a record of the earlier layout (T1, X1, X2, T2) is read as its quartic",
               max(np.abs(a.selig - b.selig).max() for a, b in zip(back, secs)), 0.0, 1e-12)
         d5, o5, _ = RM.change_degree(base, orig, 5)
         d5.curves["P2z"].v[-1] += 0.005
@@ -788,16 +800,25 @@ def test_laws(p, orig):
             worst = max(worst, float((np.minimum(lo, hi) - val[c]).max()), float((val[c] - np.maximum(lo, hi)).max()))
     check("25 random vectors of the space: every curve between its laws at every height, whatever the fractions",
           [worst <= 1e-12, n_ok > 5], [1, 1], 0)
-    rec = json.loads(json.dumps(sp.to_dict(d2)))
-    sp_b, d_b = RM.DesignSpace.from_dict(orig, rec)
+    with tempfile.TemporaryDirectory() as tmp:
+        f = RM.write_component(os.path.join(tmp, "laws.txt"), d2, sp, set_up(p),
+                               {**RM.DEFAULT_SETTINGS, "te_radius_mm": R_TE})
+        comp, ld = XF.read_component(f), RM.load_component(f)
+        with open(f, "rb") as fh:
+            first = fh.read()
+        with open(RM.write_component(os.path.join(tmp, "again.txt"), ld.design, ld.space, ld.params, ld.settings,
+                                     "laws"), "rb") as fh:
+            second = fh.read()
+    sp_b, d_b = ld.space, ld.design
     d_r = RM.design_from_record(json.loads(json.dumps(RM.design_record(d2, orig, R_TE))))
     v2, v_r = RM.curve_values(d2, ys, orig, R_TE), RM.curve_values(d_r, ys, orig, R_TE)
-    check("to_dict / from_dict and design_record / design_from_record carry the laws: the same variables, values "
-          "and curves",
+    check("the component file (the two laws on the curve line, no join there) and design_record / "
+          "design_from_record carry the laws: the same variables, values and curves; the file written again "
+          "from what was read, the same bytes",
           [sp_b.all_names == sp.all_names, sp_b.laws == sp.laws, sp_b.te_radius_mm,
-           rec["laws"]["P1z"] == ["P2z", "P2z"],
+           tuple(comp.laws["P1z"]) == ("P2z", "P2z"), "P1z" in comp.joins, first == second,
            max(abs(sp_b.values(d_b)[n] - vals[n]) for n in vals), d_r.laws == d2.laws,
-           max(np.abs(v_r[c] - v2[c]).max() for c in orig.names)], [1, 1, R_TE, 1, 0, 1, 0], 1e-12)
+           max(np.abs(v_r[c] - v2[c]).max() for c in orig.names)], [1, 1, R_TE, 1, 0, 1, 0, 1, 0], 1e-9)
 
     m = g0.copy()
     m.curves["P3z"].v[1:] *= 1.3                           # thicker at P3 below H
@@ -949,6 +970,95 @@ def test_real():
           [rows[0][c] - table[c][0] for c in ("X1", "X2", "T1", "T2", "r")], 0.0, 1e-6)
 
 
+def test_set_up_file(p, orig):
+    print("\nthe set-up as a component file (xgeom_files.py, kind rudder_h): what is refused, and the full height")
+    folder = os.path.dirname(p["corner"])
+    base = RM.baseline_design(orig, 60.0)
+    good = RM.write_component(os.path.join(folder, "good.txt"), base, RM.DesignSpace(orig), set_up(p))
+    with open(good) as fh:
+        text = fh.read()
+    lines = text.splitlines()
+    curve = next(ln for ln in lines if ln.startswith("# curve  P2z"))
+    var = next(ln for ln in lines if ln.startswith("# var    P2z.v2"))
+    h_line = next(ln for ln in lines if ln.startswith("# var    H "))
+
+    def said(new):
+        f = os.path.join(folder, "bad.txt")
+        with open(f, "w") as fh:
+            fh.write(new)
+        try:
+            RM.load_component(f)
+            return "(read)"
+        except ValueError as exc:
+            return str(exc)
+    bad = {"a join that is neither G1 nor G0": (text.replace(curve, curve.replace("G1", "G2")),
+                                                 "after the points comes G1"),
+           "a law that is no expression": (text.replace(curve, curve.replace("G1", "0 2*(P3z")),
+                                           "the high law of P2z: '2*(P3z': a bracket is not closed"),
+           "a law with a name no law can use": (text.replace(curve, curve.replace("G1", "0 2*foo")),
+                                                "'foo' is not a name a law can use here"),
+           "a curve's var lines in part": (text.replace(var + "\n", ""), "var lines for some of its variables only"),
+           "a var line for no variable of this rudder": (text.replace("P2z.v2", "P2z.q2"),
+                                                         "which this rudder does not have"),
+           "no var line for H": (text.replace(h_line + "\n", ""), "no var line for H"),
+           "a file of the original that is not there": (text.replace("corner_points.dat", "no_such.dat"),
+                                                        "no such file"),
+           "a key that is not a rudder_h file's": (text.replace("# degree ", "# degre  "),
+                                                   "'degre' is not a key of a rudder_h file"),
+           "another kind's file": (text.replace("rudder_h", "wing", 1), "bad.txt"),
+           "a JSON set-up of old": ('{"geometry": "rudder", "space": {}}', "a JSON file, not a component file"),
+           "a text that is no component file": ("H = 60 mm\n", "not a component file")}
+    got = [said(t) for t, _ in bad.values()]
+    check("refused, naming the file and what is wrong: " + ", ".join(bad),
+          [want in msg and "bad.txt" in msg for msg, (_, want) in zip(got, bad.values())], [1] * len(bad), 0)
+    span0 = RM.full_height(p["xcad"])
+    k = round(1.2345678901234 * span0, 6) / span0          # no round heights: the file's figures count
+    tall = RM.RudderParams(set_up(p).files, span=k * span0)
+    o2 = orig.scaled(k)
+    f = RM.write_component(os.path.join(folder, "tall.txt"), RM.baseline_design(o2, o2.z_top),
+                           RM.DesignSpace(o2, h_min=25.0, h_max=o2.z_top), tall)
+    ld = RM.load_component(f)
+    with open(f, "rb") as fh:
+        first = fh.read()
+    with open(RM.write_component(os.path.join(folder, "tall2.txt"), ld.design, ld.space, ld.params, name="tall"),
+              "rb") as fh:
+        second = fh.read()
+    h_bounds = ld.space.all_bounds[ld.space.all_names.index("H")]
+    check("span_mm (the full height) in the file: the original stretched to it when read, H and its bounds with "
+          "it; h_max and H at the top section come back as the top section itself (the file's figures would put "
+          "them beside it), and the file written again is the same bytes",
+          [ld.params.span / span0, ld.space.orig.scale, ld.space.orig.z_top / orig.z_top, h_bounds[0],
+           h_bounds[1] == ld.space.orig.z_top, ld.design.H == ld.space.orig.z_top, first == second,
+           max(np.abs(ld.space.orig.value(c, [50.0]) - o2.value(c, [50.0])).max() for c in orig.names)],
+          [k, k, k, 25.0, 1, 1, 1, 0.0], 1e-9)
+    same = []
+    for i, kk in enumerate((18.75, 31.25)):                # a rudder metres high: 8 decimals of a height in mm
+        ob = orig.scaled(kk)                               # are more figures than a var line carries
+        spb = RM.DesignSpace(ob, h_min=0.2 * ob.z_top, h_max=0.9 * ob.z_top)
+        vb = spb.values(RM.baseline_design(ob, 0.7123456789 * ob.z_top))
+        vb.update({"LE.dx3": -123.456789012345 * kk, "LE.dx2": -77.123456789 * kk})
+        fb = RM.write_component(os.path.join(folder, f"big{i}.txt"), spb.design_of(vb), spb,
+                                RM.RudderParams(set_up(p).files, span=kk * span0))
+        lb = RM.load_component(fb)
+        with open(fb, "rb") as fh:
+            first = fh.read()
+        with open(RM.write_component(os.path.join(folder, f"big{i}_again.txt"), lb.design, lb.space, lb.params,
+                                     name=f"big{i}"), "rb") as fh:
+            same.append(fh.read() == first)
+    check("a rudder 18.75 and 31.25 times as high (H over a metre): read and written again, the same bytes (the "
+          "table is the design as the file's own figures give it)", same, [1, 1], 0)
+    sp3 = RM.DesignSpace(orig, bounds={"P2z.v2": (0.0123456789012345, 0.2), "LE.dx3": (-123.456789012345, 0.0)})
+    d3 = sp3.design_of({**sp3.values(RM.baseline_design(orig, 60.0)), "P2z.v2": 0.0123456789012345,
+                        "LE.dx3": -123.456789012345})
+    ld3 = RM.load_component(RM.write_component(os.path.join(folder, "edge.txt"), d3, sp3, set_up(p)))
+    x3, b3 = ld3.space.to_vector(ld3.design), ld3.space.bounds
+    check("variables on their bounds (numbers of 15 figures): read back on them, so the design vector is inside "
+          "its bounds (bounds are written with 12 figures, as the values are)",
+          [float(np.maximum(b3[:, 0] - x3, x3 - b3[:, 1]).max()) <= 0.0,
+           x3[ld3.space.names.index("P2z.v2")] == b3[ld3.space.names.index("P2z.v2"), 0],
+           x3[ld3.space.names.index("LE.dx3")] == b3[ld3.space.names.index("LE.dx3"), 0]], [1, 1, 1], 0)
+
+
 def main():
     print("rudder_modify self-check")
     test_bezier()
@@ -962,6 +1072,7 @@ def main():
         test_span(p, orig, base, secs)
         test_offsets(p, orig, base, secs)
         test_laws(p, orig)
+        test_set_up_file(p, orig)
     test_real()
     print()
     if _FAILED:

@@ -1,7 +1,7 @@
 # XGeom input files
 
 The standard input and output files of the XGeom tool: one layout for every component (propeller blade,
-rudder, fin, wing, blended wing body, hull) and an assembly file that places the components and defines an optimization run.
+rudder, the rudder modified below H, fin, wing, blended wing body, hull) and an assembly file that places the components and defines an optimization run.
 The GUI loads the files and writes them back (Save set-up); Initial_sampling.py and the infill read the
 assembly. XGeom is the pre-optimization design step.
 
@@ -21,7 +21,8 @@ assembly. XGeom is the pre-optimization design step.
   from the extracted rudder, the section's spanwise changes as dt columns. The wind-tunnel rudder is fitted
   into one such file. The TE is closed; the tip is flat unless the file gives it a tip cap (the `cap` keys,
   18 Nov 2026). The modified-below-H model stays as modify_control.py and as its own entry in the tool
-  (rudder-h), outside the standard files.
+  (rudder-h); until 26 Nov 2026 it was outside the standard files, since then its set-up is a component file
+  too (kind `rudder_h`, below).
 - Optimization runs vary the propeller only for now: the run's variables are the blade file's free variables;
   the hull and the appendages are fixed (their CAD written once); each sample's CAD is the blade with its hub
   sector, as the mesh step takes it. Initial_sampling.py takes the assembly beside the MSc path, so a running
@@ -29,14 +30,14 @@ assembly. XGeom is the pre-optimization design step.
 - Component files only (20 Nov 2026, the user: "From now on it's just the new format"; until then the old .dat
   parameter files loaded and `xgeom_files.py convert` converted them): an old parameter file is refused with a
   message that names it, and the JSON set-ups of the blade, wing, fin and hull are not read (the rudder-h
-  model keeps its JSON).
+  model kept its JSON until 26 Nov 2026).
 - Case outputs: `<case>.txt` (the design as a component file) in place of `<case>_params.dat` and
   `<case>_design_space.json`.
 - One structure for declaring variables in every set-up file, whatever the component (24 Nov 2026, the user:
   every set-up file carries the same general structure for defining and declaring things; a variable is
   independent, or dependent on others through an expression): name, value, low, high, free or held, and for a
   dependent variable its relation to other variables (Variables, below). A component file has it on the var
-  line; the rudder-h model's set-up JSON has the same six in each slot record.
+  line (the rudder-h model's set-up too, a component file since 26 Nov 2026).
 - A bound may itself depend on other variables (25 Nov 2026, the user: "the bounds should also be able to be
   dependent, like is the case in my msc prop optimization"): low or high is then an expression in place of a
   number, the variable keeps its place between its bounds, and its entry in an optimiser's design vector is
@@ -48,8 +49,14 @@ assembly. XGeom is the pre-optimization design step.
   vehicle (with no original shape)"). A bound now has three levels: a number; an expression of other
   variables (a dependent bound); a law between curves (a bounding law: the curve lies between a low law and a
   high law, each an expression of other curves at the same span position, and its variables are the fraction
-  of the way). Bounding laws are built for the rudder modified below H (Bounding laws, below); writing them
-  on the curve line of a component file, for the blade, the wing and the hull, is the next step.
+  of the way). Bounding laws are built for the rudder modified below H (Bounding laws, below), on the curve
+  line of its component file; for the blade, the wing and the hull they are the next step.
+- Every set-up is a component file (26 Nov 2026, the user, asked whether the rudder's set-up should move from
+  JSON to the text layout: "yes everything should be in the current set up format, delete anything extra or
+  old"). The rudder modified below H is kind `rudder_h` (below); its JSON set-up
+  (`<case>_design_space.json`), the tool's `--space`, and the functions that read and wrote it are gone, and
+  a JSON file is refused by name. What stays JSON is no set-up: a build's record (`<case>_design.json`) and
+  the Vehicle CAD's (`<case>_vehicle_setup.json`, until the assembly file of step 4).
 
 ## Component file
 
@@ -98,10 +105,13 @@ Header lines:
 - Geometry and settings keys, per kind (below). An unknown key is an error.
 - `# curve <name> <form>`: `table` (the column as it is: the cubic spline through the rows, no variables),
   `bezier1 <points>`, `bezier2` (x_blade's form, P1 to P7), `smooth2` (a blended wing body's: two cubic
-  segments joined smoothly, flat at the centre line, P0 to P6), and for the hull `cst <order>`.
+  segments joined smoothly, flat at the centre line, P0 to P6), and for the hull `cst <order>`. For the rudder
+  modified below H, `bezier1 <points>` and then how the curve meets the original at H, `G1` or `G0`, or its two
+  bounding laws (kind `rudder_h`, below).
 - `# var <name> <value> <low> <high> <Y|N> [<relation>, ...]`: one line per variable, the same in every kind: Y
-  free, N held (values written to 12 figures). low and high are each a number, or an expression of other
-  variables written as one word (a dependent bound). An independent variable has numbers and ends at the flag;
+  free, N held (the value and the bounds written to 12 figures; the bounds had 10 until 26 Nov 2026, when a
+  variable on a bound of more figures could read back beside it). low and high are each a number, or an
+  expression of other variables written as one word (a dependent bound). An independent variable has numbers and ends at the flag;
   a dependent one has an expression as a bound, a relation to other variables after the flag, or both
   (Variables, below).
 - `# vary <name> Y|N [low high]` (blade_vary.py): Y free or N held, for the curves and globals without var
@@ -117,6 +127,7 @@ Keys and columns:
 |---|---|---|---|
 | blade | diameter_m, blades, root_r, hub_height_m, hub_base_m, hub_top_m, hub_x_m, section, section_tables | sections, tip_band, tip_sections, clearance_mm, hub, part | r/R P/D c/D t/c f/c skew_deg rake/D |
 | rudder, fin, wing, bwb | span_mm, section, ref_xc, camber_xc, tip_tilt_deg, cap and its keys (below) | sections, change_points, half, cap_loops | eta pitch_deg chord_mm t/c f/c sweep_mm rake_mm [dt1 .. dtk dc1 .. dck] |
+| rudder_h | corner_points, section_table, xcad_original, stack, degree, span_mm, fit_orders, fit_free_heights | sections, points, te_radius_mm, half, strip_frac, tip_drop, keep_inside, inside_tol_mm | y_mm LE_mm P1x P1z .. P(n-1)x P(n-1)z |
 | hull | nose_m, middle_m, tail_m, cap_m, axisymmetric | | x_m r_m [rp_m] |
 
 Rules:
@@ -155,8 +166,77 @@ Rules:
   only, no nose var line (BB2's `bb2/outputs/bb2_hull.txt`).
 - kind `rudder` (the planar rudder, wing_modify's engine; 13 Nov 2026: BB2's stern plane,
   `bb2/outputs/bb2_sternplane.txt`): since 19 Nov 2026 the tool loads it in the Rudder slot as the original of
-  the rudder-h model (`xgeom_from_cad.rudder_from_planar`, below); the planar model's adapter
-  (xgeom_wing.PlanarRudderAdapter, its JSON set-up `rudder_planar`) stays for code.
+  the rudder-h model (`xgeom_from_cad.rudder_from_planar`, below); the planar model itself
+  (xgeom_wing.PlanarRudderAdapter) is the Rudder slot's other option since 26 Nov 2026, design a new rudder.
+- kind `rudder_h` (the rudder modified below H, rudder_modify's model; 26 Nov 2026, in place of its JSON
+  set-up): an existing rudder kept above the height H and changed below it.
+
+  ```
+  # XGeom component
+  # kind          rudder_h
+  # name          gui
+  # ---- geometry
+  # corner_points ../corner_points.dat
+  # section_table ../thickness_params_y0_y200_info.dat
+  # xcad_original ../sections_xcad_with_cap_y0_y200_m.dat
+  # stack         ../sections_stack_y0_y200_raw_mm.dat
+  # degree        4
+  # span_mm       211.27677
+  # ---- settings
+  # sections      50
+  # points        200
+  # te_radius_mm  0.75
+  # half          N
+  # strip_frac    none
+  # tip_drop      1.5
+  # keep_inside   Y
+  # inside_tol_mm 0.01
+  # ---- curves and variables
+  # var    H            80       20       80  Y
+  # curve  LE       bezier1 4 G1
+  # var    LE.d1    0.333333333333  0.05  0.95  Y
+  # var    LE.d2    0.5      0.05     0.95  Y
+  # var    LE.dx2   -12      -320     0     Y
+  # var    LE.dx3   -30      LE.dx2   0     Y
+  # curve  P1z      bezier1 4 P2z P2z
+  # curve  P2z      bezier1 4 orig.P2z*orig.chord/chord 2*orig.P2z*orig.chord/chord
+  # var    P2z.d1   0.333333333333  0.05  0.95  Y
+  # var    P2z.d2   0.5      0.05     0.95  Y
+  # var    P2z.f1   0        0        1     Y
+  # ...
+  # ---- the curves from the root to H (what the var lines give; not read back)
+  #        y_mm       LE_mm         P1x         P1z ..
+     0.00000000 -30.00000000  0.00000000  0.07336669 ..
+  ```
+
+  - Geometry: the original rudder, as an extraction writes it and `rudder_modify.fit_section_table` fits it,
+    by four files relative to the component file: `corner_points` (the LE and TE points), `section_table` (the
+    per-section fits), `xcad_original` (the XCAD loops with the cap) and `stack` (the section stack). `degree`
+    of the sections' Bezier (4, the table's quartics, or more); `span_mm` the full height, the root to the top
+    of the cap (absent: the extracted rudder's; another value stretches the rudder in height, H and its bounds
+    with it); `fit_orders` the orders the original's laws are fitted at, as pairs (`LE 3 P1x 2 ..`; absent:
+    cubics); `fit_free_heights Y` when the fit searched its control heights.
+  - Settings: `sections` (from the root to H) and `points` (per section) of the XCAD file, `te_radius_mm`,
+    `half` (the CAD's half body), `strip_frac` and `tip_drop` of the loft (`none`, one number, or `LE TE` as two),
+    `keep_inside` and `inside_tol_mm` (the original as the lower bound, below).
+  - The curves are the LE (x in mm) and the section control points' coordinates P1x, P1z .. (fractions of the
+    sharp chord), each a Bezier law over the height from H (C0, on the original) down to the root. A curve line
+    is `# curve <name> bezier1 <points>` and then `G1` (the curve leaves the original along its tangent: C1's
+    value follows, no var line for it) or `G0` (its value only: C1 free), or a low law and a high law, one word
+    each (Bounding laws, below; such a curve joins G0).
+  - Variables: `H` (its bounds are h_min and h_max, numbers); per curve the control heights `<curve>.d<k>` (each
+    the share of the stretch left, as the blade's) and the control values: `LE.dx<k>` (mm from the original LE
+    at that height), `<curve>.v<k>` (the fraction of the chord), or for a curve with laws `<curve>.f<k>` (the
+    fraction of the way between them). A curve with no var lines is the original's (its variables free, P1x's
+    held, the default bounds); var lines for some of a curve's variables only are refused.
+  - The table is written for the reader: the curves at 21 heights from the root to H, as the var lines'
+    figures give them. It is not read back (the var lines and the original's files give the design), so
+    editing it changes nothing.
+  - Read by `rudder_modify.load_component(path)` (an optimiser: `ld.space`, `ld.design`, `ld.params`,
+    `ld.settings`; its text shows the calls), `xgeom_files.load`, the tool (`--file`, Load ...) and
+    `xgeom_rudder.RudderAdapter(params=path)`; written by Save set-up, an XCAD build (`<case>.txt` beside the
+    XCAD file), From CAD and `rudder_modify.write_component`. A set-up with its files beside it can be moved
+    as a folder.
 - `cap` (rudder, fin, wing; 18 Nov 2026, for BB2's stern plane, whose set-up gave a flat top): a tip cap over
   the tip section, tip_cap.py's models. `cap scaled` (tip_cap.ScaledCap): the cap's cross-sections scale with
   the tip section's local half-thickness w; keys `cap_k_le`, `cap_k_te` (the cap's height over w at the LE and
@@ -191,8 +271,9 @@ Rules:
   file gives the same bytes (round-trip tested with filecmp in `_xgeom_files_test.py`).
 
 Code: `xgeom_files.py` (the text, `load`; `legacy_kind` and `file_kind` recognise an old parameter file so it
-is refused by name); `read_params`, `write_params` (a table file), `load_component` and `write_component` in
-`blade_modify.py`, `wing_modify.py` and `hull_modify.py`. Examples in X_geom (the tool's defaults):
+is refused by name, and a JSON file is named as one); `read_params`, `write_params` (a table file),
+`load_component` and `write_component` in `blade_modify.py`, `wing_modify.py` and `hull_modify.py`;
+`load_component` and `write_component` in `rudder_modify.py` (kind `rudder_h`). Examples in X_geom (the tool's defaults):
 `msc_blade.txt`, `wing.txt`, `fin.txt`, `suboff_hull.txt`, `bwb_glider.txt`.
 
 ## Variables: independent and dependent
@@ -259,7 +340,7 @@ variable to others exactly (`=`).
   `chord.v1`, and `chord.v1` under 40); bounds such as `0.5*chord.v0` .. `chord.v0` (a chord is positive), or
   ranges that do not overlap (the MSc's: P1's pitch up to 1.25, P4's from it to 1.4), never do. The tool warns
   of both (the build still runs).
-- For an optimiser (`ld.space` of `load_component`, `rudder_modify.load_design_space`): `space.factors` names
+- For an optimiser (`ld.space` of `load_component`, every kind's): `space.factors` names
   the free variables with a dependent bound; their entries of the design vector are fractions and their rows of
   `space.bounds` are 0, 1. `to_design(x)` places them, in the order of their dependence, `to_vector(design)`
   gives them back, and `space.bounds_of(values)` has every variable's bounds at a design. A held variable with
@@ -288,20 +369,19 @@ In a component file (every kind):
 # var    pitch.v1                       2                -3                 4  Y  = pitch.v0
 ```
 
-In the rudder-h model's set-up JSON (`<case>_design_space.json`), one record per variable in `space.slots`.
-`lo` and `hi` are always numbers (a dependent bound's: its value at the set-up's design); `lo_expr`, `hi_expr`
-and `relation` are only in the record of a variable that has one:
+The rudder modified below H the same (26 Nov 2026; until then a JSON record per variable):
 
 ```
-{"name": "LE.dx2", "value": -200.0, "lo": -320.0, "hi": 0.0, "free": true, "relation": "> -2.5*H"}
-{"name": "LE.dx3", "value": -50.0, "lo": -200.0, "hi": 0.0, "free": true, "lo_expr": "LE.dx2"}
+# var    LE.dx2                      -200              -320                 0  Y  > -2.5*H
+# var    LE.dx3                       -50            LE.dx2                 0  Y
 ```
 
-`space.vector` (names, values, bounds) has a variable with a dependent bound as its fraction, with the bounds
-0, 1, and names those variables in `fractions`.
+A build's record of that rudder, `<case>_design.json`, has `vector` (names, values, bounds: what an optimiser's
+design vector is), a variable with a dependent bound there as its fraction, with the bounds 0, 1, and named in
+`fractions`.
 
-A file without dependent variables is written as before: the var lines and the slot records of independent
-variables are unchanged. `Initial_sampling.py` reads neither dependent bounds nor relations (the MSc pipeline
+A file without dependent variables is written as before: the var lines of independent variables are
+unchanged. `Initial_sampling.py` reads neither dependent bounds nor relations (the MSc pipeline
 samples para_control's own variables, which are these fractions already, with its own coupled limits). Code:
 `xgeom_relations.py` (the grammar: `parse`, `parse_bound`; `bounds_at`, `places`, `limits`, `apply`,
 `violations`, `crossed`; `SpaceRelations` for the design spaces, `AdapterRelations` for the tool's adapters).
@@ -346,10 +426,24 @@ give, found with them (a fixed point of a few steps; it equals the built section
   that gives no number (a division by zero) is a problem: no build.
 - A design with laws keeps its section degree (the laws name its curves).
 
-In the set-up JSON: `space.laws` (`{"P2z": ["orig.P2z*orig.chord/chord", "10*orig.P2z*orig.chord/chord"]}`) and
-`space.te_radius_mm` (the TE radius the chord is found with); the slots of such a curve are its `d` and `f`
-records. `<case>_design.json` has `design.laws`, and for a curve with laws its `low` and `high` and its
-fractions as `value`.
+In the set-up file (kind `rudder_h`) the two laws follow the points on the curve line, in the place of the
+join:
+
+```
+# curve  P2z       bezier1 4 orig.P2z*orig.chord/chord 10*orig.P2z*orig.chord/chord
+# var    P2z.d1        0.333333333333              0.05              0.95  Y
+# var    P2z.d2                   0.5              0.05              0.95  Y
+# var    P2z.f1                     0                 0                 1  Y
+# var    P2z.f2                     0                 0                 1  Y
+# var    P2z.f3                     0                 0                 1  Y
+# curve  P1z       bezier1 4 P2z P2z
+```
+
+The var lines of such a curve are its `d` and `f` (none for a curve its laws define), and the TE radius the
+chord is found with is the setting `te_radius_mm`. Reading: a law with a wrong grammar is refused with its line
+(`<path>, line <n>: the high law of P2z: ...`), one that uses a name no law can use with the file's path.
+`<case>_design.json` has `design.laws`, and for a curve with laws its `low` and `high` and its fractions as
+`value`.
 
 ### The original as the lower bound (keep the original inside)
 
@@ -360,11 +454,12 @@ orig, n_sections, te_radius_mm)` gives the largest depth (mm) of the modified ha
 original's at the same x, over the sections from the root to H (`depth`, with its height `y` and station
 `x_c`; `depths` per section; 0 for the original itself). The set-up's settings carry `keep_inside` (default
 on) and `inside_tol_mm` (default 0.01): the tool warns when the depth is beyond the tolerance, and an
-optimiser keeps `depth <= inside_tol_mm` as a constraint (`rudder_modify.load_design_space`'s text shows how).
+optimiser keeps `depth <= inside_tol_mm` as a constraint (`rudder_modify.load_component`'s text shows how).
 
 ### The set-up that builds on the original (rudder_laws_setup.py)
 
-`python rudder_laws_setup.py [--a 10] [--b 10]` writes `outputs/modified/add_to_original_design_space.json`
+`python rudder_laws_setup.py [--a 10] [--b 10]` writes `outputs/modified/add_to_original.txt` (a component
+file of kind `rudder_h`; `python xgeom_tool.py rudder --file outputs/modified/add_to_original.txt` opens it)
 for the wind-tunnel rudder: the rule of the planar-rudder optimisation (the folder `Planar_Rudder_Optimization`)
 as bounding laws. Every curve a cubic, no curve tangent at H, 26 free variables (H; 5 for the LE; 5 for each of
 P2x, P2z, P3x, P3z); P1x held at 0. With X2 = `orig.LE+orig.P2x*orig.chord` (x of the original P2, mm), TE0 =
@@ -389,8 +484,9 @@ fits and exact curves here).
 
 Code: `xgeom_relations.py` (`parse_law`, `sequence`, `min`/`max`), `rudder_modify.py` (`Design.laws`,
 `law_names`, `canonical_laws`, `law_state`, `law_bands`, `law_warnings`, `with_laws`, `control_points`,
-`inside_original`; `DesignSpace(laws=, te_radius_mm=)`), `xgeom_rudder.py` (`set_laws`, `laws_of`,
-`law_defined`, `law_names`, `set_keep_inside`). Self-checks: `_xgeom_relations_test.py`,
+`inside_original`; `DesignSpace(laws=, te_radius_mm=)`; `load_component`, `write_component`), `xgeom_files.py`
+(the curve line's laws), `xgeom_rudder.py` (`set_laws`, `laws_of`, `law_defined`, `law_names`,
+`set_keep_inside`). Self-checks: `_xgeom_relations_test.py`,
 `_rudder_modify_test.py`, `_xgeom_tool_test.py`.
 
 ## Assembly file
@@ -435,7 +531,10 @@ Code: `xgeom_relations.py` (`parse_law`, `sequence`, `min`/`max`), `rudder_modif
 ## GUI
 
 - The File box's Load ... reads a component file and sets the whole panel. Save set-up ... writes the component
-  file; the dialog opens on the file it came from. `--space` takes the rudder-h model's JSON set-ups only.
+  file; the dialog opens on the file it came from. Every component has it, the rudder modified below H too
+  since 26 Nov 2026 (its File box in the place of the Set-up box: the set-up file, the original it names, Load
+  ... and From CAD ...; Save set-up's dialog opens on the output folder and the case when the design came from
+  no file). `--file` takes any component's file; `--space` is gone, and a JSON file is refused by name.
 - Each variable's row: free | name | low | slider | high | value | where | dep (24 Nov 2026). The name is
   what an expression calls the variable. The low and high boxes take a number or an expression of other
   variables (`v1`, `0.9*chord.v0`; 25 Nov 2026): a dependent bound, shown in the box as the tool writes it, and
@@ -454,8 +553,8 @@ Code: `xgeom_relations.py` (`parse_law`, `sequence`, `min`/`max`), `rudder_modif
   NACA 0018). Each keeps its state while the other is shown. In the new rudder's File box Load ... of a planar
   rudder's file loads it there, and of a rudder-h set-up puts the slot on that option; a new rudder saved with
   Save set-up loads in the other option as the original to modify (a planar rudder's file there, below).
-- From CAD ... (13 Nov 2026, `xgeom_from_cad.py`): in the File box of the blade and the hull and in the
-  rudder's Set-up box. A STEP or IGES file of the component is extracted (blade_extraction.py, hull_extraction's
+- From CAD ... (13 Nov 2026, `xgeom_from_cad.py`): in the File box of the blade, the hull and the rudder. A
+  STEP or IGES file of the component is extracted (blade_extraction.py, hull_extraction's
   stations, Rudder_geom_extraction.py with the per-section fits), every curve is fitted in each candidate form
   and the form with the least error kept, and the set-up is written and loaded, so the sliders start at the
   extracted geometry and the bounds can be set about it. Candidates: blade 2 segments, or 1 segment of 3 to 8
@@ -467,7 +566,7 @@ Code: `xgeom_relations.py` (`parse_law`, `sequence`, `min`/`max`), `rudder_modif
   output folder, the case named after the CAD file: blade `<case>.txt` (the six distributions as tables, the
   reference) and `<case>_setup.txt` (the set-up; blade_control.FREE free); hull `<case>_table.txt` (the
   stations, a table file) and `<case>.txt` (the set-up; lengths and curves free); rudder `<case>_extraction/` and
-  `<case>_design_space.json`. The run is off the GUI thread (a hull a few seconds, the BB2 propeller about a
+  `<case>.txt` (the set-up, kind `rudder_h`, naming the extraction's files). The run is off the GUI thread (a hull a few seconds, the BB2 propeller about a
   minute, the wind-tunnel rudder about two minutes). Needs OCC, as the extraction codes do.
 - `python xgeom_from_cad.py blade|hull|rudder <file> [--out DIR] [--case NAME]`: the same without the window;
   for the blade an extracted `<case>.txt` and for the hull a table file `<case>_table.txt` give the set-up alone (no
@@ -477,20 +576,20 @@ Code: `xgeom_relations.py` (`parse_law`, `sequence`, `min`/`max`), `rudder_modif
   the LE, the LE and TE lines straight, the section the rows' mean thickness shape
   (`<case>_section.dat`) with the change points that fit best, the tilt and the radius cap of parameters.json.
   The wind-tunnel rudder's is `outputs/wind_tunnel_rudder.txt`.
-- The Rudder slot's modify option shows the modified-below-H model (rudder-h, its JSON set-ups and From CAD)
+- The Rudder slot's modify option shows the modified-below-H model (rudder-h, its set-ups and From CAD)
   whatever is loaded there. Since 19 Nov 2026 (the user: loading BB2's or the wind-tunnel rudder's set-up must give the same
   panel, tangent at H with it) `--file` with a planar rudder's component file, or Load ... of one in the
-  Set-up box, makes that rudder the rudder-h model's original (`xgeom_from_cad.rudder_from_planar`; `python
+  File box, makes that rudder the rudder-h model's original (`xgeom_from_cad.rudder_from_planar`; `python
   xgeom_from_cad.py rudder <file>.txt` the same without the window): its sections, tip and cap written as an
   extraction writes a CAD's into `<name>_modified_below_H/` beside the file (61 horizontal sections, 121
   points each), the sections fitted (about 25 s the first time), the set-up
-  `<name>_original_design_space.json` there (the rudder unchanged, H 0.1 to 0.4 of the top section, its TE
+  `<name>_original.txt` there (the rudder unchanged, H 0.1 to 0.4 of the top section, its TE
   radius), read back while the file and its section file are unchanged; the cases of it go to that folder.
   From 13 to 19 Nov such a file put the rudder on the planar model (the wing's panel); since 26 Nov that
   model is the slot's other option, design a new rudder.
 - Vehicle tab (step 4): Load assembly ... and Save assembly ... (each component written to its file; old .dat
   sources as new .txt files beside the assembly).
-- `python xgeom_tool.py --file <component file>` (`--params` the same); `--assembly <file>` (step 4).
+- `python xgeom_tool.py --file <component file>`; `--assembly <file>` (step 4).
 
 ## Steps
 
@@ -605,3 +704,33 @@ design, with laws. `xgeom_relations`: `parse_law`, `sequence`, `min( )`/`max( )`
 `bezier_section.te_x_from`; `rudder_modify.sharp_chord` (bezier_section's, faster). New files: `rudder.txt`
 (the new rudder's start) and `rudder_laws_setup.py` (a script; the app does not need it). The self-checks:
 relations 138 with the window, rudder_modify 147, the tool 83 with the window, wing 80.
+
+26 Nov 2026, later: every set-up a component file (the user: "everything should be in the current set up
+format, delete anything extra or old"). The rudder modified below H is kind `rudder_h` (Component file, above):
+its curve line carries the join at H or the two laws, its var lines are every kind's. The JSON set-up is gone:
+`<case>_design_space.json` is no longer written or read, and a JSON file given to the tool or a reader is
+refused (`<path>: a JSON file, not a component file: XGeom no longer reads JSON set-ups ...`). An XCAD build
+writes `<case>.txt` beside the XCAD file, From CAD `<case>.txt`, a planar rudder made the original
+`<name>_modified_below_H/<name>_original.txt`, `rudder_laws_setup.py` `outputs/modified/add_to_original.txt`.
+The seven old set-ups on the user's machine were converted (the same values to 12 figures, each read back
+against its JSON) and then deleted. A var line's bounds now have 12 figures, as its value has (files with
+shorter numbers are unchanged byte for byte). H's upper bound at the top section, and H on it, read back as
+the top section itself. The table of a `rudder_h` file is the design as the file's own figures give it, so a
+file read and written again is the same bytes whatever the rudder's size (a height over a metre in mm has
+more figures at 8 decimals than a var line carries; a planar component that large, kind rudder, fin, wing or
+bwb, still changes its table's last decimal on the first rewrite: open).
+
+**Breaking** for the web app (a change in its bridge, `docs/keeping-interfaces-stable.md`): the rudder adapter's
+`space_record()`, `save_space(path)`, `load_space(path)` and `setup_file` are gone. In their place, as every
+other adapter has: `save_file(path)` (returns the path), `load_params(path)`, `file` (the set-up in use, None
+before one is saved or loaded) and `RudderAdapter(params=path)`; opening the saved file and saving again gives
+the same bytes, LF only (`_xgeom_web_contract_test.py` now runs the rudder through the same checks as the
+others: 271 checks). `rudder_modify.load_design_space(path)` -> `rudder_modify.load_component(path)` (an
+`xgeom_files.Loaded`: `params`, `design`, `space`, `settings`, `name`, `notes`); `DesignSpace.to_dict` and
+`from_dict` are gone (`write_component`, `component_design`); `design_from_record` no longer reads the layout
+of before the control-point names (T1, X1, X2, T2). An XCAD build's result has `["case"]["paths"]["component"]`
+in the place of `["space"]`. The tool: `--space` and the alias `--params` are gone (`--file`), `App(root,
+geometry, params)` has no `space`. `xgeom_files`: `MODIFIED` (`"rudder_h"`), in `KINDS`; `Component.joins` and
+`.laws`; `rudder_modify` and `xgeom_rudder` now import `xgeom_files` (already in the copy list). A set-up the
+web app saved as JSON is not read; it is saved again from the app. The self-checks: relations 138 with the
+window, rudder_modify 150, the tool 83 with the window, wing 80, files 60, hull 65, blade 79.

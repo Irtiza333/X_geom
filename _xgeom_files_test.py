@@ -342,16 +342,17 @@ def test_gui(tmp):
         old = text_file(tmp, "old_blade.dat", ["# XGeom propeller blade parameters", "# diameter_m 1.4"])
         js = text_file(tmp, "old_design_space.json", ['{"geometry": "blade", "params_file": "x.dat", "space": {}}'])
         msgs = []
-        for fn in (lambda: XT.load_adapter("blade", old), lambda: XT.App(root, "blade", space=js),
-                   lambda: XT.App(root, "vehicle", space=[js])):
+        for fn in (lambda: XT.load_adapter("blade", old), lambda: XT.App(root, "blade", params=js),
+                   lambda: XT.App(root, "vehicle", params=[js])):
             try:
                 fn()
                 msgs.append("")
             except ValueError as exc:
                 msgs.append(str(exc))
-        check("the tool refuses an old parameter file (--file, Load ...) and a blade's old set-up JSON (--space), "
-              "saying why", ["an old blade parameter file" in msgs[0], "starts from its component file" in msgs[1],
-                             "starts from its component file" in msgs[2]], [1, 1, 1], 0)
+        check("the tool refuses an old parameter file (--file, Load ...) and an old set-up JSON (--file), before "
+              "any window is built, saying why",
+              ["an old blade parameter file" in msgs[0], "a JSON file, not a component file" in msgs[1],
+               "a JSON file, not a component file" in msgs[2], len(root.winfo_children())], [1, 1, 1, 0], 0)
         app = XT.App(root, "vehicle")
         settle()
         cases = (("blade", "radius", 0.69, "pitch.v1", "msc_blade.txt"),

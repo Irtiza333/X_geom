@@ -558,19 +558,19 @@ def test_gui(tmp):
                 made = os.path.join(os.path.dirname(planar), "wind_tunnel_rudder_modified_below_H")
                 first = (type(app.ad).__name__, app.build_btn.cget("text"), "H" in [r.name for r in app.rows],
                          hasattr(app, "tangent_all"), os.path.dirname(os.path.abspath(app.ad.files["stack"])) == made)
-                setup = XR.RudderAdapter(out_dir=tmp).save_space(os.path.join(tmp, "rh_design_space.json"))
+                setup = XR.RudderAdapter(out_dir=tmp).save_file(os.path.join(tmp, "rh.txt"))
                 XT.filedialog.askopenfilename = lambda **kw: setup
                 app.on_load_params()                               # a set-up of the model modified below H
                 settle()
-                second = (type(app.ad).__name__, app.ad.setup_file == setup, "H" in [r.name for r in app.rows])
+                second = (type(app.ad).__name__, app.ad.file == setup, "H" in [r.name for r in app.rows])
                 XT.filedialog.askopenfilename = lambda **kw: planar
-                app.on_load_space()                                # the Set-up box: a planar rudder's file
+                app.on_load_params()                               # the File box: a planar rudder's file
                 t0 = time.time()
                 while app._job is not None and time.time() - t0 < 300.0:
                     settle(2)
                 settle()
                 third = (type(app.ad).__name__,
-                         app.ad.setup_file == os.path.join(made, "wind_tunnel_rudder_original_design_space.json"),
+                         app.ad.file == os.path.join(made, "wind_tunnel_rudder_original.txt"),
                          "H" in [r.name for r in app.rows], hasattr(app, "tangent_all"),
                          "as the original modified below H" in app.status.cget("text"))
                 app.book.select(XT.VEHICLE_TAB)
@@ -581,8 +581,9 @@ def test_gui(tmp):
                 FC.PLANAR_SECTIONS = keep_n
             check("the Rudder slot: a planar rudder's file (the wind-tunnel rudder's) becomes the original of the "
                   "model modified below H, its panel as without it (H, tangent at H, 'XCAD rudder'), the original "
-                  "made beside the file; a set-up of that model loads as before; the planar file through the Set-up "
-                  "box's Load ... the same (read back, off the GUI thread); the Vehicle tab places it",
+                  "made beside the file; a set-up of that model (a component file of kind rudder_h) loads into "
+                  "it; the planar file through the File box's Load ... the same (read back, off the GUI thread); "
+                  "the Vehicle tab places it",
                   [first == ("RudderAdapter", "XCAD rudder", True, True, True), second == ("RudderAdapter", True, True),
                    third == ("RudderAdapter", True, True, True, True),
                    app.status.cget("background") != XT.STATUS["error"][0]], [1, 1, 1, 1], 0)

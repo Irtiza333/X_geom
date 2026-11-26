@@ -211,29 +211,23 @@ def _adapter_checks(kind, ad, tmp):
                   attempt(f"{kind}: describe()", lambda: ad.describe(curves[0])) is None or isinstance(ad.describe(curves[0]), str))
         for m in FORM_CALLS[kind]:
             check(f"{kind}: form change {m}() is still there", callable(getattr(ad, m, None)))
-        if kind == "rudder":
-            rec = attempt("rudder: space_record() is JSON", lambda: json.dumps(ad.space_record(), default=str))
-            check("rudder: space_record() is JSON", rec is not None)
-            path = os.path.join(tmp, "rudder_setup.json")
-            with open(path, "w") as fh:
-                fh.write(rec or "{}")
-            attempt("rudder: load_space(path) reads it back", lambda: ad.load_space(path))
-        else:
-            path = os.path.join(tmp, f"web_{kind}.txt")
-            got = attempt(f"{kind}: save_file(path)", lambda: ad.save_file(path))
-            check(f"{kind}: save_file(path) writes the file (returns its path or None)",
-                  os.path.isfile(path) and (got is None or os.path.isfile(got)))
-            with open(path, "rb") as fh:
-                data = fh.read()
-            check(f"{kind}: the saved file starts '# XGeom component', LF only",
-                  data.startswith(b"# XGeom component\n") and b"\r" not in data)
-            again = type(ad)(params=path)
-            path2 = os.path.join(tmp, f"web_{kind}_again.txt")
-            again.save_file(path2)
-            with open(path2, "rb") as fh:
-                data2 = fh.read()
-            same = data2.replace(f"web_{kind}_again".encode(), f"web_{kind}".encode()) == data
-            check(f"{kind}: open the saved file and save again: the same bytes", same)
+        # every component saves and opens a component file; the rudder (rudder-h) too since 26 Nov 2026 (kind
+        # rudder_h: its JSON set-up, space_record() and load_space(path), is gone)
+        path = os.path.join(tmp, f"web_{kind}.txt")
+        got = attempt(f"{kind}: save_file(path)", lambda: ad.save_file(path))
+        check(f"{kind}: save_file(path) writes the file (returns its path or None)",
+              os.path.isfile(path) and (got is None or os.path.isfile(got)))
+        with open(path, "rb") as fh:
+            data = fh.read()
+        check(f"{kind}: the saved file starts '# XGeom component', LF only",
+              data.startswith(b"# XGeom component\n") and b"\r" not in data)
+        again = type(ad)(params=path)
+        path2 = os.path.join(tmp, f"web_{kind}_again.txt")
+        again.save_file(path2)
+        with open(path2, "rb") as fh:
+            data2 = fh.read()
+        same = data2.replace(f"web_{kind}_again".encode(), f"web_{kind}".encode()) == data
+        check(f"{kind}: open the saved file and save again: the same bytes", same)
         if kind in ("hull",):
             for part in ("nose", "tail"):
                 pr = attempt(f"hull: part_range({part!r}) is (x0, x1)", lambda: tuple(map(float, ad.part_range(part))))
@@ -243,7 +237,7 @@ def _adapter_checks(kind, ad, tmp):
             cf = attempt(f"{kind}: ctrl_free(curve)", lambda: list(ad.ctrl_free(curves[0])))
             check(f"{kind}: ctrl_free(curve) is a sequence of flags", cf is not None)
         if hasattr(ad, "load_params"):
-            check(f"{kind}: load_params(path) still there (old .dat parameter files)", callable(ad.load_params))
+            check(f"{kind}: load_params(path) still there (Load ...: a component file)", callable(ad.load_params))
 
 
 # ----------------------------------------------------------------------------- 3. preview

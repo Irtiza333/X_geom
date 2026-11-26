@@ -39,10 +39,10 @@ points or of segments in the tool, which refits the curve and shows the error
             tip section, the cap loops), then rudder_modify.fit_section_table on
             every horizontal section (the per-section quartic fits, about 0.4 s
             each), then the original shape fitted with the law orders (2 to
-            MAX_LAW_ORDER) that fit best and the set-up <out_dir>/<case>_design_
-            space.json (xgeom_rudder.RudderAdapter on those files; the design
-            the baseline, which is the rudder itself; rudder_modify.
-            load_design_space and the tool's Load ... read it)
+            MAX_LAW_ORDER) that fit best and the set-up <out_dir>/<case>.txt, a
+            component file of kind rudder_h (xgeom_rudder.RudderAdapter on
+            those files; the design the baseline, which is the rudder itself;
+            rudder_modify.load_component and the tool's Load ... read it)
 
     from_cad(kind, cad_path, out_dir, case, progress)   -> dict: "setup", "file", "forms", "report"
     best_blade_forms, best_hull_orders, best_rudder_orders   the chosen forms with their errors
@@ -327,8 +327,8 @@ def best_rudder_orders(corner_points, section_table, degree=None, max_order=MAX_
 
 def rudder_files(folder):
     """The files of an extraction folder that the rudder adapter takes: corner points, the section table (the
-    per-section fits), the XCAD file with the cap, the stack; relative to the X_geom folder when inside it (a
-    set-up that names them then holds on another machine), else absolute."""
+    per-section fits), the XCAD file with the cap, the stack; relative to the X_geom folder when inside it,
+    else absolute (a set-up names them relative to itself)."""
     def one(pattern, what):
         hits = sorted(glob.glob(os.path.join(folder, pattern)))
         if not hits:
@@ -344,7 +344,7 @@ def rudder_files(folder):
 
 def rudder_from_cad(cad_path, out_dir, case=None, progress=print, num_sec=None):
     """The rudder's set-up from its CAD (the module docstring): the extraction into <out_dir>/<case>_extraction,
-    the section fits, the original fitted with the best law orders, the set-up JSON."""
+    the section fits, the original fitted with the best law orders, the set-up <case>.txt (kind rudder_h)."""
     import Rudder_geom_extraction as RGE
     import rudder_modify as RM
     import xgeom_rudder as XR
@@ -368,7 +368,7 @@ def rudder_from_cad(cad_path, out_dir, case=None, progress=print, num_sec=None):
     progress("fitting the original shape's laws")
     orders = best_rudder_orders(files["corner_points"], files["section_table"])
     ad = XR.RudderAdapter(files=files, fit_orders={c: v[0] for c, v in orders.items()}, out_dir=out_dir)
-    setup = ad.save_space(os.path.join(out_dir, f"{case}_design_space.json"))
+    setup = ad.save_file(os.path.join(out_dir, f"{case}.txt"))
     report = [f"{c}: order {v[0]} ({100 * v[1]:.2f} % of its range)" for c, v in orders.items()]
     report.append(f"{len(secs)} sections to z_top {ad.orig.z_top:.2f} mm, full height {ad.span:.2f} mm; the "
                   f"section fits {time.time() - t1:.0f} s")
@@ -553,8 +553,8 @@ def rudder_from_planar(component, out_dir=None, progress=print, sections=None, p
     in the XCAD file (cosine stations, as rudder_modify lays out its own sections at that count), the tilted tip
     section and the cap loops after them, the LE and TE points; then every horizontal section is fitted
     (rudder_modify.fit_section_table, about 0.4 s each, on the stack file's sections of 2 PLANAR_FIT_POINTS - 1
-    points), the original's laws with the orders that fit best, and the set-up
-    <name>_original_design_space.json written there: the rudder as it is (the baseline), its sections' TE
+    points), the original's laws with the orders that fit best, and the set-up <name>_original.txt (a
+    component file of kind rudder_h) written there: the rudder as it is (the baseline), its sections' TE
     radius, 2 points - 1 points a section, H from H_FRACTIONS of the top horizontal section. The tool's cases
     of it go to that folder too. Kept for the next time: while the component file and its section file are
     unchanged (their digest in source.json) the set-up is read back instead. A rudder with pitch or rake is
@@ -569,7 +569,7 @@ def rudder_from_planar(component, out_dir=None, progress=print, sections=None, p
     component = os.path.abspath(component)
     name = os.path.splitext(os.path.basename(component))[0]
     folder = os.path.abspath(out_dir or os.path.join(os.path.dirname(component), f"{name}_modified_below_H"))
-    setup, src = os.path.join(folder, f"{name}_original_design_space.json"), os.path.join(folder, "source.json")
+    setup, src = os.path.join(folder, f"{name}_original.txt"), os.path.join(folder, "source.json")
     stamp = {"component": component, "digest": _inputs_digest(component), "sections": sections, "points": points,
              "version": PLANAR_VERSION}
     if os.path.isfile(setup) and os.path.isfile(src):
@@ -580,8 +580,7 @@ def rudder_from_planar(component, out_dir=None, progress=print, sections=None, p
             old = {}
         if all(old.get(k) == stamp[k] for k in ("digest", "sections", "points", "version")):
             progress(f"{name}: the original made from it before (the file unchanged)")
-            ad = XR.RudderAdapter(out_dir=folder)
-            ad.load_space(setup)
+            ad = XR.RudderAdapter(out_dir=folder, params=setup)
             return {"adapter": ad, "setup": setup, "folder": folder, "cached": True, "seconds": time.time() - t0,
                     "name": name, "report": [f"{name}: the original made from it before, {setup}"]}
     progress(f"{name}: its sections, tip and cap")
@@ -626,7 +625,7 @@ def rudder_from_planar(component, out_dir=None, progress=print, sections=None, p
     ad.design = RM.baseline_design(ad.orig, ad.settings["h_max"], ad.orders, ad.join)
     ad.meta = {}
     ad._rebuild()
-    ad.save_space(setup)
+    ad.save_file(setup)
     with open(src, "w") as fh:
         json.dump(dict(stamp, written=time.strftime("%d %b %Y %H:%M")), fh, indent=1)
     report = [f"{c}: order {o[0]} ({100 * o[1]:.2f} % of its range)" for c, o in orders.items()]

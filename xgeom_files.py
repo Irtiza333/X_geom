@@ -2,16 +2,17 @@
 xgeom_files.py
 
 The XGeom input files (claude/xgeom-file-formats.md): the component file, one layout for every component
-(propeller blade, rudder, fin, wing, blended wing body, hull), and the assembly file, which places the components on the hull and
-defines an optimization run. This module reads and writes their text; blade_modify, wing_modify and hull_modify
-turn a component into their parameters, design and design space and back (load_component, write_component).
+(propeller blade, rudder, fin, wing, blended wing body, hull, and the rudder modified below H), and the assembly
+file, which places the components on the hull and defines an optimization run. This module reads and writes
+their text; blade_modify, wing_modify, hull_modify and rudder_modify turn a component into their parameters,
+design and design space and back (load_component, write_component).
 Standard library and numpy only. Files are written with LF line endings on every platform, so the same
 content gives the same bytes on any machine.
 
 Component file ('#' lines are the header, the rest is one table, which np.loadtxt reads):
 
     # XGeom component
-    # kind          blade                        blade, rudder, fin, wing, bwb or hull
+    # kind          blade                        blade, rudder, fin, wing, bwb, rudder_h or hull
     # name          msc_blade
     # note          free text (any number of note lines)
     # ---- geometry
@@ -36,7 +37,10 @@ Component file ('#' lines are the header, the rest is one table, which np.loadtx
     curve   a distribution's form: table (the column as it is, the cubic spline through the rows; no
             variables), bezier1 <points> (one Bezier from the root to the tip), bezier2 (two rational cubic
             segments, x_blade's form), smooth2 (a blended wing body's: two cubic segments joined smoothly, flat
-            at the centre line; wing_modify.SmoothTwoSegmentCurve), cst <order> (a hull curve)
+            at the centre line; wing_modify.SmoothTwoSegmentCurve), cst <order> (a hull curve). A curve of
+            the rudder modified below H (kind rudder_h) is 'bezier1 <points>' followed by how it joins the
+            original at H, G1 (on its tangent) or G0 (its value only), or by its two bounding laws, '<low law>
+            <high law>' (one word each: the curve lies between them, its variables the fractions of the way)
     var     one variable, the same line in every component file: '<name> <value> <low> <high> <Y|N>
             [<relation>, ...]', its value, its bounds, whether it is free (a design variable) or held, and
             for a dependent variable its relation to others. A variable is independent with numbers for
@@ -80,9 +84,9 @@ Assembly file:
 A table file is a component file with no curve or var lines (blade_modify, wing_modify and hull_modify
 write_params write one): load_component fits the curves to its table.
 
-Only component files are read (20 Nov 2026). An old parameter file ('# XGeom <kind> parameters' first, .dat) is
-refused with a message that names it (legacy_kind); the old set-up JSONs of the blade, wing, fin and hull are no
-longer read either (the rudder modified below H keeps its JSON set-ups, rudder_modify.load_design_space).
+Only component files are read (20 Nov 2026; the rudder modified below H since 26 Nov 2026, kind rudder_h:
+rudder_modify.load_component). An old parameter file ('# XGeom <kind> parameters' first, .dat) is refused with a
+message that names it (legacy_kind), and so is an old JSON set-up.
 """
 
 from __future__ import annotations
@@ -97,7 +101,9 @@ import xgeom_relations as REL
 COMPONENT = "# XGeom component"
 ASSEMBLY = "# XGeom assembly"
 PLANAR = ("rudder", "fin", "wing", "bwb")         # bwb: a blended wing body (20 Nov 2026)
-KINDS = ("blade",) + PLANAR + ("hull",)
+MODIFIED = "rudder_h"                             # the rudder modified below H (rudder_modify.py; 26 Nov 2026)
+KINDS = ("blade",) + PLANAR + (MODIFIED, "hull")
+JOINS = ("G1", "G0")                              # how a rudder_h curve joins the original at H
 CAP_KEYS = {"scaled": ("cap_k_le", "cap_k_te", "cap_b1", "cap_b2", "cap_p", "cap_q"),
             "radius": ("cap_h_le_mm", "cap_h_te_mm", "cap_b1_mm", "cap_b2_mm", "cap_crown_radius_mm",
                        "cap_edge_radius_mm", "cap_te_radius_mm")}      # a planar surface's tip cap (tip_cap.py)
@@ -106,27 +112,33 @@ _PLANAR_GEOMETRY = (("span_mm", "section", "ref_xc", "camber_xc", "tip_tilt_deg"
 GEOMETRY = {"blade": ("diameter_m", "blades", "root_r", "hub_height_m", "hub_base_m", "hub_top_m", "hub_x_m",
                       "section", "section_tables"),
             **{k: _PLANAR_GEOMETRY for k in PLANAR},
+            MODIFIED: ("corner_points", "section_table", "xcad_original", "stack", "degree", "span_mm",
+                       "fit_orders", "fit_free_heights"),
             "hull": ("nose_m", "middle_m", "tail_m", "cap_m", "axisymmetric")}
 SETTINGS = {"blade": ("sections", "tip_band", "tip_sections", "clearance_mm", "hub", "part"),
             **{k: ("sections", "change_points", "half", "cap_loops") for k in PLANAR},
+            MODIFIED: ("sections", "points", "te_radius_mm", "half", "strip_frac", "tip_drop", "keep_inside",
+                       "inside_tol_mm"),
             "hull": ("half",)}
 ALIASES = {"blade": {"section_table": "section", "airfoil": "section"},          # the old parameter files' keys,
                                                                                    # read as these
-           **{k: {"airfoil": "section"} for k in PLANAR}, "hull": {}}
+           **{k: {"airfoil": "section"} for k in PLANAR}, MODIFIED: {}, "hull": {}}
 COLUMNS = {"blade": ("r/R", "P/D", "c/D", "t/c", "f/c", "skew_deg", "rake/D"),
            **{k: ("eta", "pitch_deg", "chord_mm", "t/c", "f/c", "sweep_mm", "rake_mm") for k in PLANAR},
+           MODIFIED: ("y_mm", "LE_mm"),            # then P1x P1z .. P(n-1)x P(n-1)z, the section's inner points
            "hull": ("x_m", "r_m")}                 # then a planar surface's dt1 .. dtk dc1 .. dck, the hull's rp_m
 CURVE_COLUMNS = {"blade": {"pitch": "P/D", "chord": "c/D", "thickness": "t/c", "camber": "f/c", "skew": "skew_deg",
                            "rake": "rake/D"},
                  **{k: {"pitch": "pitch_deg", "chord": "chord_mm", "thickness": "t/c", "camber": "f/c",
                         "sweep": "sweep_mm", "rake": "rake_mm"} for k in PLANAR}}
 FORMS = {"blade": ("table", "bezier1", "bezier2"), **{k: ("table", "bezier1", "bezier2") for k in PLANAR},
-         "bwb": ("table", "bezier1", "smooth2"), "hull": ("cst",)}
+         "bwb": ("table", "bezier1", "smooth2"), MODIFIED: ("bezier1",), "hull": ("cst",)}
 SEGMENTS = {"table": 0, "bezier1": 1, "bezier2": 2, "smooth2": 3}   # the form's code (wing_modify.CURVE_TYPES)
 FORM_OF = {0: "table", 1: "bezier1", 2: "bezier2", 3: "smooth2"}
-DECIMALS = {"blade": 8, **{k: 8 for k in PLANAR}, "hull": 9}  # the table's
+DECIMALS = {"blade": 8, **{k: 8 for k in PLANAR}, MODIFIED: 8, "hull": 9}  # the table's
 TITLES = {"blade": "distributions over r/R", **{k: "distributions over eta = y/span" for k in PLANAR},
-          "bwb": "distributions over eta = y/span from the centre line", "hull": "stations"}
+          "bwb": "distributions over eta = y/span from the centre line",
+          MODIFIED: "the curves from the root to H (what the var lines give; not read back)", "hull": "stations"}
 ASSEMBLY_COMPONENTS = ("hull", "blade", "rudder", "fin", "wing")
 PLACEMENT_KEYS = ("prop_x", "prop_d", "rudder_x", "rudder_angle", "rudders", "rudder_scale", "rudder_rake",
                   "fin_x", "fins", "fin_angle", "fin_scale", "wing_x", "wings", "wing_angle", "wing_scale", "view")
@@ -138,8 +150,16 @@ VAR_TITLE = ("# ---- var <name> <value> <low> <high> <Y free | N held> [<relatio
              "# ----                  or a relation after the flag: an operator (< <= > >= =) and an expression,",
              "# ----                  such as <= 0.5*{a} + 2*{b}")
 VAR_EXAMPLE = {**{k: dict(a="chord.v2", b="chord.v3", c="chord.v0") for k in KINDS},      # the var line's title,
-               "hull": dict(a="nose_r.b1", b="nose_r.b2", c="nose_r.b0")}                # the same in every
-                                                                                         # component file
+               MODIFIED: dict(a="LE.dx1", b="LE.dx2", c="LE.dx3"),                       # the same in every
+               "hull": dict(a="nose_r.b1", b="nose_r.b2", c="nose_r.b0")}                # component file
+CURVE_TITLE = {"hull": ("# ---- curve <name> <form>: cst <order>",),
+               "bwb": ("# ---- curve <name> <form>: table | bezier1 <points> | smooth2",),
+               MODIFIED: ("# ---- curve <name> bezier1 <points> <G1: on the original's tangent at H | G0: its value "
+                          "only>",
+                          "# ----    or  <name> bezier1 <points> <low law> <high law>: the curve between two laws "
+                          "(one word each),",
+                          "# ----        its variables f1 .. the fractions of the way, 0 on the low law, 1 on the "
+                          "high one")}
 
 
 @dataclass
@@ -160,7 +180,9 @@ class Var:
 @dataclass
 class Component:
     """A component file's content. curves: name -> (form, n), n the points of a bezier1 curve or the order of a
-    cst one (else None); vars: name -> Var in file order; vary: name -> (on, low, high) of vary lines."""
+    cst one (else None); vars: name -> Var in file order; vary: name -> (on, low, high) of vary lines; of a
+    rudder modified below H (kind rudder_h): joins, name -> 'G1' or 'G0', and laws, name -> (low law, high
+    law), of the curves that have them."""
     kind: str
     name: str = ""
     notes: list = field(default_factory=list)
@@ -172,6 +194,8 @@ class Component:
     columns: tuple = ()
     table: np.ndarray = None
     path: str = ""
+    joins: dict = field(default_factory=dict)
+    laws: dict = field(default_factory=dict)
 
     def column(self, name):
         return np.array(self.table[:, self.columns.index(name)], dtype=float)
@@ -368,6 +392,9 @@ def _columns_ok(kind, cols):
     rest = list(cols[len(base):])
     if kind == "hull":
         return rest in ([], ["rp_m"])
+    if kind == MODIFIED:                           # the inner points of a section of degree 4 or more
+        k = len(rest) // 2
+        return len(rest) % 2 == 0 and k >= 3 and rest == [f"P{i}{a}" for i in range(1, k + 1) for a in "xz"]
     if kind in PLANAR:
         k = len(rest) // 2
         return len(rest) % 2 == 0 and rest == [f"dt{i}" for i in range(1, k + 1)] + [f"dc{i}" for i in range(1, k + 1)]
@@ -426,7 +453,8 @@ def read_component(path):
     _dependent_bounds(comp)
     cols = col_line.lstrip("#").split()
     if not _columns_ok(kind, cols):
-        extra = {"hull": " [rp_m]", "blade": ""}.get(kind, " [dt1 .. dtk dc1 .. dck]")
+        extra = {"hull": " [rp_m]", "blade": "", MODIFIED: " P1x P1z .. P(n-1)x P(n-1)z"}.get(
+            kind, " [dt1 .. dtk dc1 .. dck]")
         raise ValueError(f"{path}, line {col_no}: the column line of a {kind} file is '# {' '.join(COLUMNS[kind])}"
                          f"{extra}', not '{col_line}'")
     rows = []
@@ -445,7 +473,39 @@ def read_component(path):
     return comp
 
 
+def _read_modified_curve(comp, parts, where):
+    """A curve line of a rudder modified below H: '<name> bezier1 <points> <G1|G0>' or '<name> bezier1 <points>
+    <low law> <high law>' (the laws' grammar here; their names with the model, rudder_modify)."""
+    if len(parts) not in (4, 5) or parts[1] != "bezier1":
+        raise ValueError(f"{where}: '# curve <name> bezier1 <points> <G1|G0>' or '# curve <name> bezier1 <points> "
+                         f"<low law> <high law>' (a law is one word, no blanks)")
+    name = parts[0]
+    if name in comp.curves:
+        raise ValueError(f"{where}: {name} has a curve line already")
+    try:
+        n = int(parts[2])
+    except ValueError:
+        raise ValueError(f"{where}: {parts[2]} is not a whole number") from None
+    if n < 2:
+        raise ValueError(f"{where}: at least 2")
+    if len(parts) == 4:
+        if parts[3] not in JOINS:
+            raise ValueError(f"{where}: after the points comes G1 (on the original's tangent at H) or G0 (its "
+                             f"value only), or a low law and a high law; not '{parts[3]}' alone")
+        comp.joins[name] = parts[3]
+    else:
+        for which, word in zip(("low", "high"), parts[3:]):
+            try:
+                REL.parse_law(word)
+            except ValueError as exc:
+                raise ValueError(f"{where}: the {which} law of {name}: {exc}") from None
+        comp.laws[name] = (parts[3], parts[4])
+    comp.curves[name] = ("bezier1", n)
+
+
 def _read_curve(comp, parts, where):
+    if comp.kind == MODIFIED:
+        return _read_modified_curve(comp, parts, where)
     if len(parts) not in (2, 3):
         raise ValueError(f"{where}: '# curve <name> <form> [<points or order>]'")
     name, form = parts[0], parts[1]
@@ -552,9 +612,8 @@ def component_text(comp):
         out.append("# ---- settings")
         out += [_key(k, v) for k, v in comp.settings.items()]
     if comp.curves or comp.vars:
-        forms = {"hull": "cst <order>", "bwb": "table | bezier1 <points> | smooth2"}.get(
-            comp.kind, "table | bezier1 <points> | bezier2")
-        out += ["# ---- curves and variables", f"# ---- curve <name> <form>: {forms}"]
+        out += ["# ---- curves and variables"]
+        out += CURVE_TITLE.get(comp.kind, ("# ---- curve <name> <form>: table | bezier1 <points> | bezier2",))
         out += [t.format(**VAR_EXAMPLE[comp.kind]) for t in VAR_TITLE]
         groups = {c: [] for c in comp.curves}
         loose = []
@@ -564,12 +623,13 @@ def component_text(comp):
 
         def var_line(n):
             v = comp.vars[n]
-            lo, hi = v.lo_expr or num(v.lo), v.hi_expr or num(v.hi)        # a dependent bound: its expression
+            lo, hi = v.lo_expr or num(v.lo, 12), v.hi_expr or num(v.hi, 12)    # a dependent bound: its expression
             return (f"# var    {n:<{w}s}  {num(v.value, 12):>18s}  {lo:>16s}  {hi:>16s}  {yn(v.free)}"
                     + (f"  {v.relation}" if v.relation else ""))
         out += [var_line(n) for n in loose]
         for c, (form, k) in comp.curves.items():
-            out.append(f"# curve  {c:<{w}s}  {form}" + (f" {k}" if k is not None else ""))
+            tail = " " + " ".join(comp.laws[c]) if c in comp.laws else f" {comp.joins[c]}" if c in comp.joins else ""
+            out.append(f"# curve  {c:<{w}s}  {form}" + (f" {k}" if k is not None else "") + tail)
             out += [var_line(n) for n in groups[c]]
     if comp.vary:
         out.append("# ---- vary (Y: changes, its values within low .. high when given; N: kept as the table has it)")
@@ -611,11 +671,15 @@ def legacy_kind(path):
 
 
 def not_component(path):
-    """The error for a file that is not a component file; an old parameter file is named as one."""
+    """The error for a file that is not a component file; an old parameter file, or a JSON file (an old
+    set-up), is named as one."""
     old = legacy_kind(path)
     if old:
         return ValueError(f"{path}: an old {old} parameter file, which XGeom no longer reads (since 20 Nov 2026): "
                           f"it reads component files only ('{COMPONENT}' first)")
+    if first_line(path).startswith("{"):
+        return ValueError(f"{path}: a JSON file, not a component file: XGeom no longer reads JSON set-ups (the "
+                          f"rudder's until 26 Nov 2026), it reads component files only ('{COMPONENT}' first)")
     return ValueError(f"{path}: not a component file (its first line is not '{COMPONENT}')")
 
 
@@ -626,13 +690,15 @@ def file_kind(path):
 
 
 def load(path, **kw):
-    """The Loaded of a component file, read by its kind's module (blade_modify, wing_modify, hull_modify; kw go
-    to its load_component)."""
+    """The Loaded of a component file, read by its kind's module (blade_modify, wing_modify, hull_modify,
+    rudder_modify; kw go to its load_component)."""
     kind = read_component(path).kind
     if kind == "blade":
         import blade_modify as module
     elif kind == "hull":
         import hull_modify as module
+    elif kind == MODIFIED:
+        import rudder_modify as module
     else:
         import wing_modify as module
     return module.load_component(path, **kw)

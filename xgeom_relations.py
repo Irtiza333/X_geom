@@ -407,18 +407,19 @@ def parse(relation, names=None, curve=None, own=None):
     return tuple(out)
 
 
-def parse_law(law, names, own=None):
+def parse_law(law, names=None, own=None):
     """A bounding law, as a set-up has it: an expression of the names a law may use there (curves at the same
-    span position, the component's built-in names), or a number. own: the curve the law is for, which it
-    cannot use. Returns an Expression, whose value(values) takes numbers or arrays ({name: array over the
-    positions}). ValueError says what is wrong with the text."""
+    span position, the component's built-in names; None: any name, the grammar alone, as the file layer
+    checks it), or a number. own: the curve the law is for, which it cannot use. Returns an Expression, whose
+    value(values) takes numbers or arrays ({name: array over the positions}). ValueError says what is wrong
+    with the text."""
     source = str(law if law is not None else "").strip()
     if not source:
         raise ValueError("a bounding law is a number or an expression of other curves")
-    known = set(names)
+    known = None if names is None else set(names)
 
     def resolve(token):
-        if token in known:
+        if known is None or token in known:
             return token
         raise ValueError(f"'{token}' is not a name a law can use here ({', '.join(names)})")
     try:

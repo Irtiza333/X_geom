@@ -7,9 +7,12 @@ planar-rudder optimisation on the wind-tunnel rudder (the folder
 Planar_Rudder_Optimization), written with bounding laws
 (rudder_modify.Design.laws) instead of code of its own:
 
-    python rudder_laws_setup.py                    writes outputs/modified/add_to_original_design_space.json
+    python rudder_laws_setup.py                    writes outputs/modified/add_to_original.txt
     python rudder_laws_setup.py --a 2 --b 2        the thickness up to 2 times the original's (default 10, 10)
-    python xgeom_tool.py rudder --space outputs/modified/add_to_original_design_space.json
+    python xgeom_tool.py rudder --file outputs/modified/add_to_original.txt
+
+The set-up is a component file of kind rudder_h (xgeom_files.py), as every
+other component's: rudder_modify.load_component reads it for an optimiser.
 
 The sections are the quartics P0 .. P4 of the section fits; all lengths below
 are mm, the laws turn them into fractions of the section's own sharp chord:
@@ -95,11 +98,11 @@ def main():
     ap = argparse.ArgumentParser(description="the build-on-the-original rule as a rudder set-up with bounding laws")
     ap.add_argument("--a", type=float, default=10.0, help="P2's height up to this many times the original's")
     ap.add_argument("--b", type=float, default=10.0, help="P3's height up to this many times the original's")
-    ap.add_argument("--out", default=None, help="the set-up file (default: add_to_original_design_space.json in "
-                                               "the rudder's output folder)")
+    ap.add_argument("--out", default=None, help="the set-up file (default: add_to_original.txt in the rudder's "
+                                               "output folder)")
     args = ap.parse_args()
     ad = set_up(XR.RudderAdapter(), args.a, args.b)
-    path = ad.save_space(args.out or os.path.join(ad.out_dir, "add_to_original_design_space.json"))
+    path = ad.save_file(args.out or os.path.join(ad.out_dir, "add_to_original.txt"))
     pv = ad.preview()
     print(f"{path}: {ad.summary()}")
     for c in ad.names:

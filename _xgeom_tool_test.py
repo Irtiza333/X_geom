@@ -19,6 +19,7 @@ repo) and is skipped without them.
 import copy
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -27,6 +28,7 @@ import numpy as np
 
 import replica_funcs as RF
 import xcad_loft as XL
+import xgeom_files as XF
 
 _FAILED = []
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -39,6 +41,29 @@ def check(name, got, want, tol):
     if not ok:
         _FAILED.append(name)
     print(f"  {'ok ' if ok else 'FAIL'}  {name:<62s} max error {err:.3e}   (tol {tol:.0e})")
+
+
+def gap(a, b):
+    """The largest difference between the numbers of two records (dicts, lists and tuples walked); inf where
+    they differ in anything else (a name, a flag, a text)."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        return max([gap(a[k], b[k]) for k in a] + [0.0]) if sorted(a) == sorted(b) else float("inf")
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return max([gap(x, y) for x, y in zip(a, b)] + [0.0]) if len(a) == len(b) else float("inf")
+    if isinstance(a, bool) or isinstance(b, bool) or a is None or b is None or isinstance(a, str):
+        return 0.0 if a is b or a == b else float("inf")
+    try:
+        return float(np.abs(np.asarray(a, float) - np.asarray(b, float)).max())
+    except (TypeError, ValueError):
+        return float("inf")
+
+
+def file_shown(app):
+    """The file the panel's File box names (its first line)."""
+    for box in app.panel.winfo_children():
+        if box.winfo_class() == "TLabelframe" and box.cget("text") == "File":
+            return box.winfo_children()[0].cget("text")
+    return None
 
 
 CAP_RINGS = (0.15, 0.3, 0.5, 0.7, 0.85, 1.0)               # the round cap's loops: shares of a quarter turn
@@ -493,25 +518,32 @@ def test_adapter():
                 ad.set_bounds("H", 40.0, 150.0)
             before = dict(ad.values)
             ad2 = XR.RudderAdapter()
-            ad2.load_space(res["case"]["paths"]["space"])
-            check("the design space JSON read back: degree, values, free flags, H bounds",
+            ad2.load_params(res["case"]["paths"]["component"])
+            check("the case's set-up (<case>.txt, a component file) read back: degree, values, free flags, H bounds",
                   [ad2.degree, max(abs(ad2.values[k] - before[k]) for k in before), ad2.is_free("P3x.v2"),
-                   ad2.settings["h_min"], ad2.settings["h_max"], ad2.n_free()[0] == n_free], [5, 0, 0, 40.0, 150.0, 1],
-                  1e-12)
-            setup = ad.save_space(os.path.join(tmp, "setup.json"))
-            space3, design3, _ = RM.load_design_space(setup)
-            check("Save set-up, then rudder_modify.load_design_space: the same free variables, values, bounds",
+                   ad2.settings["h_min"], ad2.settings["h_max"], ad2.n_free()[0] == n_free,
+                   os.path.basename(res["case"]["paths"]["component"]) == "t.txt"], [5, 0, 0, 40.0, 150.0, 1, 1],
+                  1e-9)
+            setup = ad.save_file(os.path.join(tmp, "setup.txt"))
+            ld = RM.load_component(setup)
+            space3, design3 = ld.space, ld.design
+            check("Save set-up, then rudder_modify.load_component: the same free variables, values, bounds; "
+                  "xgeom_files.load reads it by its kind (rudder_h)",
                   [space3.names == ad.free_space().names,
                    np.abs(space3.to_vector(design3) - ad.free_space().to_vector(ad.design)).max(),
-                   np.abs(space3.bounds - ad.free_space().bounds).max()], [1, 0, 0], 1e-12)
+                   np.abs(space3.bounds - ad.free_space().bounds).max(), XF.load(setup).kind == XF.MODIFIED],
+                  [1, 0, 0, 1], 1e-9)
             with open(setup, "rb") as fh:
                 first = fh.read()
-            time.sleep(1.1)                                   # a stamp to the second would differ (the key is checked too)
-            again = ad.save_space(os.path.join(tmp, "setup_again.json"))
-            with open(again, "rb") as fh:
+            with open(ad.save_file(os.path.join(tmp, "setup_again.txt")), "rb") as fh:
                 second = fh.read()
-            check("an unchanged set-up saves to the same bytes (no time stamp in it)",
-                  [first == second, b'"written"' in first], [1, 0], 0)
+            with open(XR.RudderAdapter(params=setup).save_file(os.path.join(tmp, "setup_read.txt")), "rb") as fh:
+                third = fh.read()
+            check("an unchanged set-up saves to the same bytes but for its name (LF only, no time stamp), and so "
+                  "does the set-up opened and saved again",
+                  [second.replace(b"setup_again", b"setup") == first, third.replace(b"setup_read", b"setup") == first,
+                   first.startswith(b"# XGeom component\n# kind          rudder_h\n"), b"\r" in first],
+                  [1, 1, 1, 0], 0)
             space = ad2.free_space()
             check("the optimiser's space leaves the held slots out", ["P3x.v2" in space.names, len(space)],
                   [0, n_free], 0)
@@ -563,11 +595,12 @@ def test_span():
         except ValueError:
             refused = True
         with tempfile.TemporaryDirectory() as tmp:
-            setup = ad.save_space(os.path.join(tmp, "s_design_space.json"))
-            space, design, _ = RM.load_design_space(setup)
+            setup = ad.save_file(os.path.join(tmp, "s.txt"))
+            ld = RM.load_component(setup)
+            space, design = ld.space, ld.design
             ad2 = XR.RudderAdapter()
-            ad2.load_space(setup)
-            check("a full height of a tenth refused; the set-up keeps it: load_design_space and load_space",
+            ad2.load_params(setup)
+            check("a full height of a tenth refused; the set-up keeps it: load_component and load_params",
                   [refused, space.orig.scale, design.H / h0, ad2.span / span0,
                    np.abs(space.to_vector(design) - ad.free_space().to_vector(ad.design)).max(),
                    max(abs(ad2.values[n] - ad.values[n]) for n in ad.values)], [1, 1.5, 1.5, 1.5, 0, 0], 1e-9)
@@ -579,43 +612,44 @@ def test_span():
             ad3.set_bounds("LE.dx2", -3.0, 4.0)
             ad3.set_free("LE.dx3", False)
             ad3.settings.update(n_sections=7, half=True, te_radius_mm=0.5)
-            ad3.load_space(setup)
-            check("load_space at any time (another degree, height, order, value, bounds, free flag, settings): "
+            ad3.load_params(setup)
+            check("load_params at any time (another degree, height, order, value, bounds, free flag, settings): "
                   "the adapter as the one that saved the set-up",
                   [ad3.degree - ad.degree, ad3.span / ad.span, ad3.orders == ad.orders, ad3.join == ad.join,
                    sorted(ad3.values) == sorted(ad.values), max(abs(ad3.values[n] - ad.values[n]) for n in ad.values),
-                   ad3.meta == ad.meta, all(ad3.settings[k] == ad.settings[k] for k in ad.settings),
-                   ad3.setup_file == os.path.abspath(setup), len(ad3.preview()["problems"])],
-                  [0, 1, 1, 1, 1, 0, 1, 1, 1, 0], 1e-9)
+                   gap(ad3.meta, ad.meta), gap(ad3.settings, ad.settings),
+                   ad3.file == os.path.abspath(setup), len(ad3.preview()["problems"])],
+                  [0, 1, 1, 1, 1, 0, 0, 0, 1, 0], 1e-9)
             ad3.set_degree(5)
             ad3.set_span(0.9 * span0)
             ad3.set_bounds("H", 50.0, 120.0)
-            was = (ad3.orig, ad3.design, ad3.space, ad3.stack, ad3.loops0, ad3.settings, ad3.setup_file)
+            was = (ad3.orig, ad3.design, ad3.space, ad3.stack, ad3.loops0, ad3.settings, ad3.file)
             vals, meta, sets = dict(ad3.values), copy.deepcopy(ad3.meta), dict(ad3.settings)
             with open(setup) as fh:
-                rec = json.load(fh)
-            rec["settings"].update(n_sections=99, height_scale=1.2, half=True)
-            del rec["space"]["orders"]                             # read as far as the space, then it fails
-            said = []
-            for name, bad in (("bad_design_space.json", json.dumps(rec)), ("wing.json", '{"geometry": "wing"}'),
-                              ("list.json", "[1, 2]"), ("notes.txt", "H = 60 mm, LE swept back")):
+                text = fh.read()
+            broken = re.sub(r"(?m)^(# var +)LE\.dx3 ", r"\1LE.dx9 ",
+                            re.sub(r"(?m)^(# sections +)\d+", r"\g<1>99", text))
+            said = []                                              # the first: read as far as the variables
+            for name, bad in (("bad.txt", broken), ("old_design_space.json", '{"geometry": "rudder", "space": {}}'),
+                              ("wing.txt", text.replace("rudder_h", "wing", 1)),
+                              ("notes.txt", "H = 60 mm, LE swept back")):
                 with open(os.path.join(tmp, name), "w") as fh:
                     fh.write(bad)
                 try:
-                    ad3.load_space(os.path.join(tmp, name))
+                    ad3.load_params(os.path.join(tmp, name))
                     said.append("read")
                 except ValueError as exc:
                     said.append(str(exc))
-            check("a file that cannot be taken over (a set-up broken part way, another geometry's, no set-up, no "
-                  "JSON) raises a ValueError that names it and says why, and leaves the adapter as it was",
-                  [said[0].startswith("bad_design_space.json could not be taken as a rudder set-up (KeyError"),
-                   said[1].startswith("wing.json is not a rudder set-up"),
-                   said[2].startswith("list.json is not a rudder set-up"),
-                   said[3].startswith("notes.txt is not a rudder set-up (not a JSON file"),
+            check("a file that cannot be taken over (a set-up broken part way, an old JSON set-up, another "
+                  "component's file, no component file) raises a ValueError that names it and says why, and leaves "
+                  "the adapter as it was",
+                  [broken != text and said[0].startswith("bad.txt could not be taken as a rudder set-up (ValueError"),
+                   "LE.dx9" in said[0], "old_design_space.json: a JSON file, not a component file" in said[1],
+                   "wing.txt" in said[2] and said[2] != "read", "notes.txt: not a component file" in said[3],
                    all(a is b for a, b in zip(was, (ad3.orig, ad3.design, ad3.space, ad3.stack, ad3.loops0,
-                                                    ad3.settings, ad3.setup_file))),
+                                                    ad3.settings, ad3.file))),
                    ad3.values == vals, ad3.meta == meta, ad3.settings == sets, ad3.span / (0.9 * span0)],
-                  [1, 1, 1, 1, 1, 1, 1, 1, 1], 1e-12)
+                  [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 1e-12)
         ad.set_span(span0)
         check("back to the extracted height: H and the stretch as before", [ad.design.H - h0, ad.orig.scale],
               [0, 1], 1e-9)
@@ -678,17 +712,18 @@ def test_gui():
         check("the full height box: 300 mm stretches the rudder (H 60 -> 60 x 300 / the extracted), 10 refused",
               [app.ad.span, app.ad.get("H") / (60.0 * 300.0 / span0), tops > 290.0, app.span_box.get() == "300.00",
                app.status.cget("background") == XT.STATUS["error"][0]], [300.0, 1, 1, 1, 1], 1e-9)
-        ask_open, out_dir = XT.filedialog.askopenfilename, app.ad.out_dir
+        ask_open, ask_save, out_dir = XT.filedialog.askopenfilename, XT.filedialog.asksaveasfilename, app.ad.out_dir
         with tempfile.TemporaryDirectory() as tmp:
             try:
                 app.ad.out_dir = tmp
-                none = app.setup_label.cget("text")
+                none = file_shown(app)
                 app.case.delete(0, "end")
                 app.case.insert(0, "kept")
+                setup, saves = os.path.join(tmp, "kept.txt"), []
+                XT.filedialog.asksaveasfilename = lambda **kw: saves.append(kw) or setup
                 app.on_save()
                 root.update()
-                setup = os.path.join(tmp, "kept_design_space.json")
-                named = app.setup_label.cget("text")
+                named = file_shown(app)
                 vals, meta, span = dict(app.ad.values), copy.deepcopy(app.ad.meta), app.ad.span
                 app.npts.set(5)                                    # the design moved on: degree, height, H, half
                 app.on_points()
@@ -702,45 +737,47 @@ def test_gui():
                 moved = [app.ad.degree, app.ad.span, app.ad.settings["half"]]
                 asked = []
                 XT.filedialog.askopenfilename = lambda **kw: asked.append(kw) or setup
-                app.on_load_space()
+                app.on_load_params()
                 app.update_views()                                 # the update it scheduled, now
                 loaded = app.status.cget("text")
                 root.update()
-                check("Save set-up, a changed design, then Load ... in the Set-up box: the design, the panel and "
-                      "the views as saved (the case name left alone); the dialog opens on the set-up's folder; "
-                      "the status line says what was loaded",
-                      [os.path.exists(setup), none.startswith("no set-up file loaded"),
-                       named.endswith("kept_design_space.json"), moved == [4, 250.0, True], app.ad.degree,
+                check("Save set-up (the dialog opens on the output folder and the case), a changed design, then "
+                      "Load ... in the File box: the design, the panel and the views as saved (the case name left "
+                      "alone); the dialog opens on the set-up's folder; the status line says what was loaded",
+                      [os.path.exists(setup), none.startswith("(no set-up file"),
+                       named.endswith("kept.txt"), moved == [4, 250.0, True], app.ad.degree,
                        app.ad.span / span,
-                       max(abs(app.ad.values[n] - vals[n]) for n in vals), app.ad.meta == meta,
+                       max(abs(app.ad.values[n] - vals[n]) for n in vals), gap(app.ad.meta, meta),
                        app.npts.get() == "6", app.span_box.get() == f"{span:.2f}", app.vhalf.get(),
-                       app.case.get() == "other", app.setup_label.cget("text") == named,
+                       app.case.get() == "other", file_shown(app) == named,
+                       (saves[0]["initialdir"], saves[0]["initialfile"]) == (tmp, "kept.txt"),
                        asked[0]["initialdir"] == tmp, app.status.cget("background") == XT.STATUS["ok"][0],
-                       loaded == f"set-up loaded: {setup}"],
-                      [1, 1, 1, 1, 5, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1], 1e-9)
+                       loaded == f"loaded {setup}"],
+                      [1, 1, 1, 1, 5, 1, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1], 1e-9)
                 app.set_value("H", 0.9 * app.ad.get("H"), None)
                 design, bad = app.ad.design, os.path.join(tmp, "other_design.json")
                 with open(bad, "w") as fh:
                     json.dump({"H": 60.0, "curves": {}}, fh)       # a design JSON, not a set-up
                 XT.filedialog.askopenfilename = lambda **kw: bad
-                app.on_load_space()
+                app.on_load_params()
                 root.update()
                 text = app.status.cget("text")
                 XT.filedialog.askopenfilename = lambda **kw: ""    # the dialog cancelled
-                app.on_load_space()
-                check("Load ... of a file that is no set-up: said in red, the design as it was; a cancelled dialog "
-                      "changes nothing",
-                      [app.ad.design is design, "is not a rudder set-up" in text,
+                app.on_load_params()
+                check("Load ... of a file that is no set-up (a JSON file): said in red, the design as it was; a "
+                      "cancelled dialog changes nothing",
+                      [app.ad.design is design, "a JSON file, not a component file" in text,
                        app.status.cget("background") == XT.STATUS["error"][0],
-                       app.setup_label.cget("text") == named], [1, 1, 1, 1], 0)
+                       file_shown(app) == named], [1, 1, 1, 1], 0)
             finally:
-                XT.filedialog.askopenfilename, app.ad.out_dir = ask_open, out_dir
+                XT.filedialog.askopenfilename, XT.filedialog.asksaveasfilename = ask_open, ask_save
+                app.ad.out_dir = out_dir
         import xgeom_from_cad as FC
         import xgeom_rudder as XR
         with tempfile.TemporaryDirectory() as tmp:
             ad0 = XR.RudderAdapter(out_dir=tmp)
             ad0.set("LE.dx3", -7.0)
-            fake = ad0.save_space(os.path.join(tmp, "fake_design_space.json"))
+            fake = ad0.save_file(os.path.join(tmp, "fake.txt"))
             real, out_dir = FC.from_cad, app.ad.out_dir
             FC.from_cad = lambda kind, path, out, case, progress: {"kind": kind, "setup": fake, "file": tmp,
                                                                     "forms": {"LE": (2, 0.0)}, "report": ["LE: order 2"],
@@ -751,10 +788,9 @@ def test_gui():
                 wait_job(app, root)
                 root.update()
                 check("From CAD ... (the extraction stubbed): the job runs off the GUI thread, its set-up is loaded "
-                      "into the panel when it ends (the value it holds, the Set-up box naming it)",
-                      [app.ad.get("LE.dx3"), app.ad.setup_file == fake, app.setup_label.cget("text").endswith(
-                          "fake_design_space.json"), app.status.cget("background") == XT.STATUS["ok"][0]],
-                      [-7.0, 1, 1, 1], 1e-12)
+                      "into the panel when it ends (the value it holds, the File box naming it)",
+                      [app.ad.get("LE.dx3"), app.ad.file == fake, file_shown(app).endswith("fake.txt"),
+                       app.status.cget("background") == XT.STATUS["ok"][0]], [-7.0, 1, 1, 1], 1e-12)
             finally:
                 FC.from_cad, app.ad.out_dir = real, out_dir
                 XT.filedialog.askopenfilename = ask_open
@@ -867,21 +903,23 @@ def test_laws():
                    mm(up, 1)[1] / mm(base[0], 2)[1]],
                   [-80.0, 0, 1, 1, 1, 1.5, 1.25, 1.25], 1e-9)
 
-            path = ad.save_space(os.path.join(tmp, "laws_design_space.json"))
-            rec = json.load(open(path))
-            space, design, _ = RM.load_design_space(path)
+            path = ad.save_file(os.path.join(tmp, "laws.txt"))
+            comp = XF.read_component(path)
+            ld = RM.load_component(path)
+            space, design = ld.space, ld.design
             ad2 = XR.RudderAdapter(out_dir=tmp)
-            ad2.load_space(path)
+            ad2.load_params(path)
             x = space.to_vector(design)
-            check("the set-up: the laws, the measure's switch and tolerance saved; rudder_modify.load_design_space "
-                  "gives the optimiser 26 variables (the fractions among them, 0 .. 1) and the design back; the "
-                  "adapter loads it as it was",
-                  [rec["space"]["laws"]["P1z"] == ["P2z", "P2z"], rec["settings"]["keep_inside"],
-                   rec["settings"]["inside_tol_mm"], len(space.names), "P3z.f3" in space.names,
+            check("the set-up (a component file): the laws on the curve lines, the measure's switch and tolerance "
+                  "in the settings; rudder_modify.load_component gives the optimiser 26 variables (the fractions "
+                  "among them, 0 .. 1) and the design back; the adapter loads it as it was",
+                  [tuple(comp.laws["P1z"]) == ("P2z", "P2z"), "P1z" not in comp.joins, comp.joins["LE"] == "G0",
+                   ld.settings["keep_inside"], ld.settings["inside_tol_mm"], len(space.names),
+                   "P3z.f3" in space.names,
                    max(abs(a - b) for a, b in zip(space.to_vector(space.to_design(x)), x)),
                    ad2.laws == ad.laws, ad2.space.all_names == ad.space.all_names,
                    max(abs(ad2.get(n) - ad.get(n)) for n in ad.space.all_names), ad2.settings["keep_inside"]],
-                  [1, 1, 0.01, 26, 1, 0, 1, 1, 0, 1], 1e-12)
+                  [1, 1, 1, 1, 0.01, 26, 1, 0, 1, 1, 0, 1], 1e-9)
             shape = ad2.preview()["curves"]["P3x"]
             ad2.set_laws("P3x")
             kept = np.abs(ad2.preview()["curves"]["P3x"] - shape).max()
@@ -906,11 +944,11 @@ def test_laws():
             jrec = json.load(open(res["case"]["paths"]["json"]))
             got = [jrec["design"]["laws"]["P3z"][1] == ad.laws_of("P3z")[1],
                    os.path.exists(res["case"]["paths"]["png"]),
-                   json.load(open(res["case"]["paths"]["space"]))["space"]["laws"] == rec["space"]["laws"]]
+                   XF.read_component(res["case"]["paths"]["component"]).laws == comp.laws]
             if res["loft"] is not None:
                 got += [res["loft"].valid, bool(res["loft"].joint)]
-            check("the case written with laws: the design's JSON and the set-up name them, the check plot draws "
-                  "them; its CAD one valid solid, lofted below and above H and joined there",
+            check("the case written with laws: the design's JSON and the set-up (laws.txt) name them, the check plot "
+                  "draws them; its CAD one valid solid, lofted below and above H and joined there",
                   got, [1] * len(got), 0)
     finally:
         os.chdir(cwd)
@@ -1018,7 +1056,7 @@ def test_gui_laws():
                 app.on_rudder()
                 settle()
                 again = [app.ad is ad_new, app.ad.get("span")]
-                setup = ad_mod.save_space(os.path.join(tmp, "m_design_space.json"))
+                setup = ad_mod.save_file(os.path.join(tmp, "m.txt"))
                 XT.filedialog.askopenfilename = lambda **kw: setup
                 app.on_load_params()                               # a set-up of the other option: the slot on it
                 settle()
@@ -1064,9 +1102,9 @@ def test_from_cad():
             orders = FC.best_rudder_orders(files["corner_points"], files["section_table"])
             ad = XR.RudderAdapter(files=files, fit_orders={c: v[0] for c, v in orders.items()}, out_dir=tmp)
             ad.set("LE.dx3", -12.0)
-            setup = ad.save_space(os.path.join(tmp, "other_design_space.json"))
+            setup = ad.save_file(os.path.join(tmp, "other.txt"))
             ad2 = XR.RudderAdapter()                                 # modify_control's files, then the set-up
-            ad2.load_space(setup)
+            ad2.load_params(setup)
             rr = np.linspace(0.0, ad.get("H"), 101)
             base = XR.RudderAdapter(files=files, out_dir=tmp)       # modify_control's orders (3) on the same files
             d_orig = max(float(np.abs(ad.orig.value(c, rr) - base.orig.value(c, rr)).max()) for c in ad.orig.names)
@@ -1078,9 +1116,10 @@ def test_from_cad():
                    {c: ad.orig.curves[c].order for c in ad.orig.names}, ad2.get("LE.dx3"),
                    max(abs(ad2.values[n] - ad.values[n]) for n in ad.values), len(ad2.preview()["problems"])],
                   [1, 1, 1, 1, 1, -12.0, 0, 0], 1e-9)
-            sp, d, rec = RM.load_design_space(setup)
-            check("rudder_modify.load_design_space reads it too (the files it names)", [d.H, len(rec["files"])],
-                  [ad.get("H"), 4], 1e-12)
+            ld = RM.load_component(setup)
+            check("rudder_modify.load_component reads it too (the files it names, relative to the set-up)",
+                  [ld.design.H, len(ld.params.files), all(os.path.isfile(v) for v in ld.params.files.values()),
+                   "other_extraction/corner_points.dat" in open(setup).read()], [ad.get("H"), 4, 1, 1], 1e-9)
     finally:
         os.chdir(cwd)
 

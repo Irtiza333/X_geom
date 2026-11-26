@@ -1,0 +1,89 @@
+# XGeom component
+# kind          rudder_h
+# name          add_to_original
+# ---- geometry
+# corner_points ../corner_points.dat
+# section_table ../thickness_params_y0_y200_info.dat
+# xcad_original ../sections_xcad_with_cap_y0_y200_m.dat
+# stack         ../sections_stack_y0_y200_raw_mm.dat
+# degree        4
+# span_mm       211.27677
+# ---- settings
+# sections      50
+# points        200
+# te_radius_mm  0.75
+# half          N
+# strip_frac    none
+# tip_drop      1.5
+# keep_inside   Y
+# inside_tol_mm 0.01
+# ---- curves and variables
+# ---- curve <name> bezier1 <points> <G1: on the original's tangent at H | G0: its value only>
+# ----    or  <name> bezier1 <points> <low law> <high law>: the curve between two laws (one word each),
+# ----        its variables f1 .. the fractions of the way, 0 on the low law, 1 on the high one
+# ---- var <name> <value> <low> <high> <Y free | N held> [<relation>]
+# ----     independent: numbers for low and high, no relation
+# ----     dependent:   low or high an expression of other variables (one word, such as 0.9*LE.dx3),
+# ----                  or a relation after the flag: an operator (< <= > >= =) and an expression,
+# ----                  such as <= 0.5*LE.dx1 + 2*LE.dx2
+# var    H                         80                 1                80  Y
+# curve  LE        bezier1 4 G0
+# var    LE.d1         0.333333333333              0.05              0.95  Y
+# var    LE.d2                    0.5                 0  1-0.05/(1-LE.d1)  Y
+# var    LE.dx1                     0  LE.dx3-0.07*(1-LE.d1)*H                 0  Y
+# var    LE.dx2                     0  LE.dx3-0.07*(1-LE.d1)*(1-LE.d2)*H                 0  Y
+# var    LE.dx3                     0              -160                 0  Y
+# curve  P1x       bezier1 4 G0
+# var    P1x.d1        0.333333333333              0.05              0.95  N
+# var    P1x.d2                   0.5              0.05              0.95  N
+# var    P1x.v1                     0                 0                 1  N
+# var    P1x.v2                     0                 0                 1  N
+# var    P1x.v3                     0                 0                 1  N
+# curve  P1z       bezier1 4 P2z P2z
+# curve  P2x       bezier1 4 (orig.LE+orig.P2x*orig.chord-LE)/chord 0
+# var    P2x.d1        0.333333333333              0.05              0.95  Y
+# var    P2x.d2                   0.5              0.05              0.95  Y
+# var    P2x.f1                     0                 0                 1  Y
+# var    P2x.f2                     0                 0                 1  Y
+# var    P2x.f3                     0                 0                 1  Y
+# curve  P2z       bezier1 4 orig.P2z*orig.chord/chord 10*orig.P2z*orig.chord/chord
+# var    P2z.d1        0.333333333333              0.05              0.95  Y
+# var    P2z.d2                   0.5              0.05              0.95  Y
+# var    P2z.f1                     0                 0                 1  Y
+# var    P2z.f2                     0                 0                 1  Y
+# var    P2z.f3                     0                 0                 1  Y
+# curve  P3x       bezier1 4 min(orig.LE+orig.chord-LE,orig.LE+orig.P2x*orig.chord-LE+(orig.P3x-orig.P2x)*orig.chord*(P3z*chord-orig.P2z*orig.chord)/(orig.P3z*orig.chord-orig.P2z*orig.chord))/chord max(orig.LE+orig.P2x*orig.chord-LE,orig.LE+orig.chord-LE+(orig.P3x-1)*orig.chord*P3z*chord/(orig.P3z*orig.chord))/chord
+# var    P3x.d1        0.333333333333              0.05              0.95  Y
+# var    P3x.d2                   0.5              0.05              0.95  Y
+# var    P3x.f1                     0                 0                 1  Y
+# var    P3x.f2                     0                 0                 1  Y
+# var    P3x.f3                     0                 0                 1  Y
+# curve  P3z       bezier1 4 orig.P3z*orig.chord/chord 10*orig.P3z*orig.chord/chord
+# var    P3z.d1        0.333333333333              0.05              0.95  Y
+# var    P3z.d2                   0.5              0.05              0.95  Y
+# var    P3z.f1                     0                 0                 1  Y
+# var    P3z.f2                     0                 0                 1  Y
+# var    P3z.f3                     0                 0                 1  Y
+# ---- the curves from the root to H (what the var lines give; not read back)
+#        y_mm       LE_mm         P1x         P1z         P2x         P2z         P3x         P3z
+   0.00000000  0.00000000  0.00000000  0.07336669  0.21770622  0.07336669  0.30000000  0.12356238
+   4.00000000  0.28000000  0.00000000  0.07336661  0.21770567  0.07336661  0.30000000  0.12356208
+   8.00000000  0.56000000  0.00000000  0.07336654  0.21770522  0.07336654  0.30000000  0.12356176
+  12.00000000  0.84000000  0.00000000  0.07336649  0.21770492  0.07336649  0.30000000  0.12356142
+  16.00000000  1.12000000  0.00000000  0.07336645  0.21770480  0.07336645  0.30000000  0.12356103
+  20.00000000  1.40000000  0.00000000  0.07336644  0.21770488  0.07336644  0.30000000  0.12356061
+  24.00000000  1.68000000  0.00000000  0.07336645  0.21770522  0.07336645  0.30000000  0.12356014
+  28.00000000  1.96000000  0.00000000  0.07336650  0.21770583  0.07336650  0.30000000  0.12355961
+  32.00000000  2.24000000  0.00000000  0.07336657  0.21770676  0.07336657  0.30000000  0.12355902
+  36.00000000  2.52000000  0.00000000  0.07336668  0.21770804  0.07336668  0.30000000  0.12355835
+  40.00000000  2.80000000  0.00000000  0.07336683  0.21770971  0.07336683  0.30000000  0.12355761
+  44.00000000  3.08000000  0.00000000  0.07336703  0.21771179  0.07336703  0.30000000  0.12355679
+  48.00000000  3.36000000  0.00000000  0.07336727  0.21771433  0.07336727  0.30000000  0.12355587
+  52.00000000  3.64000000  0.00000000  0.07336756  0.21771735  0.07336756  0.30000000  0.12355486
+  56.00000000  3.92000000  0.00000000  0.07336791  0.21772090  0.07336791  0.30000000  0.12355373
+  60.00000000  4.20000000  0.00000000  0.07336832  0.21772501  0.07336832  0.30000000  0.12355250
+  64.00000000  4.48000000  0.00000000  0.07336878  0.21772970  0.07336878  0.30000000  0.12355115
+  68.00000000  4.76000000  0.00000000  0.07336931  0.21773503  0.07336931  0.30000000  0.12354967
+  72.00000000  5.04000000  0.00000000  0.07336991  0.21774102  0.07336991  0.30000000  0.12354805
+  76.00000000  5.32000000  0.00000000  0.07337058  0.21774770  0.07337058  0.30000000  0.12354629
+  80.00000000  5.60000000  0.00000000  0.07337133  0.21775511  0.07337133  0.30000000  0.12354439

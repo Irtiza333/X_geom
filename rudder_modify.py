@@ -63,6 +63,12 @@ modified sections' control points as a table (and in the thickness format when
 the design is still a quartic with P1x = 0 and P1z = P2z), the design as JSON
 and a check plot.
 
+Set-up    A set-up is a component file (xgeom_files.py, kind rudder_h; 26 Nov
+          2026, in place of the JSON set-up): the original's files, the
+          section degree, the full height, the settings, each curve's order
+          with its join at H or its two laws, and every variable's value,
+          bounds, free flag and relation (write_component, load_component).
+
 Written   The Bezier sections and their spanwise curves are a model of the
           rudder: their fit of the original lies a little off the extracted
           sections (the section fits' error, about 0.1 mm for the wind tunnel
@@ -112,6 +118,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 import bezier_section as BS
+import xgeom_files as XF
 import xgeom_relations as REL
 from replica_funcs import bernstein, build_half_airfoil, mirror_selig
 
@@ -1051,7 +1058,8 @@ class DesignSpace(REL.SpaceRelations):
     project(x). A free slot with a dependent bound is in the vector as its
     fraction between its bounds (factors; its row of bounds 0 .. 1): to_design
     places it, to_vector gives it back. A slot defined with '=' leaves the
-    vector (full_vector works it out)."""
+    vector (full_vector works it out). A set-up file gives a space and a
+    design in it (load_component)."""
 
     def __init__(self, orig, orders=None, join="G1", weights=None, bounds=None, h_min=None, h_max=None,
                  fixed=None, laws=None, te_radius_mm=None):
@@ -1139,8 +1147,8 @@ class DesignSpace(REL.SpaceRelations):
             s = heights_from_fractions(d[c])
             v = vals[c]
             free = [k for (cc, kind, k) in self._slots if cc == c and kind == "v"]
-            if c == "LE" and free:
-                v[free] = v[free] + self.orig.value("LE", s[free] * H)
+            if c == "LE" and free:                          # from the original LE at their heights (H as pin
+                v[free] = v[free] + self.orig.value("LE", s[free] * min(H, self.orig.z_top))    # takes it)
             curves[c] = CurveDesign(s, v, self.weights[c], self.join[c])
         return pin(Design(H, curves, self.orig.degree, self.laws), self.orig, self.te_radius_mm)
 
@@ -1161,69 +1169,242 @@ class DesignSpace(REL.SpaceRelations):
                 out[name] = float(cd.v[k])
         return out
 
-    def to_dict(self, design):
-        """The space and a design in it, as plain data (JSON): the section
-        degree, orders, joins, weights, every slot with its value, bounds,
-        whether it is free and (a dependent variable) its relation and the
-        expressions of its dependent bounds, the bounding laws and the TE
-        radius they take, and the design vector (names, values, bounds; a
-        slot with a dependent bound as its fraction between its bounds).
-        from_dict reads it back."""
-        vals = self.values(design)
-        return {"z_top_mm": self.orig.z_top, "h_min_mm": float(self.all_bounds[0, 0]),
-                "h_max_mm": float(self.all_bounds[0, 1]),
-                "degree": int(self.orig.degree),
-                "orders": {c: int(self.orders[c]) for c in self.curves}, "join": dict(self.join),
-                "weights": {c: (None if self.weights[c] is None else self.weights[c].tolist()) for c in self.curves},
-                "laws": {c: list(v) for c, v in self.laws.items()}, "te_radius_mm": self.te_radius_mm,
-                "slots": self.slot_records(vals),
-                "vector": self.vector_record(vals)}
 
-    @classmethod
-    def from_dict(cls, orig, rec, te_radius_mm=None):
-        """(space, design) from to_dict's output; the space's original is
-        orig at the record's section degree. te_radius_mm: the TE radius the
-        sections are built with, when not the record's."""
-        orig = orig.at_degree(int(rec.get("degree", orig.degree)))
-        slots = rec["slots"]
-        if any(q["name"] == "H" and (q.get("lo_expr") or q.get("hi_expr")) for q in slots):
-            raise ValueError("the bounds of H are numbers (h_min, h_max)")
-        bounds = {q["name"]: (q["lo"], q["hi"]) for q in slots}
-        fixed = {q["name"]: q["value"] for q in slots if not q["free"]}
-        weights = {c: w for c, w in (rec.get("weights") or {}).items() if w is not None}
-        space = cls(orig, rec["orders"], rec["join"], weights, bounds, h_min=bounds["H"][0], h_max=bounds["H"][1],
-                    fixed=fixed, laws=rec.get("laws"),
-                    te_radius_mm=rec.get("te_radius_mm") if te_radius_mm is None else te_radius_mm)
-        space.set_slot_relations(slots)
-        return space, space.design_of({q["name"]: q["value"] for q in slots})
+# --------------------------------------------------------------------------
+# The component file (xgeom_files.py, kind rudder_h): the set-up
+# --------------------------------------------------------------------------
+
+FILE_KEYS = ("corner_points", "section_table", "xcad_original", "stack")     # the original's files (an extraction's)
+SETTING_TYPES = {"sections": int, "points": int, "te_radius_mm": float, "half": bool, "strip_frac": str,
+                 "tip_drop": str, "keep_inside": bool, "inside_tol_mm": float}
+DEFAULT_SETTINGS = {"sections": 50, "points": 200, "te_radius_mm": TE_RADIUS, "half": False, "strip_frac": None,
+                    "tip_drop": 1.5, "keep_inside": True, "inside_tol_mm": 0.01}
+TABLE_ROWS = 21                  # rows of the file's table: the curves from the root to H
+VALUE_NOISE = 1e-9               # a variable's value below this (mm, or a fraction) is written as 0
+FILE_FIGURES = 1e-9              # a number read from a file is the number written within this share of it
 
 
-def load_design_space(path):
-    """(space, design, record) of a set-up the design tool saved
-    (<case>_design_space.json). The original shape is fitted again from the
-    files and fit settings the record names (paths relative to the folder the
-    tool ran in) and stretched in height by the record's height_scale (the
-    tool's full height), so the space is the one the tool set up:
+@dataclass
+class RudderParams:
+    """What a component file says of the original rudder: its files (absolute
+    paths: the LE and TE points, the per-section fits, the XCAD loops with
+    the cap, the section stack; FILE_KEYS), the section degree, the full
+    height (mm, the root to the top of the cap; None: the extracted
+    rudder's) and how the original's laws are fitted."""
+    files: dict
+    degree: int = BASE_DEGREE
+    span: float = None
+    fit_orders: dict = field(default_factory=dict)
+    fit_free_heights: bool = False
 
-        space, design, rec = load_design_space("outputs/modified/gui_design_space.json")
-        x0, bounds = space.to_vector(design), space.bounds      # the free variables
-        d = space.to_design(x)                                  # a candidate x
-        s = rec["settings"]
-        problems = design_problems(d, space.orig, s["n_sections"], s["te_radius_mm"])
-        if s.get("keep_inside"):                                # the original as the lower bound of the shape
-            ok = inside_original(d, space.orig, s["n_sections"], s["te_radius_mm"])["depth"] <= s["inside_tol_mm"]
-        write_case(out_dir, name, d, space.orig, rec["files"]["xcad_original"], ...)
+
+def full_height(xcad_original, units="m"):
+    """The full height (mm) of the rudder of an extraction's XCAD file: the
+    top of its loops (the cap's)."""
+    return float(max(xcad_to_working(pts, units)[:, 1].max() for _, pts in read_xcad(xcad_original)))
+
+
+def _pair_text(v):
+    """A strip width or a tip drop as a file has it: none, a number or two."""
+    return "none" if v is None else " ".join(XF.num(q) for q in np.atleast_1d(v))
+
+
+def _pair_value(text, where):
+    words = str(text).split()
+    if words == ["none"]:
+        return None
+    try:
+        v = [float(q) for q in words]
+    except ValueError:
+        v = []
+    if len(v) not in (1, 2):
+        raise ValueError(f"{where}: none, a number, or two (the LE's and the TE's), not '{text}'")
+    return v[0] if len(v) == 1 else v
+
+
+def component_params(comp):
+    """(RudderParams, the settings the file gives, typed) of a rudder_h
+    component (xgeom_files.read_component); the files' paths are relative to
+    the component file. ValueError names what is missing or wrong."""
+    if comp.kind != XF.MODIFIED:
+        raise ValueError(f"{comp.path}: a {comp.kind} file, not a rudder modified below H (kind {XF.MODIFIED})")
+    g, base = comp.geometry, os.path.dirname(comp.path)
+    missing = [k for k in FILE_KEYS if k not in g]
+    if missing:
+        raise ValueError(f"{comp.path}: no {', '.join(missing)}: the original's files (an extraction's "
+                         f"{', '.join(FILE_KEYS)})")
+    files = {k: XF.resolve(g[k], base) for k in FILE_KEYS}
+    for k in FILE_KEYS:
+        if not os.path.isfile(files[k]):
+            raise ValueError(f"{comp.path}: {k} {g[k]}: no such file ({files[k]})")
+    try:
+        degree = int(g.get("degree", BASE_DEGREE))
+        span = float(g["span_mm"]) if "span_mm" in g else None
+        words = g.get("fit_orders", "").split()
+        orders = {c: int(o) for c, o in zip(words[::2], words[1::2])}
+        if len(words) % 2 or (span is not None and not span > 0.0):
+            raise ValueError
+    except ValueError:
+        raise ValueError(f"{comp.path}: degree is a whole number, span_mm a height in mm and fit_orders pairs of "
+                         f"a curve and its order (LE 3 P1x 2 ..)") from None
+    settings = XF.typed_settings(comp, SETTING_TYPES)
+    for k in ("strip_frac", "tip_drop"):
+        if k in settings:
+            settings[k] = _pair_value(settings[k], f"{comp.path}: {k}")
+    return RudderParams(files, degree, span, orders, XF.as_bool(g.get("fit_free_heights", "N"),
+                                                                 f"{comp.path}: fit_free_heights")), settings
+
+
+def component_original(params):
+    """(the original shape of a RudderParams, fitted from its files and
+    stretched to its full height; the extracted rudder's own full height,
+    mm)."""
+    orig = fit_original(params.files["corner_points"], params.files["section_table"], None, params.fit_orders,
+                        free_heights=params.fit_free_heights, degree=params.degree)
+    span0 = full_height(params.files["xcad_original"])
+    k = 1.0 if params.span is None else params.span / span0
+    return orig.scaled(1.0 if abs(k - 1.0) < 1e-12 else k), span0        # (a file's 12 figures: not stretched)
+
+
+def component_design(comp, orig, te_radius_mm=None):
+    """(space, design) of a rudder_h component on its original (at the file's
+    degree and full height): H and its bounds from its var line; each curve's
+    order from its curve line, with how it joins the original at H (G1, G0)
+    or its two bounding laws; every variable's value, bounds, free flag,
+    relation and dependent bounds from its var line. A curve with no curve
+    line is at the order of the original's fit (DEFAULT_ORDER at least),
+    tangent at H; a curve with no var lines is the original's there (its
+    variables free, P1x's held, the default bounds). H's upper bound within
+    the file's figures of the top section is the top section, and H on that
+    bound is there with it (a file rounds both). ValueError names the file
+    and what is wrong."""
+    path, names = comp.path, orig.names
+    stray = [c for c in comp.curves if c not in names]
+    if stray:
+        raise ValueError(f"{path}: curve lines for {', '.join(stray)}: a rudder with sections of degree "
+                         f"{orig.degree} has {', '.join(names)}")
+    if "H" not in comp.vars:
+        raise ValueError(f"{path}: no var line for H, the height of the modified region")
+    h = comp.vars["H"]
+    if h.lo_expr or h.hi_expr:
+        raise ValueError(f"{path}: the bounds of H are numbers (h_min, h_max)")
+    orders = {c: comp.curves[c][1] - 1 if c in comp.curves else max(DEFAULT_ORDER, orig.curves[c].order)
+              for c in names}
+    join = {c: comp.joins.get(c, "G1") for c in names}
+    bounds = {n: (q.lo, q.hi) for n, q in comp.vars.items()}
+    h_value = h.value
+    if abs(h.hi - orig.z_top) <= FILE_FIGURES * orig.z_top:           # h_max at the top section, as the file
+        bounds["H"] = (h.lo, orig.z_top)                              # rounds it: the top section itself,
+        if h_value >= min(h.hi, orig.z_top):                          # and H on that bound with it
+            h_value = orig.z_top
+    try:
+        kw = dict(bounds=bounds, h_min=bounds["H"][0], h_max=bounds["H"][1], laws=comp.laws,
+                  te_radius_mm=te_radius_mm)
+        full = DesignSpace(orig, orders, join, **kw)
+        vals = full.values(baseline_design(orig, h_value, orders, join, laws=comp.laws, te_radius_mm=te_radius_mm))
+    except ValueError as exc:
+        raise ValueError(f"{path}: {exc}") from None
+    unknown = [n for n in comp.vars if n not in full.all_names]
+    if unknown:
+        has = {c: [n.split(".")[1] for n in full.all_names if n.startswith(c + ".")] for c in names}
+        raise ValueError(f"{path}: var lines for {', '.join(unknown)}, which this rudder does not have (H; "
+                         + "; ".join(f"{c}: {', '.join(k) if k else 'none, set by its laws'}" for c, k in has.items())
+                         + "; C1's value is no variable of a G1 curve)")
+    for c in names:
+        own = [n for n in full.all_names if n.startswith(c + ".")]
+        given = [n for n in own if n in comp.vars]
+        if given and len(given) < len(own):
+            raise ValueError(f"{path}: the {c} curve has var lines for some of its variables only; missing: "
+                             + ", ".join(n for n in own if n not in given))
+    vals.update({n: q.value for n, q in comp.vars.items()})
+    vals["H"] = h_value
+    fixed = {n: vals[n] for n in full.all_names
+             if not (comp.vars[n].free if n in comp.vars else not n.startswith("P1x."))}
+    try:
+        space = DesignSpace(orig, orders, join, fixed=fixed, **kw)
+        space.set_relations({n: q.relation for n, q in comp.vars.items() if q.relation}, "",
+                            {n: (q.lo_expr, q.hi_expr) for n, q in comp.vars.items() if q.lo_expr or q.hi_expr}, vals)
+        return space, space.design_of(vals)
+    except ValueError as exc:
+        raise ValueError(f"{path}: {exc}") from None
+
+
+def load_component(path):
+    """The rudder modified below H from its set-up, a component file of kind
+    rudder_h (xgeom_files.py): an XF.Loaded with params (RudderParams: the
+    original's files, degree, full height and fit), the design, the design
+    space (ld.space.orig is the original, fitted from those files and
+    stretched to the full height; every variable, the held ones fixed; the
+    bounding laws, relations and dependent bounds) and the settings
+    (SETTING_TYPES; DEFAULT_SETTINGS for those the file leaves out):
+
+        ld = load_component("outputs/modified/add_to_original.txt")
+        x0, bounds = ld.space.to_vector(ld.design), ld.space.bounds      # the free variables
+        d = ld.space.to_design(x)                                        # a candidate x
+        s = ld.settings
+        problems = design_problems(d, ld.space.orig, s["sections"], s["te_radius_mm"])
+        if s["keep_inside"]:                              # the original as the lower bound of the shape
+            ok = inside_original(d, ld.space.orig, s["sections"], s["te_radius_mm"])["depth"] <= s["inside_tol_mm"]
+        write_case(out_dir, name, d, ld.space.orig, ld.params.files["xcad_original"], s["sections"], s["points"],
+                   s["te_radius_mm"], space=ld.space)
     """
-    with open(path) as fh:
-        rec = json.load(fh)
-    f, s = rec["files"], rec["settings"]
-    k = float(s.get("height_scale") or 1.0)               # the tool's span: the original stretched in height
-    z_top = None if s.get("z_top") is None else float(s["z_top"]) / k
-    orig = fit_original(f["corner_points"], f["section_table"], z_top, s.get("fit_orders"),
-                        free_heights=s.get("fit_free_heights", False),
-                        degree=rec["space"].get("degree", BASE_DEGREE)).scaled(k)
-    space, design = DesignSpace.from_dict(orig, rec["space"], s.get("te_radius_mm"))
-    return space, design, rec
+    comp = XF.read_component(path)
+    params, settings = component_params(comp)
+    settings = {**DEFAULT_SETTINGS, **settings}
+    space, design = component_design(comp, component_original(params)[0], settings["te_radius_mm"])
+    return XF.Loaded(XF.MODIFIED, params, design, space, settings, comp.name, list(comp.notes), {})
+
+
+def component(path, design, space, params, settings=None, name=None, notes=()):
+    """The XF.Component that write_component writes to path: the original's
+    files of params (relative to the file's folder), the section degree, the
+    full height and the fit; the settings (SETTING_TYPES); each curve's
+    points with its join at H or its two laws; every variable of space
+    (value, bounds, free, relation); the curves' values at TABLE_ROWS
+    heights from the root to H, as the design read back from the file's own
+    figures has them (so a file read and written again is the same bytes,
+    whatever the rudder's size)."""
+    d = pin(design, space.orig, space.te_radius_mm)
+    if any(cd.w is not None for cd in d.curves.values()):
+        raise ValueError("a design with weighted (rational) curves is not written as a component file")
+    folder = os.path.dirname(os.path.abspath(path))
+    comp = XF.Component(XF.MODIFIED, name or os.path.splitext(os.path.basename(path))[0], list(notes))
+    g = {k: XF.rel(os.path.abspath(params.files[k]), folder) for k in FILE_KEYS}
+    g["degree"] = str(int(d.degree))
+    if params.span is not None:
+        g["span_mm"] = XF.num(params.span, 12)
+    if params.fit_orders:
+        g["fit_orders"] = " ".join(f"{c} {int(o)}" for c, o in params.fit_orders.items())
+    if params.fit_free_heights:
+        g["fit_free_heights"] = "Y"
+    comp.geometry = g
+    st = dict(settings or {})
+    for k in ("strip_frac", "tip_drop"):
+        if k in st:
+            st[k] = _pair_text(st[k])
+    comp.settings = XF.settings_text(st, SETTING_TYPES)
+    for c in d.names:
+        comp.curves[c] = ("bezier1", space.orders[c] + 1)
+        if c in d.laws:
+            comp.laws[c] = d.laws[c]
+        else:
+            comp.joins[c] = d.curves[c].join
+    comp.vars = XF.vars_of(space, d)
+    for v in comp.vars.values():                  # as the file has them: 12 figures, and a pinned value's
+        v.value = 0.0 if abs(v.value) < VALUE_NOISE else float(XF.num(v.value, 12))    # rounding (1e-12 mm) 0
+    comp.path = path
+    d = component_design(comp, space.orig, space.te_radius_mm)[1]      # the design a reader of the file has:
+    ys = np.linspace(0.0, d.H, TABLE_ROWS)                             # its table, so a rewrite is the same
+    val = curve_values(d, ys, space.orig, space.te_radius_mm)
+    comp.columns = XF.COLUMNS[XF.MODIFIED] + tuple(BS.coord_names(d.degree))
+    comp.table = np.column_stack([ys] + [val[c] for c in d.names])
+    return comp
+
+
+def write_component(path, design, space, params, settings=None, name=None, notes=()):
+    """Write the set-up as a component file of kind rudder_h (component),
+    which load_component reads back."""
+    return XF.write_component(path, component(path, design, space, params, settings, name, notes))
 
 
 def refit_curve(design, orig, name, order, n_samples=401, te_radius_mm=None):
@@ -2150,22 +2331,12 @@ def design_record(design, orig, te_radius_mm=None):
     return out
 
 
-_OLD_LAWS = {"T1": ("P1z", "P2z"), "X1": ("P2x",), "X2": ("P3x",), "T2": ("P3z",)}
-
-
 def design_from_record(rec):
     """The Design of a design_record (or of the 'design' entry of a
-    <case>_design.json). A record of the earlier layout (laws T1, X1, X2, T2)
-    is read as the quartic it stood for: T1 drives P1z and P2z, P1x is 0."""
-    curves = {}
-    for c, r in rec["curves"].items():
-        cd = CurveDesign(np.array(r["s"]), np.array(r["value"]),
-                         None if np.allclose(r["weights"], 1.0) else np.array(r["weights"]), r["join"])
-        for name in _OLD_LAWS.get(c, (c,)):
-            curves[name] = copy.deepcopy(cd)
-    if "T1" in rec["curves"]:
-        le = curves["LE"]
-        curves["P1x"] = CurveDesign(le.s.copy(), np.zeros_like(le.v), None, le.join)
+    <case>_design.json)."""
+    curves = {c: CurveDesign(np.array(r["s"]), np.array(r["value"]),
+                             None if np.allclose(r["weights"], 1.0) else np.array(r["weights"]), r["join"])
+              for c, r in rec["curves"].items()}
     return Design(float(rec["H_mm"]), curves, rec.get("degree"), rec.get("laws") or {})
 
 

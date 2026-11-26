@@ -34,8 +34,13 @@ modified rudder goes inside the original on the built sections
 The full height (set_span) is the extracted rudder's to start with: a new one
 stretches the whole rudder in height (the original's fits, its stack and loops,
 H, its bounds and the curves' heights in proportion; x, the chords and the
-section shapes kept). It is a setting saved with the set-up (height_scale), not
-a design variable.
+section shapes kept). It is saved with the set-up (span_mm), not a design
+variable.
+
+The set-up is a component file of kind rudder_h (xgeom_files.py; 26 Nov 2026,
+in place of the JSON set-up): save_file writes it, load_params (or
+RudderAdapter(params=path)) takes it over, as every other component's adapter
+does; rudder_modify.load_component reads it for an optimiser.
 
 An adapter gives the tool:
     title, names, summary()                   what there is to edit, the line under the title
@@ -51,7 +56,7 @@ An adapter gives the tool:
     preview()                                 everything the live views draw
     views(fig) / skeleton_view(fig)           the drawings
     build_label, build_task(case)             the build button: the case files and the CAD
-    save_space(path) / load_space(path)       the set-up
+    save_file(path) / load_params(path)       the set-up, a component file; file: the one in use
 The propeller blade (xgeom_blade.py) has the same methods; the tool's panel
 function for each geometry (xgeom_tool.PANELS) adds what is particular to it.
 """
@@ -59,7 +64,6 @@ function for each geometry (xgeom_tool.PANELS) adds what is particular to it.
 from __future__ import annotations
 
 import copy
-import json
 import os
 import re
 import time
@@ -68,6 +72,7 @@ import numpy as np
 
 import bezier_section as BS
 import rudder_modify as RM
+import xgeom_files as XF
 import xgeom_relations as REL
 from xgeom_common import BLUE, GREY, GRID, INK2, RED, SECTION_COLORS, Row, fit_box, keep_fitted
 MAX_DEGREE = 12
@@ -75,6 +80,9 @@ MAX_ORDER = 12
 SPAN_RANGE = (0.25, 4.0)         # the full height, as a multiple of the extracted rudder's
 INSIDE_TOL = 0.01                # mm: the modified rudder may lie this far inside the original (keep_inside)
 LAW_STYLE = (("low", ":"), ("high", "-."))    # how the curve view draws a curve's low and high law
+FILE_SETTINGS = {"sections": "n_sections", "points": "num_pts", "te_radius_mm": "te_radius_mm", "half": "half",
+                 "strip_frac": "strip_frac", "tip_drop": "tip_drop", "keep_inside": "keep_inside",
+                 "inside_tol_mm": "inside_tol_mm"}       # a component file's settings -> the adapter's
 SKELETON_UNCHANGED = 90          # original loops drawn above H, at most (the tip and cap loops always)
 N_VIEW = 5                       # sections drawn in the Design tab's 3D view, from the root to H
 Z_STRETCH = 3.0                  # the 3D view stretches the thickness by this, so the polygons show
@@ -102,34 +110,41 @@ class RudderAdapter(REL.AdapterRelations):
     joins = True                  # curves join the original at H: the tool offers the tangent switch
     build_label = "XCAD"
 
-    def __init__(self, files=None, fit_orders=None, out_dir=None):
+    def __init__(self, files=None, fit_orders=None, out_dir=None, params=None):
         """The rudder of modify_control.py's files and settings, or of other files (files: corner_points,
         section_table, xcad_original, stack, as an extraction and rudder_modify.fit_section_table write them;
-        xgeom_from_cad.py) with the original's laws fitted at fit_orders (by name; default modify_control's)."""
+        xgeom_from_cad.py) with the original's laws fitted at fit_orders (by name; default modify_control's),
+        or of a set-up (params: a component file of kind rudder_h, load_params)."""
         import modify_control as MC
         s = MC.settings
+        degree = getattr(MC, "DEGREE", RM.BASE_DEGREE)
+        if params:                                            # its files and fit from the start
+            p = RM.component_params(XF.read_component(params))[0]
+            files, fit_orders, degree = p.files, p.fit_orders, p.degree
         self.out_dir = out_dir or MC.OUT_DIR
         self.settings = {"h_min": float(s.h_min), "h_max": float(s.h_max),
                          "n_sections": int(s.n_sections), "num_pts": int(s.num_pts),
                          "te_radius_mm": float(s.te_radius_mm), "gap_mm": s.gap_mm, "xcad_units": s.xcad_units,
                          "plot": bool(s.plot), "fit_orders": dict(MC.FIT_ORDERS if fit_orders is None else fit_orders),
-                         "fit_free_heights": bool(s.fit_free_heights), "half": bool(getattr(s, "half", False)),
+                         "fit_free_heights": bool(p.fit_free_heights if params else s.fit_free_heights),
+                         "half": bool(getattr(s, "half", False)),
                          "strip_frac": _strip_frac(getattr(s, "strip_frac", None)),
                          "tip_drop": _strip_frac(getattr(s, "tip_drop", 1.5)),
                          "keep_inside": True, "inside_tol_mm": INSIDE_TOL}
         self.title = "Rudder, modified below H"
-        self.setup_file = None                                # the set-up file loaded or saved last (the tool shows it)
+        self.file, self.notes = None, []                      # the set-up (component file) loaded or saved last
         self.meta = {}
         self.laws = {}                                        # curve -> (low law, high law): its bounding laws
         self._load_files(files or {"corner_points": MC.CORNER_POINTS, "section_table": MC.SECTION_TABLE,
-                                   "xcad_original": MC.XCAD_ORIGINAL, "stack": MC.STACK},
-                         getattr(MC, "DEGREE", RM.BASE_DEGREE))
+                                   "xcad_original": MC.XCAD_ORIGINAL, "stack": MC.STACK}, degree)
         H = min(max(float(MC.H), self.settings["h_min"]), self.settings["h_max"])
         self.orders = {c: int(MC.ORDERS.get(c, max(RM.DEFAULT_ORDER, self.orig.curves[c].order)))
                        for c in self.orig.names}                # at least the fit's order: the baseline exact
         self.join = {c: MC.JOIN for c in self.orig.names}
         self.design = RM.baseline_design(self.orig, H, self.orders, self.join)
         self._rebuild()
+        if params:
+            self.load_params(params)
 
     def _load_files(self, files, degree):
         """The original shape from the files (fit_original at the settings' fit orders), the stack and the
@@ -517,70 +532,58 @@ class RudderAdapter(REL.AdapterRelations):
             h_min=self.settings["h_min"], h_max=self.settings["h_max"], fixed=fixed, laws=self.laws,
             te_radius_mm=self.settings["te_radius_mm"]))
 
-    def space_record(self):
-        """The set-up as plain data: the design space (every variable with its
-        value, bounds, free flag and, a dependent one, its relation; the
-        curves' orders and joins, their bounding laws, the section degree),
-        the settings (with keep_inside and inside_tol_mm: the original as
-        the lower bound of the shape) and the input files. rudder_modify.load_design_space reads it back for the
-        optimiser. No time stamp (20 Nov 2026, Eddie's interface note: an
-        unchanged set-up saves to the same bytes); set-ups written before still
-        carry "written", which nothing reads."""
-        return {"geometry": "rudder",
-                "settings": dict(self.settings, height_scale=self.orig.scale, span_mm=self.span),
-                "files": dict(self.files), "space": self.free_space().to_dict(self.design)}
+    def _component(self, path, name=None):
+        """The set-up as the component file at path would hold it (rudder_modify.component)."""
+        st = self.settings
+        params = RM.RudderParams({k: os.path.abspath(self.files[k]) for k in RM.FILE_KEYS}, self.degree, self.span,
+                                 dict(st["fit_orders"]), bool(st["fit_free_heights"]))
+        return RM.component(path, self.design, self.free_space(), params,
+                            {k: st[q] for k, q in FILE_SETTINGS.items()}, name, self.notes)
 
-    def save_space(self, path):
-        """Write space_record() as JSON."""
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        with open(path, "w") as fh:
-            json.dump(self.space_record(), fh, indent=1)
-        self.setup_file = os.path.abspath(path)
+    def save_file(self, path):
+        """Write the set-up as a component file of kind rudder_h (xgeom_files.py): the original's files
+        (relative to the file), the section degree, the full height, the settings (the number of sections and
+        of points a section, the TE radius, the half body, the strips, the original as the lower bound), each
+        curve's points with its join at H or its two laws, and every variable's value, bounds, free flag and
+        relation. load_params reads it back, rudder_modify.load_component for an optimiser; it is the file in
+        use then. An unchanged set-up saves to the same bytes."""
+        XF.write_component(path, self._component(path))
+        self.file = os.path.abspath(path)
         return path
 
-    def load_space(self, path):
-        """Take over a saved set-up (<case>_design_space.json, written by save_space or an XCAD run), whatever
-        the adapter holds now: the section degree, every curve's order and join, every variable's value,
-        bounds and free flag, the curves' bounding laws, the H bounds, the full height, and the settings saved
-        with it (the number of sections and of points a section, the TE radius, the half body, the strips,
-        the original as the lower bound: keep_inside, inside_tol_mm). A file that cannot be taken over raises
-        a ValueError that says why and leaves the adapter as it was."""
+    def load_params(self, path):
+        """Take over a set-up (a component file of kind rudder_h, written by save_file or an XCAD run),
+        whatever the adapter holds now: the original's files and fit when they are others, the section degree,
+        every curve's order and join or bounding laws, every variable's value, bounds and free flag, the H
+        bounds, the full height, and the settings saved with it. A file that is not such a set-up raises a
+        ValueError that says why (an old JSON set-up is named as one), and so does one that cannot be taken
+        over; the adapter is then as it was."""
+        comp = XF.read_component(path)
+        p, st = RM.component_params(comp)
         name = os.path.basename(path)
-        try:
-            with open(path) as fh:
-                rec = json.load(fh)
-        except ValueError as exc:                            # not JSON, or not text at all
-            raise ValueError(f"{name} is not a rudder set-up (not a JSON file: {exc})") from exc
-        if not isinstance(rec, dict) or rec.get("geometry") != "rudder" or "space" not in rec:
-            raise ValueError(f"{name} is not a rudder set-up (a <case>_design_space.json that Save set-up or "
-                             f"XCAD wrote)")
         keep, settings, meta = dict(self.__dict__), dict(self.settings), copy.deepcopy(self.meta)
         try:
-            for k in ("n_sections", "num_pts", "te_radius_mm", "half", "strip_frac", "tip_drop", "keep_inside",
-                      "inside_tol_mm"):
-                if k in rec.get("settings", {}):
-                    self.settings[k] = rec["settings"][k]
-            files = rec.get("files") or {}
-            if files and any(_same_file(files.get(k), self.files.get(k)) is False for k in self.files):
-                for k in ("fit_orders", "fit_free_heights", "h_min", "h_max"):    # another rudder: its files
-                    if k in rec.get("settings", {}):
-                        self.settings[k] = rec["settings"][k]
-                self.settings["fit_orders"] = {str(c): int(v) for c, v in self.settings["fit_orders"].items()}
-                self.meta = {}
-                self._load_files(files, int(rec["space"].get("degree", RM.BASE_DEGREE)))
+            for k, q in FILE_SETTINGS.items():
+                if k in st:
+                    self.settings[q] = st[k]
+            fit = (dict(p.fit_orders), bool(p.fit_free_heights))
+            other = any(_same_file(p.files[k], self.files.get(k)) is False for k in RM.FILE_KEYS)
+            if other or fit != (dict(self.settings["fit_orders"]), bool(self.settings["fit_free_heights"])):
+                self.settings["fit_orders"], self.settings["fit_free_heights"] = fit     # another rudder, or fit
+                self.meta, self.laws = {}, {}
+                self._load_files(p.files, p.degree)
                 self.orders = {c: max(RM.DEFAULT_ORDER, self.orig.curves[c].order) for c in self.orig.names}
                 self.join = {c: "G1" for c in self.orig.names}
-                self.laws = {}
                 self.design = RM.baseline_design(self.orig, self.settings["h_max"], self.orders, self.join)
-            self._apply_scale(float(rec.get("settings", {}).get("height_scale") or 1.0))     # its full height
-            space, design = RM.DesignSpace.from_dict(self.orig, rec["space"], self.settings["te_radius_mm"])
+            self._apply_scale(1.0 if p.span is None else p.span / self.span0)            # its full height
+            space, design = RM.component_design(comp, self.orig.at_degree(p.degree), self.settings["te_radius_mm"])
             self.orig = space.orig
             self.orders, self.join, self.design = dict(space.orders), dict(space.join), design
             self.laws = dict(space.laws)
             self.meta = self.meta_of(space)                  # bounds, free flags, the dependent ones' relations
             self.settings["h_min"], self.settings["h_max"] = self.meta["H"]["lo"], self.meta["H"]["hi"]
             self._rebuild()
-            self.setup_file = os.path.abspath(path)
+            self.file, self.notes = os.path.abspath(path), list(comp.notes)
         except Exception as exc:                             # as it was: nothing of the file is kept
             self.__dict__.clear()
             self.__dict__.update(keep)
@@ -594,8 +597,8 @@ class RudderAdapter(REL.AdapterRelations):
         """A function that writes the case as the design is now (rudder_modify.
         write_case: the XCAD file, its modified sections the extracted ones
         plus the design's change to the model; the section table, the thickness
-        format when it applies, the design JSON, plus
-        <case>_design_space.json), then lofts
+        format when it applies, the design JSON, plus <case>.txt, the set-up
+        as a component file), then lofts
         the XCAD file into a solid (xcad_loft) and writes it as STEP next to
         it: one loft through all the sections when every curve is tangent at H,
         else two (xcad_loft.loft_split: the sections up to H and those from H
@@ -608,8 +611,10 @@ class RudderAdapter(REL.AdapterRelations):
         s = dict(self.settings)
         plot = s["plot"] if plot is None else bool(plot)
         half = bool(s.get("half", False)) if half is None else bool(half)
-        design, space, record = self.design.copy(), self.free_space(), self.space_record()
+        design, space = self.design.copy(), self.free_space()
         orig, stack, out_dir, xcad0 = self.orig, self.stack, self.out_dir, self.files["xcad_original"]
+        setup = os.path.join(out_dir, f"{case}.txt")
+        comp = self._component(setup, case)                                # the set-up as it is now
 
         split = any(c.join == "G0" for c in design.curves.values())        # not tangent at H: two lofts
 
@@ -618,10 +623,7 @@ class RudderAdapter(REL.AdapterRelations):
             res = RM.write_case(out_dir, case, design, orig, xcad0, s["n_sections"], s["num_pts"],
                                 s["te_radius_mm"], s["gap_mm"], s["xcad_units"], stack=stack, plot=plot,
                                 space=space, h_min=s["h_min"], h_max=s["h_max"])
-            path = os.path.join(out_dir, f"{case}_design_space.json")
-            with open(path, "w") as fh:
-                json.dump(copy.deepcopy(record), fh, indent=1)
-            res["paths"]["space"] = path
+            res["paths"]["component"] = XF.write_component(setup, comp)
             out = {"case": res, "report": RM.case_report(res, orig, stack), "t_case": time.time() - t0,
                    "loft": None, "step": None, "cad_error": None}
             if not cad:
