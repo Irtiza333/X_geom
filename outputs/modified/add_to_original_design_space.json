@@ -1,0 +1,476 @@
+{
+ "geometry": "rudder",
+ "settings": {
+  "h_min": 1.0,
+  "h_max": 80.0,
+  "n_sections": 50,
+  "num_pts": 200,
+  "te_radius_mm": 0.75,
+  "gap_mm": null,
+  "xcad_units": "m",
+  "plot": true,
+  "fit_orders": {},
+  "fit_free_heights": false,
+  "half": false,
+  "strip_frac": null,
+  "tip_drop": 1.5,
+  "keep_inside": true,
+  "inside_tol_mm": 0.01,
+  "z_top": 199.498746867,
+  "height_scale": 1.0,
+  "span_mm": 211.27677
+ },
+ "files": {
+  "corner_points": "outputs/corner_points.dat",
+  "section_table": "outputs/thickness_params_y0_y200_info.dat",
+  "xcad_original": "outputs/sections_xcad_with_cap_y0_y200_m.dat",
+  "stack": "outputs/sections_stack_y0_y200_raw_mm.dat"
+ },
+ "space": {
+  "z_top_mm": 199.498746867,
+  "h_min_mm": 1.0,
+  "h_max_mm": 80.0,
+  "degree": 4,
+  "orders": {
+   "LE": 3,
+   "P1x": 3,
+   "P1z": 3,
+   "P2x": 3,
+   "P2z": 3,
+   "P3x": 3,
+   "P3z": 3
+  },
+  "join": {
+   "LE": "G0",
+   "P1x": "G0",
+   "P1z": "G0",
+   "P2x": "G0",
+   "P2z": "G0",
+   "P3x": "G0",
+   "P3z": "G0"
+  },
+  "weights": {
+   "LE": null,
+   "P1x": null,
+   "P1z": null,
+   "P2x": null,
+   "P2z": null,
+   "P3x": null,
+   "P3z": null
+  },
+  "laws": {
+   "P1z": [
+    "P2z",
+    "P2z"
+   ],
+   "P2x": [
+    "(orig.LE+orig.P2x*orig.chord-LE)/chord",
+    "0"
+   ],
+   "P2z": [
+    "orig.P2z*orig.chord/chord",
+    "10*orig.P2z*orig.chord/chord"
+   ],
+   "P3x": [
+    "min(orig.LE+orig.chord-LE,orig.LE+orig.P2x*orig.chord-LE+(orig.P3x-orig.P2x)*orig.chord*(P3z*chord-orig.P2z*orig.chord)/(orig.P3z*orig.chord-orig.P2z*orig.chord))/chord",
+    "max(orig.LE+orig.P2x*orig.chord-LE,orig.LE+orig.chord-LE+(orig.P3x-1)*orig.chord*P3z*chord/(orig.P3z*orig.chord))/chord"
+   ],
+   "P3z": [
+    "orig.P3z*orig.chord/chord",
+    "10*orig.P3z*orig.chord/chord"
+   ]
+  },
+  "te_radius_mm": 0.75,
+  "slots": [
+   {
+    "name": "H",
+    "value": 80.0,
+    "lo": 1.0,
+    "hi": 80.0,
+    "free": true
+   },
+   {
+    "name": "LE.d1",
+    "value": 0.33333333333333326,
+    "lo": 0.05,
+    "hi": 0.95,
+    "free": true
+   },
+   {
+    "name": "LE.d2",
+    "value": 0.5,
+    "lo": 0.0,
+    "hi": 0.925,
+    "free": true,
+    "hi_expr": "1-0.05/(1-LE.d1)"
+   },
+   {
+    "name": "LE.dx1",
+    "value": -1.7674750552032492e-12,
+    "lo": -3.7333333333333343,
+    "hi": 0.0,
+    "free": true,
+    "lo_expr": "LE.dx3-0.07*(1-LE.d1)*H"
+   },
+   {
+    "name": "LE.dx2",
+    "value": 0.0,
+    "lo": -1.8666666666666671,
+    "hi": 0.0,
+    "free": true,
+    "lo_expr": "LE.dx3-0.07*(1-LE.d1)*(1-LE.d2)*H"
+   },
+   {
+    "name": "LE.dx3",
+    "value": 0.0,
+    "lo": -160.0,
+    "hi": 0.0,
+    "free": true
+   },
+   {
+    "name": "P1x.d1",
+    "value": 0.33333333333333326,
+    "lo": 0.05,
+    "hi": 0.95,
+    "free": false
+   },
+   {
+    "name": "P1x.d2",
+    "value": 0.5,
+    "lo": 0.05,
+    "hi": 0.95,
+    "free": false
+   },
+   {
+    "name": "P1x.v1",
+    "value": 0.0,
+    "lo": 0.0,
+    "hi": 1.0,
+    "free": false
+   },
+   {
+    "name": "P1x.v2",
+    "value": 0.0,
+    "lo": 0.0,
+    "hi": 1.0,
+    "free": false
+   },
+   {
+    "name": "P1x.v3",
+    "value": 0.0,
+    "lo": 0.0,
+    "hi": 1.0,
+    "free": false
+   },
+   {
+    "name": "P2x.d1",
+    "value": 0.33333333333333326,
+    "lo": 0.05,
+    "hi": 0.95,
+    "free": true
+   },
+   {
+    "name": "P2x.d2",
+    "value": 0.5,
+    "lo": 0.05,
+    "hi": 0.95,
+    "free": true
+   },
+   {
+    "name": "P2x.f1",
+    "value": 8.478574874712046e-16,
+    "lo": 0.0,
+    "hi": 1.0,
+    "free": true
+   },
+   {
+    "name": "P2x.f2",
+    "value": 5.398784682556747e-14,
+    "lo": 0.0,
+    "hi": 1.0,
+    "free": true
+   },
+   {
+    "name": "P2x.f3",
+    "value": 0.0,
+    "lo": 0.0,
+    "hi": 1.0,
+    "free": true
+   },
+   {
+    "name": "P2z.d1",
+    "value": 0.33333333333333326,
+    "lo": 0.05,
+    "hi": 0.95,
+    "free": true
+   },
+   {
+    "name": "P2z.d2",
+    "value": 0.5,
+    "lo": 0.05,
+    "hi": 0.95,
+    "free": true
+   },
+   {
+    "name": "P2z.f1",
+    "value": 9.62296543326899e-17,
+    "lo": 0.0,
+    "hi": 1.0,
+    "free": true
+   },
+   {
+    "name": "P2z.f2",
+    "value": 1.6062707526269329e-15,
+    "lo": 0.0,
+    "hi": 1.0,
+    "free": true
+   },
+   {
+    "name": "P2z.f3",
+    "value": 4.741497258460958e-17,
+    "lo": 0.0,
+    "hi": 1.0,
+    "free": true
+   },
+   {
+    "name": "P3x.d1",
+    "value": 0.33333333333333326,
+    "lo": 0.05,
+    "hi": 0.95,
+    "free": true
+   },
+   {
+    "name": "P3x.d2",
+    "value": 0.5,
+    "lo": 0.05,
+    "hi": 0.95,
+    "free": true
+   },
+   {
+    "name": "P3x.f1",
+    "value": 0.0,
+    "lo": 0.0,
+    "hi": 1.0,
+    "free": true
+   },
+   {
+    "name": "P3x.f2",
+    "value": 0.0,
+    "lo": 0.0,
+    "hi": 1.0,
+    "free": true
+   },
+   {
+    "name": "P3x.f3",
+    "value": 0.0,
+    "lo": 0.0,
+    "hi": 1.0,
+    "free": true
+   },
+   {
+    "name": "P3z.d1",
+    "value": 0.33333333333333326,
+    "lo": 0.05,
+    "hi": 0.95,
+    "free": true
+   },
+   {
+    "name": "P3z.d2",
+    "value": 0.5,
+    "lo": 0.05,
+    "hi": 0.95,
+    "free": true
+   },
+   {
+    "name": "P3z.f1",
+    "value": 9.511232732076518e-17,
+    "lo": 0.0,
+    "hi": 1.0,
+    "free": true
+   },
+   {
+    "name": "P3z.f2",
+    "value": 1.6532726160398043e-15,
+    "lo": 0.0,
+    "hi": 1.0,
+    "free": true
+   },
+   {
+    "name": "P3z.f3",
+    "value": 3.4614317110957365e-17,
+    "lo": 0.0,
+    "hi": 1.0,
+    "free": true
+   }
+  ],
+  "vector": {
+   "names": [
+    "H",
+    "LE.d1",
+    "LE.d2",
+    "LE.dx1",
+    "LE.dx2",
+    "LE.dx3",
+    "P2x.d1",
+    "P2x.d2",
+    "P2x.f1",
+    "P2x.f2",
+    "P2x.f3",
+    "P2z.d1",
+    "P2z.d2",
+    "P2z.f1",
+    "P2z.f2",
+    "P2z.f3",
+    "P3x.d1",
+    "P3x.d2",
+    "P3x.f1",
+    "P3x.f2",
+    "P3x.f3",
+    "P3z.d1",
+    "P3z.d2",
+    "P3z.f1",
+    "P3z.f2",
+    "P3z.f3"
+   ],
+   "values": [
+    80.0,
+    0.33333333333333326,
+    0.5405405405405405,
+    0.9999999999995266,
+    1.0,
+    0.0,
+    0.33333333333333326,
+    0.5,
+    8.478574874712046e-16,
+    5.398784682556747e-14,
+    0.0,
+    0.33333333333333326,
+    0.5,
+    9.62296543326899e-17,
+    1.6062707526269329e-15,
+    4.741497258460958e-17,
+    0.33333333333333326,
+    0.5,
+    0.0,
+    0.0,
+    0.0,
+    0.33333333333333326,
+    0.5,
+    9.511232732076518e-17,
+    1.6532726160398043e-15,
+    3.4614317110957365e-17
+   ],
+   "bounds": [
+    [
+     1.0,
+     80.0
+    ],
+    [
+     0.05,
+     0.95
+    ],
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.0,
+     1.0
+    ],
+    [
+     -160.0,
+     0.0
+    ],
+    [
+     0.05,
+     0.95
+    ],
+    [
+     0.05,
+     0.95
+    ],
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.05,
+     0.95
+    ],
+    [
+     0.05,
+     0.95
+    ],
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.05,
+     0.95
+    ],
+    [
+     0.05,
+     0.95
+    ],
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.05,
+     0.95
+    ],
+    [
+     0.05,
+     0.95
+    ],
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.0,
+     1.0
+    ]
+   ],
+   "fractions": [
+    "LE.d2",
+    "LE.dx1",
+    "LE.dx2"
+   ]
+  }
+ }
+}

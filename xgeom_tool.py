@@ -89,6 +89,13 @@ Vehicle
                             component whose count is 0 is not built. A few minutes (the
                             propeller's CAD takes most); needs pythonocc-core.
 Left panel (rudder)
+    Rudder    the Rudder slot's two options (26 Nov 2026; where xgeom_wing.py is):
+              modify an existing rudder (the panel below: the original stays
+              above H, is changed below it and is there the lower bound of the
+              shape), or design a new rudder (the planar model, the wing's panel:
+              a rudder of its own, no original; rudder.txt to start with). Each
+              keeps its state while the other is shown. A new rudder saved with
+              Save set-up loads in the other option as the original to modify.
     Set-up    the set-up file loaded (or saved with Save set-up) last, and
               Load ...: a set-up that Save set-up or an XCAD run wrote
               (<case>_design_space.json) takes the place of the design in the
@@ -116,6 +123,12 @@ Left panel (rudder)
               and above H, joined at the H section (xcad_loft.loft_split: nine
               patches and the root), so the turn at H stays a crease instead of
               being smoothed over and rippling.
+    keep the original inside
+              the original is the lower bound of the shape: the tool measures,
+              on the built sections, how far the modified rudder goes inside the
+              original (shown beside the switch) and warns beyond the tolerance
+              (mm). Switch and tolerance are saved with the set-up, for an
+              optimiser to keep (rudder_modify.inside_original).
     Section control points
               the number of control points of the section's Bezier half-
               section, P0 .. Pn (P0 = (0, 0) the LE and Pn = (1, 0) the sharp TE
@@ -127,6 +140,14 @@ Left panel (rudder)
               the original) down to the root (Cm); how many there are; whether
               C1 sits on the original's tangent at H (slope matched; see
               tangent at H).
+              low law, high law: the curve between two bounding laws, each a
+              number or an expression of the curves at the same height (P3z,
+              orig.P2z, LE, TE, chord, orig.chord; + - * / ( ) min( ) max( )).
+              Its rows are then the fractions of the way from the low law (0)
+              to the high one (1), so it lies between them whatever they are,
+              and it joins the original at H with its value only. Low and high
+              the same set the curve: no rows. Both empty: no laws.
+              rudder_laws_setup.py writes the set-up that builds on the original.
 Left panel (blade)
     File      the blade's component file (xgeom_files.py, claude/xgeom-file-formats.md:
               D, blades, root r/R, hub height, the section, the settings, each
@@ -365,6 +386,10 @@ PLANAR_RUDDER = ("xgeom_wing", "PlanarRudderAdapter")   # a planar rudder's mode
                                                          # modified below H since 19 Nov (rudder_from_planar)
 BODIES = {"hull": ("xgeom_hull", "HullAdapter"), "bwb": ("xgeom_wing", "BwbAdapter")}   # the Hull slot's two
 BODY_NAMES = {"hull": "cylindrical hull", "bwb": "blended wing body"}                   # bodies (20 Nov 2026)
+RUDDERS = {"modify": ADAPTERS["rudder"], "new": PLANAR_RUDDER}   # the Rudder slot's two options (26 Nov 2026):
+RUDDER_NAMES = {"modify": "modify an existing rudder",           # the model modified below H (an original, the
+                "new": "design a new rudder"}                    # lower bound of the shape), the planar model (none)
+NEW_RUDDER = os.path.join(HERE, "rudder.txt")                    # what a new rudder starts from
 VEHICLE = ("hull", "blade", "rudder", "fin", "wing")   # the vehicle's components, in the switcher's order
 NAMES = {"hull": "Hull", "blade": "Propeller", "rudder": "Rudder", "fin": "Fin", "wing": "Wing"}
 COUNTS = ("rudders", "fins", "wings")              # the Vehicle tab's whole numbers
@@ -425,6 +450,12 @@ def body_of_file(path):
 def body_of(ad):
     """Which body an adapter in the Hull slot is: 'bwb' (the blended wing body) or 'hull' (the cylindrical one)."""
     return "bwb" if getattr(ad, "role", None) == "bwb" else "hull"
+
+
+def rudder_of(ad):
+    """Which option an adapter in the Rudder slot is: 'new' (the planar model: a rudder of its own) or 'modify'
+    (the model modified below H: an existing rudder)."""
+    return "new" if is_planar(ad) else "modify"
 
 
 def available(name):
@@ -488,6 +519,10 @@ BOX = 8                                        # the characters a low or high bo
 
 DEPENDENT_HINT = ("low, high: a number, or an expression of other variables (v1, 0.9*chord.v0): a dependent bound.  "
                   "dep: a relation to other variables (> 0.5*v4).")
+LAW_BOX = 62                                   # the characters a law's box shows
+LAW_HINT = ("low law, high law: a number, or an expression of the curves at the same height (P3z, orig.P2z, LE, TE, "
+            "chord, orig.chord; + - * / ( ) min( ) max( )). The curve then lies between them, and its variables "
+            "are the fraction of the way: 0 on the low law, 1 on the high one. Both empty: no laws.")
 
 
 class VarRow:
@@ -718,6 +753,7 @@ class App:
                 self.start[kind][key] = path
         self.adapters, self.errors, self.frames, self.picked, self._vcache = {}, {}, {}, {}, {}
         self.bodies = {}                                    # the Hull slot's body not shown: body -> its adapter
+        self.rudders = {}                                   # the Rudder slot's option not shown: option -> its adapter
         self.kind, self.ad, self.placement, self._vinfo = None, None, None, None
         self.curve = tk.StringVar()
         self.rows = []
@@ -799,6 +835,93 @@ class App:
                       ("; the Vehicle tab places the parts on the cylindrical hull (the blended wing body's vehicle "
                        "comes later)" if want == "bwb" and self.vehicle else ""))
         self.say(self._note)
+
+    def on_rudder(self):
+        """The Rudder slot's box: modify an existing rudder (the model modified below H: the original kept
+        above H and, below it, the lower bound of the shape) or design a new one (the planar model: no
+        original; it starts from rudder.txt the first time). Each keeps its state while the other is shown."""
+        want = self.vrudder.get()
+        ad = self.adapters.get("rudder")
+        have = rudder_of(ad)
+        if want == have:
+            return
+        try:
+            new = self.rudders.get(want)
+            if new is None:
+                self.say(f"loading the rudder to {RUDDER_NAMES[want].split(' ', 1)[0]} ...", busy=True)
+                self.root.update_idletasks()
+                module, cls = RUDDERS[want]
+                new = getattr(importlib.import_module(module), cls)(**({"params": NEW_RUDDER} if want == "new" else {}))
+        except Exception as exc:
+            traceback.print_exc()
+            self.vrudder.set(have)
+            self.say(f"{RUDDER_NAMES[want]}: not loaded: {type(exc).__name__}: {exc}", error=True)
+            return
+        self.rudders.pop(want, None)
+        self.rudders[have] = ad
+        self.replace_adapter("rudder", new)
+        self._note = ("the Rudder slot: a new rudder, no original (Save set-up writes it as a component file, "
+                      "which the other option loads as the original to modify)" if want == "new" else
+                      "the Rudder slot: an existing rudder, modified below H")
+        self.say(self._note)
+
+    def on_laws(self, _event=None):
+        """The picked curve's low and high law as typed (Return, or a box left): both given, the curve lies
+        between them from now on and its variables are the fractions of the way; both empty, its laws are taken
+        off. One alone waits for the other. A text that is no law is named in the status bar and changes
+        nothing."""
+        ad, c = self.ad, self.curve.get()
+        try:
+            low, high = (self.law[k].get().strip() for k in ("low", "high"))
+        except tk.TclError:                              # the boxes are gone (panel rebuilt)
+            return
+        had = ad.laws_of(c)
+        if (low, high) == (had or ("", "")) or bool(low) != bool(high):
+            return
+        try:
+            ad.set_laws(c, low or None, high or None)
+        except ValueError as exc:                        # no law: nothing has changed
+            self.say(f"{c}: {exc}", error=True)
+            return
+        except Exception as exc:                         # keep the tool alive
+            self.say(f"{type(exc).__name__}: {exc}", error=True)
+            return
+        now = ad.laws_of(c)
+        if now == had:                                   # the same laws, written another way: as the tool writes them
+            for k, text in zip(("low", "high"), now or ("", "")):
+                self.law[k].delete(0, "end")
+                self.law[k].insert(0, text)
+            return
+        self.after_change(structure=True)
+        self._note = (f"{c}: its laws taken off, its control values again, where it was" if now is None else
+                      f"{c}: set by its laws at every height, no variables" if ad.law_defined(c) else
+                      f"{c}: between its laws; its variables are the fractions of the way (0 on the low law, 1 on "
+                      f"the high one), free, and it joins the original at H with its value only")
+
+    def on_keep_inside(self, _event=None):
+        """The rudder's 'keep the original inside' switch and its tolerance (mm): the preview measures how far
+        the modified rudder goes inside the original and warns beyond the tolerance; saved with the set-up."""
+        try:
+            on, text = bool(self.keep_inside.get()), self.inside_tol.get().strip()
+        except tk.TclError:                              # the box is gone (panel rebuilt)
+            return
+        s = self.ad.settings
+        try:
+            tol = float(text)
+        except ValueError:
+            tol = None
+        if tol is not None and (on, tol) == (bool(s.get("keep_inside")), s.get("inside_tol_mm")):
+            return
+        try:
+            if tol is None:
+                raise ValueError(f"the tolerance is a number of mm, not '{text}'")
+            self.ad.set_keep_inside(on, tol)
+        except ValueError as exc:
+            self.say(str(exc), error=True)
+        self.inside_tol.delete(0, "end")
+        self.inside_tol.insert(0, f"{s['inside_tol_mm']:g}")
+        self.keep_inside.set(bool(s.get("keep_inside")))
+        self.schedule_update()
 
     def _noun(self, kind):
         """What the slot holds, for the labels: the component's name (the blended wing body: BWB)."""
@@ -1009,10 +1132,28 @@ class App:
             self.nctrl.set(ad.order(c) + 1)
             self.nctrl.bind("<Return>", self.on_order)
             self.nctrl.pack(side="left")
+        laws = ad.laws_of(c) if hasattr(ad, "set_laws") else None    # the rudder modified below H: bounding laws
+        if laws and ad.law_defined(c):
+            self.nctrl.state(["disabled"])                           # the law is the curve: no control points
         if ad.joins:
             self.tangent = tk.BooleanVar(value=ad.design.curves[c].join == "G1")
-            ttk.Checkbutton(top, text="C1 on the original's tangent at H (slope matched)", variable=self.tangent,
-                            command=self.on_tangent).pack(side="left", padx=10)
+            tan = ttk.Checkbutton(top, text="C1 on the original's tangent at H (slope matched)",
+                                  variable=self.tangent, command=self.on_tangent)
+            tan.pack(side="left", padx=10)
+            if laws:
+                tan.state(["disabled"])                              # between its laws: it joins with its value
+        if hasattr(ad, "set_laws"):
+            self.law = {}
+            for k, side in enumerate(("low", "high")):
+                row = ttk.Frame(box)
+                row.pack(fill="x", pady=(0, 1))
+                ttk.Label(row, text=f"{side} law", width=8).pack(side="left", padx=(4, 2))
+                e = self.law[side] = ttk.Entry(row, width=LAW_BOX)
+                e.insert(0, laws[k] if laws else "")
+                e.bind("<Return>", self.on_laws)
+                e.bind("<FocusOut>", self.on_laws)
+                e.pack(side="left", fill="x", expand=True, padx=(0, 4))
+            ttk.Label(box, text=LAW_HINT, foreground=INK2, wraplength=590, justify="left").pack(fill="x", padx=4)
         grid = ttk.Frame(box)
         grid.pack(fill="x", pady=2)
         self._header(grid)
@@ -1354,6 +1495,13 @@ class App:
             else:
                 self.views.update(pv, self.curve.get())
                 self.canvas.draw_idle()
+            lab = getattr(self, "inside_label", None)    # the rudder: how far it goes inside the original
+            if lab is not None and lab.winfo_exists():
+                m = pv.get("inside")
+                lab.configure(text="" if m is None else "now: the original is enclosed" if m["depth"] <= 0.0 else
+                              f"now: inside the original by up to {m['depth']:.3f} mm (at {100.0 * m['x_c']:.0f} % "
+                              f"of its chord, height {m['y']:.1f} mm)",
+                              foreground=INK2 if m is None or m["depth"] <= self.ad.settings["inside_tol_mm"] else RED)
             notes = self.ad.relation_notes()             # a relation dropped with a variable that is gone
             if notes:
                 self._note = "; ".join(([self._note] if self._note else []) + notes)
@@ -1681,8 +1829,8 @@ class App:
                                           filetypes=[("component files", "*.txt")]
                                           + ([("modified-below-H set-ups", "*_design_space.json")] if rudder else [])
                                           + [("all files", "*")])
-        if path and rudder and planar_rudder_file(path):  # a planar rudder: the original modified below H
-            self._load_planar_rudder(path)
+        if path and rudder and planar_rudder_file(path) and not is_planar(self.ad):
+            self._load_planar_rudder(path)               # a planar rudder: the original modified below H
             return
         if path and self.kind == "hull" and body_of_file(path) != body_of(self.ad):    # the Hull slot's other body
             want, have = body_of_file(path), body_of(self.ad)
@@ -1705,6 +1853,9 @@ class App:
                 import xgeom_rudder as XR
                 ad = XR.RudderAdapter()
                 ad.load_space(path)
+                if is_planar(self.ad):                   # the new rudder keeps its state for the Rudder box
+                    self.rudders.pop("modify", None)
+                    self.rudders["new"] = self.ad
                 self.replace_adapter("rudder", ad)
                 return True
             self.say(f"reading {os.path.basename(path)} ...")
@@ -1835,11 +1986,34 @@ class App:
         self.say(f"OCC viewer: {os.path.basename(self.step)} (its own window, a few seconds)")
 
 
+def rudder_box(app):
+    """The Rudder slot's first box (26 Nov 2026): modify an existing rudder (the model modified below H,
+    xgeom_rudder) or design a new one (the planar model, xgeom_wing; a rudder of its own, no original), each
+    keeping its state while the other is shown. Only where the planar model is (the X_geom folder)."""
+    if importlib.util.find_spec(PLANAR_RUDDER[0]) is None:
+        return
+    box = ttk.LabelFrame(app.panel, text="Rudder")
+    box.pack(fill="x", padx=6, pady=4)
+    row = ttk.Frame(box)
+    row.pack(fill="x", pady=2)
+    option = rudder_of(app.ad)
+    app.vrudder = tk.StringVar(value=option)
+    for o in RUDDERS:
+        ttk.Radiobutton(row, text=RUDDER_NAMES[o], value=o, variable=app.vrudder,
+                        command=app.on_rudder).pack(side="left", padx=4)
+    ttk.Label(box, text=("the original stays above H and is changed below it; there it is the lower bound of the "
+                         "shape (keep the original inside, in the Region box)" if option == "modify" else
+                         "a rudder of its own, no original: its span and its distributions along it. Saved (Save "
+                         "set-up), it loads in the other option as the original to modify"),
+              foreground=INK2, wraplength=590, justify="left").pack(anchor="w", padx=4)
+
+
 def rudder_panel(app):
-    """The rudder's boxes: the set-up file and Load ..., the region H, the full height and the section
-    control points."""
+    """The rudder's boxes: the two options, the set-up file and Load ..., the region H, the full height, the
+    original as the lower bound, and the section control points."""
     import xgeom_rudder as XR
     ad = app.ad
+    rudder_box(app)
     box = ttk.LabelFrame(app.panel, text="Set-up")
     box.pack(fill="x", padx=6, pady=4)
     cur = getattr(ad, "setup_file", None)
@@ -1890,6 +2064,23 @@ def rudder_panel(app):
                          f"the rudder below and above H on its own and joins the two there (nine patches); tick: "
                          f"every curve tangent"),
               foreground=INK2, wraplength=430, justify="left").pack(side="left", padx=6)
+    row = ttk.Frame(box)
+    row.grid(row=grid_row(4), column=0, columnspan=COLS, sticky="w", padx=2, pady=(2, 2))
+    app.keep_inside = tk.BooleanVar(value=bool(ad.settings.get("keep_inside")))
+    ttk.Checkbutton(row, text="keep the original inside, within", variable=app.keep_inside,
+                    command=app.on_keep_inside).pack(side="left", padx=(2, 2))
+    app.inside_tol = ttk.Entry(row, width=6, justify="right")
+    app.inside_tol.insert(0, f"{ad.settings.get('inside_tol_mm', XR.INSIDE_TOL):g}")
+    app.inside_tol.bind("<Return>", app.on_keep_inside)
+    app.inside_tol.bind("<FocusOut>", app.on_keep_inside)
+    app.inside_tol.pack(side="left")
+    ttk.Label(row, text="mm").pack(side="left", padx=(2, 6))
+    app.inside_label = ttk.Label(row, text="", foreground=INK2, wraplength=330, justify="left")
+    app.inside_label.pack(side="left")
+    ttk.Label(box, text="the original is the lower bound of the shape: measured on the built sections, a warning "
+                        "beyond the tolerance (saved with the set-up, for an optimiser to keep)",
+              foreground=INK2, wraplength=590, justify="left").grid(row=grid_row(5), column=0, columnspan=COLS,
+                                                                    sticky="w", padx=4)
 
     box = ttk.LabelFrame(app.panel, text="Section control points (pick the curve to edit)")
     box.pack(fill="x", padx=6, pady=4)
@@ -1930,8 +2121,8 @@ def file_box(app, path, info):
     ttk.Label(row, text="a component file (.txt); Save set-up (below) writes the design as one" + ("; From CAD ...: a STEP or IGES file, its parameters "
                                                         "extracted and fitted (the form with the least error), "
                                                         "the set-up saved" if from_cad else "")
-                        + ("; the rudder on the planar model: a set-up of the model modified below H "
-                           "(<case>_design_space.json) puts it back on that one" if app.kind == "rudder" else "")
+                        + ("; a set-up of the rudder modified below H (<case>_design_space.json) puts the slot "
+                           "on that option" if app.kind == "rudder" else "")
                         + ("; a cylindrical hull's or a blended wing body's file (kind hull, bwb) puts the slot on "
                            "that body" if app.kind == "hull" else ""),
               foreground=INK2, wraplength=470 if not from_cad else 380).pack(side="left", padx=6)
@@ -2072,6 +2263,8 @@ def wing_panel(app):
     p = ad.params
     if app.kind == "hull":
         body_box(app)
+    if app.kind == "rudder":
+        rudder_box(app)
     symmetric = WM.base_shape(p.airfoil, p.camber_xc)[2]["symmetric"]
     file_box(app, ad.file, (f"half-span {p.span:g} mm (from the centre line), " if p.flat else f"span {p.span:g} mm, ")
              + f"{len(p.eta)} rows, pitch axis at {p.ref_xc:g} of the chord; airfoil {airfoils.describe(p.airfoil)}"

@@ -408,6 +408,13 @@ def test_planar_rudder(tmp):
            max(abs(ad2.values[n] - ad.values[n]) for n in ad.values), len(part["loops"]) > 2,
            part["te_slope"] - np.polyfit(eta * ad.design.span, x_te, 1)[0], ad.out_dir.endswith("rudder_planar")],
           [1, 1, 1, 0, 1, 0, 1], 1e-9)
+    sample = os.path.join(HERE, "rudder.txt")              # what a new rudder starts from in the tool's Rudder slot
+    ads = XW.PlanarRudderAdapter(params=sample)
+    again = ads.save_file(os.path.join(tmp, "rudder.txt"))
+    check("rudder.txt, the tool's new rudder (the Rudder slot's design a new rudder): kind rudder, builds, and "
+          "saved again it is the same lines",
+          [XF.component_kind(sample) == "rudder", len(ads.preview()["problems"]), ads.get("span"),
+           open(again).read().splitlines() == open(sample).read().splitlines()], [1, 0, 200.0, 1], 0)
     params = WM.read_params(path)
     forms = FC.best_wing_forms(params)
     setup, forms2 = FC.wing_setup(params, os.path.join(tmp, "set_up.txt"), "rudder", "set_up")

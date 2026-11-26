@@ -18,6 +18,19 @@ of the original lies about 0.1 mm off the extracted sections, so the model
 alone would leave a step at H. The rudder as it starts is the extracted one
 exactly, and the control polygons shown are the model's.
 
+A curve may lie between a low law and a high law (set_laws; bounding laws,
+rudder_modify.law_names): expressions of the other curves at the same height,
+of the original's, of the TE line and of the sharp chords. Its variables are
+then the fractions of the way from the low law to the high one (P2z.f1 ..,
+0 .. 1), so it lies between its laws whatever they are; "orig.P2z*orig.chord/
+chord" as the low law of P2z keeps that control point at least as high in mm as
+the original's wherever the LE goes.
+
+The original is the lower bound of the shape (the settings keep_inside,
+inside_tol_mm; saved with the set-up): the preview measures how far the
+modified rudder goes inside the original on the built sections
+(rudder_modify.inside_original) and warns beyond the tolerance.
+
 The full height (set_span) is the extracted rudder's to start with: a new one
 stretches the whole rudder in height (the original's fits, its stack and loops,
 H, its bounds and the curves' heights in proportion; x, the chords and the
@@ -32,6 +45,8 @@ An adapter gives the tool:
                                               the limits it has now (xgeom_relations.AdapterRelations)
     set_order / set_tangent / set_degree      the shape of the space (the last two rudder only; set_tangent_all
                                               and tangent_state for every curve at once)
+    laws_of / set_laws / law_names            a curve's bounding laws (the rudder modified below H)
+    set_keep_inside                           the original as the lower bound of the shape, measured (the same)
     curve_rows(curve), row_info(name), n_free()   the rows of one curve (xgeom_common.Row)
     preview()                                 everything the live views draw
     views(fig) / skeleton_view(fig)           the drawings
@@ -58,6 +73,8 @@ from xgeom_common import BLUE, GREY, GRID, INK2, RED, SECTION_COLORS, Row, fit_b
 MAX_DEGREE = 12
 MAX_ORDER = 12
 SPAN_RANGE = (0.25, 4.0)         # the full height, as a multiple of the extracted rudder's
+INSIDE_TOL = 0.01                # mm: the modified rudder may lie this far inside the original (keep_inside)
+LAW_STYLE = (("low", ":"), ("high", "-."))    # how the curve view draws a curve's low and high law
 SKELETON_UNCHANGED = 90          # original loops drawn above H, at most (the tip and cap loops always)
 N_VIEW = 5                       # sections drawn in the Design tab's 3D view, from the root to H
 Z_STRETCH = 3.0                  # the 3D view stretches the thickness by this, so the polygons show
@@ -98,10 +115,12 @@ class RudderAdapter(REL.AdapterRelations):
                          "plot": bool(s.plot), "fit_orders": dict(MC.FIT_ORDERS if fit_orders is None else fit_orders),
                          "fit_free_heights": bool(s.fit_free_heights), "half": bool(getattr(s, "half", False)),
                          "strip_frac": _strip_frac(getattr(s, "strip_frac", None)),
-                         "tip_drop": _strip_frac(getattr(s, "tip_drop", 1.5))}
+                         "tip_drop": _strip_frac(getattr(s, "tip_drop", 1.5)),
+                         "keep_inside": True, "inside_tol_mm": INSIDE_TOL}
         self.title = "Rudder, modified below H"
         self.setup_file = None                                # the set-up file loaded or saved last (the tool shows it)
         self.meta = {}
+        self.laws = {}                                        # curve -> (low law, high law): its bounding laws
         self._load_files(files or {"corner_points": MC.CORNER_POINTS, "section_table": MC.SECTION_TABLE,
                                    "xcad_original": MC.XCAD_ORIGINAL, "stack": MC.STACK},
                          getattr(MC, "DEGREE", RM.BASE_DEGREE))
@@ -143,7 +162,8 @@ class RudderAdapter(REL.AdapterRelations):
         bounds, free flags and relations of every slot that is still there.
         New slots of P1x start held (unticked): P1x = 0 keeps the LE round.
         The dependent variables then follow (xgeom_relations)."""
-        h = dict(h_min=self.settings["h_min"], h_max=self.settings["h_max"])
+        h = dict(h_min=self.settings["h_min"], h_max=self.settings["h_max"], laws=self.laws,
+                 te_radius_mm=self.settings["te_radius_mm"])
         full = RM.DesignSpace(self.orig, self.orders, self.join, **h)
         self.meta = {n: self.meta.get(n, {"lo": float(lo), "hi": float(hi), "free": not n.startswith("P1x.")})
                      for n, (lo, hi) in zip(full.all_names, full.all_bounds)}
@@ -199,10 +219,50 @@ class RudderAdapter(REL.AdapterRelations):
         order = int(order)
         if not 1 <= order <= MAX_ORDER:
             raise ValueError(f"the order must lie in 1 .. {MAX_ORDER}")
-        self.design = RM.refit_curve(self.design, self.orig, curve, order)
+        self.design = RM.refit_curve(self.design, self.orig, curve, order,
+                                     te_radius_mm=self.settings["te_radius_mm"])
         self.orders[curve] = order
         self._drop_meta(curve)
         self._rebuild()
+
+    # ---------------------------------------------------------------- bounding laws
+    def law_names(self):
+        """The names a bounding law may use here (rudder_modify.law_names)."""
+        return RM.law_names(self.orig.names)
+
+    def laws_of(self, curve):
+        """(low law, high law) of a curve that has bounding laws, else None."""
+        return self.laws.get(curve)
+
+    def law_defined(self, curve):
+        """Is the curve defined by its laws (low and high the same: no variables of its own)?"""
+        return curve in self.space.defined
+
+    def set_laws(self, curve, low=None, high=None):
+        """Put a curve between a low law and a high law, or take its laws off (both None or blank). A law is a
+        number or an expression of the other curves at the same height (law_names: "P3z", "orig.P2z", "TE",
+        "chord", "orig.chord"; + - * / brackets min( ) max( )). The curve keeps its shape as closely as the
+        laws let it (rudder_modify.with_laws) and its variables become the fractions between them (P2z.f1 ..,
+        0 .. 1, free); it then joins the original at H with its value only. Low and high the same define the
+        curve: no variables. ValueError says what is wrong with a law and leaves the curve as it was."""
+        design = RM.with_laws(self.design, self.orig, curve, low, high, self.settings["te_radius_mm"],
+                              order=self.orders[curve])
+        if design.laws == self.design.laws:
+            return
+        self.design, self.laws = design, dict(design.laws)
+        self.join = {c: design.curves[c].join for c in self.orig.names}
+        self._drop_meta(curve)
+        self._rebuild()                                       # a curve its laws define keeps its order for later
+
+    def set_keep_inside(self, on, tol_mm=None):
+        """The original as the lower bound of the shape: on, the preview measures how far the modified rudder
+        goes inside the original (rudder_modify.inside_original) and warns beyond tol_mm (the tolerance; kept
+        when None). Saved with the set-up."""
+        self.settings["keep_inside"] = bool(on)
+        if tol_mm is not None:
+            if not float(tol_mm) >= 0.0:
+                raise ValueError("the tolerance is 0 or more (mm)")
+            self.settings["inside_tol_mm"] = float(tol_mm)
 
     def set_tangent(self, curve, on):
         """C1 on the original's tangent at H (G1, slope matched) or free (G0): a design variable then, starting
@@ -215,9 +275,14 @@ class RudderAdapter(REL.AdapterRelations):
         tangent."""
         d = self.design.copy()
         for c in (self.orig.names if curves is None else curves):
+            if c in self.laws:                    # between its laws: it leaves H as they let it
+                if on and curves is not None:
+                    raise ValueError(f"{c} lies between bounding laws: it joins the original at H with its value "
+                                     f"only (take its laws off for a tangent join)")
+                continue
             d.curves[c].join = "G1" if on else "G0"
-        self.design = RM.pin(d, self.orig)
-        self.join = {c: d.curves[c].join for c in self.orig.names}
+        self.design = RM.pin(d, self.orig, self.settings["te_radius_mm"])
+        self.join = {c: self.design.curves[c].join for c in self.orig.names}
         self._rebuild()
 
     def tangent_state(self):
@@ -275,7 +340,7 @@ class RudderAdapter(REL.AdapterRelations):
             s["gap_mm"] = float(s["gap_mm"]) * r
         d = self.design.copy()
         d.H *= r
-        self.design = RM.pin(d, self.orig)
+        self.design = RM.pin(d, self.orig, s["te_radius_mm"])
         self._rebuild()
         return r
 
@@ -304,6 +369,16 @@ class RudderAdapter(REL.AdapterRelations):
         n, H = cd.order, self.design.H
         le = curve == "LE"
         unit, digits = (" mm", 3) if le else ("", 5)
+        if curve in self.laws:                    # between its laws: the fractions of the way from low to high
+            if self.law_defined(curve):
+                return [Row("pinned", "", text="set by its laws at every height: no variables")]
+            rows = [Row("pinned", "C0", text=f"at H = {H:.2f} mm: {cd.v[0]:.4f} of the way from the low law to "
+                                             f"the high one, on the original")]
+            for k in range(1, n + 1):
+                if k < n:
+                    rows.append(Row("var", f"C{k} d", f"{curve}.d{k}", 4))
+                rows.append(Row("var", f"C{k} fraction", f"{curve}.f{k}", 4))
+            return rows
         rows = [Row("pinned", "C0", text=f"at H = {H:.2f} mm: {cd.v[0]:.{digits}f}{unit}, the original's value")]
         for k in range(1, n + 1):
             if k < n:
@@ -322,7 +397,7 @@ class RudderAdapter(REL.AdapterRelations):
             return f"max {self.settings['z_top']:.1f}"
         curve, slot = name.split(".")
         cd = self.design.curves[curve]
-        k = int(slot.lstrip("dxv"))
+        k = int(slot.lstrip("dxvf"))
         return f"y {cd.s[k] * self.design.H:.2f}"
 
     def n_free(self, curve=None):
@@ -344,16 +419,29 @@ class RudderAdapter(REL.AdapterRelations):
     # ---------------------------------------------------------------- preview
     def preview(self, skeleton=False):
         """What the live views draw: the pinned design, its problems, its
-        warnings (the relations of dependent variables that do not hold), the
-        curves, N_VIEW sections from the root to H, the tracks of the section
-        control points along the span, and (skeleton=True) the loops of the
-        3D sections tab."""
+        warnings (the relations of dependent variables that do not hold, what
+        the bounding laws leave open, the modified rudder inside the original
+        by more than the tolerance), the curves and, for those between laws,
+        their bands (low, high), N_VIEW sections from the root to H, the
+        tracks of the section control points along the span, how far the
+        rudder goes inside the original ("inside": rudder_modify.
+        inside_original's result, None when not measured), and
+        (skeleton=True) the loops of the 3D sections tab."""
         t0 = time.time()
         d = self.design
         s = self.settings
-        problems = RM.design_problems(d, self.orig, s["n_sections"], s["te_radius_mm"])
+        r = s["te_radius_mm"]
+        problems = RM.design_problems(d, self.orig, s["n_sections"], r)
         yy = np.linspace(0.0, d.H, 160)
-        curves = {c: d.curve(c).at(yy)[:, 1] for c in self.names}
+        curves, bands, _ = RM.law_state(d, self.orig, yy, r)
+        warnings = self.relation_warnings() + RM.law_warnings(d, self.orig, s["n_sections"], r)
+        inside = None
+        if s.get("keep_inside") and not problems:
+            inside = RM.inside_original(d, self.orig, s["n_sections"], r)
+            if inside["depth"] > s["inside_tol_mm"]:
+                warnings.append(f"the modified rudder lies inside the original by up to {inside['depth']:.2f} mm "
+                                f"(at {100.0 * inside['x_c']:.0f} % of the original's chord, height "
+                                f"{inside['y']:.1f} mm)")
         try:
             sections = RM.build_sections(d, self.orig, np.linspace(0.0, d.H, N_VIEW), s["num_pts"],
                                          s["te_radius_mm"], offsets=self.offsets())
@@ -361,8 +449,8 @@ class RudderAdapter(REL.AdapterRelations):
             sections = str(exc)
             if not problems:                  # the model builds, the sections as written do not (too thin)
                 problems = [sections]
-        out = {"design": d, "problems": problems, "warnings": self.relation_warnings(), "yy": yy, "curves": curves,
-               "sections": sections, "tracks": self.tracks(d)}
+        out = {"design": d, "problems": problems, "warnings": warnings, "yy": yy, "curves": curves,
+               "bands": bands, "inside": inside, "sections": sections, "tracks": self.tracks(d)}
         if skeleton:
             out["skeleton"] = self.skeleton(problems)
         out["seconds"] = time.time() - t0
@@ -373,13 +461,10 @@ class RudderAdapter(REL.AdapterRelations):
         heights from the root to H: (n, degree + 1, 3) as x, z (thickness) and
         y, mm (the polygon scaled by the sharp chord, from the LE)."""
         ys = np.linspace(0.0, d.H, n)
-        val = RM.curve_values(d, ys)
+        val = RM.curve_values(d, ys, self.orig, self.settings["te_radius_mm"])
         ctrl = BS.polygon_from_values(val, d.degree)
         chord = self.orig.x_te(ys) - val["LE"]
-        try:
-            cs = BS.sharp_chord(ctrl, chord, self.settings["te_radius_mm"])[0]
-        except (ValueError, RuntimeError):
-            cs = chord                                 # a design with problems: close enough to draw
+        cs = RM.sharp_chord(ctrl, chord, self.settings["te_radius_mm"])   # a design with problems: its chord
         x = val["LE"][:, None] + ctrl[:, :, 0] * cs[:, None]
         return np.stack((x, ctrl[:, :, 1] * cs[:, None], np.repeat(ys[:, None], d.degree + 1, axis=1)), axis=2)
 
@@ -429,13 +514,15 @@ class RudderAdapter(REL.AdapterRelations):
         return self.related(RM.DesignSpace(
             self.orig, self.orders, self.join,
             bounds={n: (self.meta[n]["lo"], self.meta[n]["hi"]) for n in self.space.all_names},
-            h_min=self.settings["h_min"], h_max=self.settings["h_max"], fixed=fixed))
+            h_min=self.settings["h_min"], h_max=self.settings["h_max"], fixed=fixed, laws=self.laws,
+            te_radius_mm=self.settings["te_radius_mm"]))
 
     def space_record(self):
         """The set-up as plain data: the design space (every variable with its
         value, bounds, free flag and, a dependent one, its relation; the
-        curves' orders and joins, the section degree), the settings and the
-        input files. rudder_modify.load_design_space reads it back for the
+        curves' orders and joins, their bounding laws, the section degree),
+        the settings (with keep_inside and inside_tol_mm: the original as
+        the lower bound of the shape) and the input files. rudder_modify.load_design_space reads it back for the
         optimiser. No time stamp (20 Nov 2026, Eddie's interface note: an
         unchanged set-up saves to the same bytes); set-ups written before still
         carry "written", which nothing reads."""
@@ -454,9 +541,10 @@ class RudderAdapter(REL.AdapterRelations):
     def load_space(self, path):
         """Take over a saved set-up (<case>_design_space.json, written by save_space or an XCAD run), whatever
         the adapter holds now: the section degree, every curve's order and join, every variable's value,
-        bounds and free flag, the H bounds, the full height, and the settings saved with it (the number of
-        sections and of points a section, the TE radius, the half body, the strips). A file that cannot be
-        taken over raises a ValueError that says why and leaves the adapter as it was."""
+        bounds and free flag, the curves' bounding laws, the H bounds, the full height, and the settings saved
+        with it (the number of sections and of points a section, the TE radius, the half body, the strips,
+        the original as the lower bound: keep_inside, inside_tol_mm). A file that cannot be taken over raises
+        a ValueError that says why and leaves the adapter as it was."""
         name = os.path.basename(path)
         try:
             with open(path) as fh:
@@ -468,7 +556,8 @@ class RudderAdapter(REL.AdapterRelations):
                              f"XCAD wrote)")
         keep, settings, meta = dict(self.__dict__), dict(self.settings), copy.deepcopy(self.meta)
         try:
-            for k in ("n_sections", "num_pts", "te_radius_mm", "half", "strip_frac", "tip_drop"):
+            for k in ("n_sections", "num_pts", "te_radius_mm", "half", "strip_frac", "tip_drop", "keep_inside",
+                      "inside_tol_mm"):
                 if k in rec.get("settings", {}):
                     self.settings[k] = rec["settings"][k]
             files = rec.get("files") or {}
@@ -481,11 +570,13 @@ class RudderAdapter(REL.AdapterRelations):
                 self._load_files(files, int(rec["space"].get("degree", RM.BASE_DEGREE)))
                 self.orders = {c: max(RM.DEFAULT_ORDER, self.orig.curves[c].order) for c in self.orig.names}
                 self.join = {c: "G1" for c in self.orig.names}
+                self.laws = {}
                 self.design = RM.baseline_design(self.orig, self.settings["h_max"], self.orders, self.join)
             self._apply_scale(float(rec.get("settings", {}).get("height_scale") or 1.0))     # its full height
-            space, design = RM.DesignSpace.from_dict(self.orig, rec["space"])
+            space, design = RM.DesignSpace.from_dict(self.orig, rec["space"], self.settings["te_radius_mm"])
             self.orig = space.orig
             self.orders, self.join, self.design = dict(space.orders), dict(space.join), design
+            self.laws = dict(space.laws)
             self.meta = self.meta_of(space)                  # bounds, free flags, the dependent ones' relations
             self.settings["h_min"], self.settings["h_max"] = self.meta["H"]["lo"], self.meta["H"]["hi"]
             self._rebuild()
@@ -630,6 +721,8 @@ class RudderViews:
         ax = self.ax_curve
         self.c_data, = ax.plot([], [], ".", color=INK2, ms=3, label="original (section fits)")
         self.c_orig, = ax.plot([], [], "-", color=INK2, lw=1)
+        self.c_laws = [ax.plot([], [], ls, color=RED, lw=1.0)[0] for _, ls in LAW_STYLE]    # its low and high law
+        self.c_banded = None                                 # whether the legend names the laws
         self.c_new, = ax.plot([], [], "-", color=BLUE, lw=2.0, label="design")
         self.c_poly, = ax.plot([], [], "--", color=BLUE, lw=0.8)
         self.c_free, = ax.plot([], [], "o", color=BLUE, ms=6, label="C1 ..: free")
@@ -641,12 +734,12 @@ class RudderViews:
         ax.legend(loc="best", fontsize=7)
 
     def _points(self, d, curve):
-        """The curve's control points split into free / held / pinned, as (y, value)."""
-        cd = d.curves[curve]
-        pts = np.column_stack((cd.s * d.H, cd.v))
+        """The curve's control points split into free / held / pinned, as (y, value); those of a curve between
+        bounding laws where their fractions put them between the laws at their own heights."""
+        pts = np.column_stack(RM.control_points(d, self.a.orig, curve, self.a.settings["te_radius_mm"]))
         kinds = []
-        for k in range(cd.order + 1):
-            vname = f"{curve}.{'dx' if curve == 'LE' else 'v'}{k}"
+        for k in range(len(pts)):
+            vname = f"{curve}.{'f' if curve in d.laws else 'dx' if curve == 'LE' else 'v'}{k}"
             if k == 0 or vname not in self.a.meta:
                 kinds.append("pinned")
             else:
@@ -662,8 +755,8 @@ class RudderViews:
         self.o_te.set_data(o.x_te_rows[m], o.y_rows[m])
         # planform, as the rudder stands: x across, the height up
         self.le_line.set_data(cv["LE"], yy)
-        le = d.curve("LE")
-        self.le_poly.set_data(le.ctrl[:, 1], le.ctrl[:, 0])
+        le_y, le_x = RM.control_points(d, o, "LE", a.settings["te_radius_mm"])
+        self.le_poly.set_data(le_x, le_y)
         ys = np.linspace(0.0, d.H, len(self.sec_lines))
         for ln, y, xl in zip(self.sec_lines, ys, np.interp(ys, yy, cv["LE"])):
             ln.set_data([xl, o.x_te([y])[0]], [y, y])
@@ -690,6 +783,13 @@ class RudderViews:
             self.c_orig.set_data(o.value(curve, yz), yz)
             ax.set_xlabel(f"{curve[-1]} of P{curve[1:-1]} (fraction of the sharp chord)")
         self.c_new.set_data(cv[curve], yy)                   # as the rudder stands: the value across, the height up
+        band = pv.get("bands", {}).get(curve)                # between bounding laws: the two drawn
+        for ln, (side, _), k in zip(self.c_laws, LAW_STYLE, (0, 1)):
+            ln.set_data((band[k], yy) if band else ([], []))
+            ln.set_label(f"{side} law" if band else "_nolegend_")
+        if bool(band) != self.c_banded:
+            self.c_banded = bool(band)
+            ax.legend(loc="best", fontsize=7)
         pts, P = self._points(d, curve)
         self.c_poly.set_data(pts[:, 1], pts[:, 0])
         for key, ln in (("free", self.c_free), ("fixed", self.c_fixed), ("pinned", self.c_pinned)):
@@ -701,8 +801,10 @@ class RudderViews:
         self.c_h.set_ydata([d.H, d.H])
         ax.set_title(f"curve {curve}" + ("" if curve == "LE" else f": {curve[-1]} of P{curve[1:-1]}")
                      + " against the height", loc="left", fontsize=10)
-        shown = np.concatenate([ln.get_xdata() for ln in (self.c_data, self.c_orig, self.c_new, self.c_poly)
+        shown = np.concatenate([np.asarray(ln.get_xdata(), dtype=float) for ln in
+                                (self.c_data, self.c_orig, self.c_new, self.c_poly, *self.c_laws)
                                 if len(ln.get_xdata())])
+        shown = shown[np.isfinite(shown)]
         lo, hi = float(shown.min()), float(shown.max())
         pad = max(0.08 * (hi - lo), 0.5 if curve == "LE" else 0.005)    # a flat curve still gets a readable range
         ax.set_xlim(lo - pad, hi + pad)

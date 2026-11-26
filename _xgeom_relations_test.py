@@ -143,6 +143,77 @@ def test_grammar():
           [want in msgs[t] for t, want in bad.items()], [1] * len(bad), 0)
 
 
+def test_laws(tmp):
+    print("\nmin( ) and max( ), and the laws between curves (xgeom_relations.parse_law, sequence)")
+    vals = {"span": 200.0, "chord.d1": 0.25, "chord.d2": 0.5, "chord.v0": 120.0, "chord.v1": 110.0, "chord.v2": 90.0,
+            "chord.v3": 70.0, "pitch.v0": 2.0, "pitch.v1": 1.0}
+
+    def bound(t):
+        return REL.parse_bound(t, NAMES, "chord", "chord.v1")
+
+    e = bound("max(0.5v0, v3)")
+    r = REL.parse("> max(0.5v2, v3), < min(v0, 2*v3) + 1", NAMES, "chord", "chord.v1")
+    check("min( ) and max( ) of two or more expressions, in a bound (one word) and in a relation; the commas "
+          "inside the brackets do not split the relations",
+          [e.text() == "max(0.5*chord.v0,chord.v3)", e.text("chord") == "max(0.5*v0,v3)", e.value(vals), len(r),
+           REL.text(r, "chord") == "> max(0.5*v2, v3), < min(v0, 2*v3) + 1", r[0].value(vals), r[1].value(vals),
+           bound("min(v0, v2, v3) - max(1, 2, 0.5*3)").value(vals),
+           bound("-min(v0, v2)").text("chord") == "-min(v0,v2)", bound("2max(v0, v2)").value(vals), bound("max(1, 2)")],
+          [1, 1, 70.0, 2, 1, 70.0, 121.0, 68.0, 1, 240.0, 2.0], 1e-12)
+    back = [bound(bound(t).text()) == bound(t) and bound(t).text("chord") == t
+            for t in ("max(0.5*v0,v3)", "min(v0,max(v2,v3))/2", "v0-min(v2,v3,d1)", "max(v0+v2,v3)*min(1,d1)")]
+    back += [REL.parse(REL.text(r), NAMES, "chord", "chord.v1") == r]
+    check("the text written is read back as the same expression", back, [1] * len(back), 0)
+    bad = {"min(v0)": "takes two or more expressions",
+           "sin(v0)": "'sin(' is not a function (there are min( ) and max( ))",
+           "v0, v2": "a comma belongs inside min( ) or max( )", "max(v0, v2": "bracket is not closed",
+           "max(v0,)": "a number or a variable is missing", "v0(v2)": "'v0(' is not a function"}
+    msgs = {t: message(REL.parse_bound, t, NAMES, "chord", "chord.v1") for t in bad}
+    check("what is no min or max is refused, saying why", [want in msgs[t] for t, want in bad.items()],
+          [1] * len(bad), 0)
+
+    names = ["LE", "P2x", "P2z", "P3z", "orig.LE", "orig.P2z", "orig.chord", "chord", "TE"]
+    law = REL.parse_law("(min(orig.LE + orig.P2z*orig.chord, TE) - LE)/chord", names, "P2x")
+    env = {"orig.LE": np.array([0.0, 1.0]), "orig.P2z": np.array([0.2, 0.2]), "orig.chord": np.array([180.0, 170.0]),
+           "TE": np.array([30.0, 200.0]), "LE": np.array([-60.0, -10.0]), "chord": np.array([240.0, 190.0])}
+    one = {k: float(v[1]) for k, v in env.items()}
+    zero = REL.parse_law("P2z/(LE - LE)", names).value(env | {"P2z": np.array([1.0, 2.0])})
+    check("a law: an expression of the names a component gives it, a number too; its value at arrays (one per "
+          "position) an array, at numbers a number; dividing by zero at arrays gives no number there, no error",
+          [law.text() == "(min(orig.LE+orig.P2z*orig.chord,TE)-LE)/chord", law.names == (
+              "orig.LE", "orig.P2z", "orig.chord", "TE", "LE", "chord"), *law.value(env), law.value(one),
+           REL.parse_law("2", names).value({}), REL.parse_law(0.5, names).value({}), np.isfinite(zero).any()],
+          [1, 1, 90.0 / 240.0, 45.0 / 190.0, 45.0 / 190.0, 2.0, 0.5, 0], 1e-12)
+    bad = {("", None): "a bounding law is a number or an expression", ("foo + 1", None): "'foo' is not a name a law "
+           "can use here (LE, P2x", ("0.5*P2x", "P2x"): "cannot use the curve itself", ("P2z +", None): "missing at "
+           "the end", ("> P2z", None): "'>' is not part of an expression"}
+    msgs = {t: message(REL.parse_law, t[0], names, t[1]) for t in bad}
+    check("what is no law is refused, saying why (nothing, a name that is not there, the curve itself, ...)",
+          [want in msgs[t] for t, want in bad.items()], [1] * len(bad), 0)
+    seq = REL.sequence({"a": ["b", "x"], "b": ["c"], "c": [], "d": ["a", "c"]}, "curves")
+    loop = message(REL.sequence, {"a": ["b"], "b": ["c"], "c": ["a"]}, "curves")
+    check("sequence: each name after the ones it uses (names that are no keys left out); a loop is named",
+          [seq.index("c") < seq.index("b") < seq.index("a") < seq.index("d"), len(seq),
+           "curves that depend on each other in a loop (a -> b -> c -> a)" in loop], [1, 4, 1], 0)
+    if not ALL:
+        return
+    import xgeom_wing as XW
+    ad = XW.WingAdapter()
+    ad.set_bounds("chord.v1", "max(0.5v0, v3)", "v0")
+    ad.set_relation("chord.v2", "< min(v1, 2*v3)")
+    path = ad.save_file(os.path.join(tmp, "minmax.txt"))
+    lines = {ln.split()[2]: ln.split(None, 3)[3].strip() for ln in open(path) if ln.startswith("# var")}
+    ad2 = XW.WingAdapter(params=path)
+    lo, hi = ad2.bounds("chord.v1")
+    check("in a component file: a bound with max( ) is one word of its var line, a relation with min( ) after the "
+          "flag; read back the same, the variable between its bounds",
+          [lines["chord.v1"].split()[1] == "max(0.5*chord.v0,chord.v3)",
+           lines["chord.v2"].endswith("< min(chord.v1, 2*chord.v3)"),
+           ad2.bound_text("chord.v1") == ad.bound_text("chord.v1"), ad2.relation("chord.v2") == "< min(v1, 2*v3)",
+           lo - max(0.5 * ad2.get("chord.v0"), ad2.get("chord.v3")), hi - ad2.get("chord.v0"),
+           lo <= ad2.get("chord.v1") <= hi], [1, 1, 1, 1, 0, 0, 1], 1e-9)
+
+
 def test_follow():
     print("\nlimits, the order of dependence and following (limits, order, apply, violations)")
     bounds = {n: (0.0, 200.0) for n in NAMES}
@@ -1167,6 +1238,7 @@ def main():
     try:
         with tempfile.TemporaryDirectory() as tmp:
             test_grammar()
+            test_laws(tmp)
             test_follow()
             if ALL:
                 test_spaces(tmp)

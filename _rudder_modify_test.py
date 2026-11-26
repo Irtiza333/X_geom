@@ -692,6 +692,191 @@ def test_offsets(p, orig, base, secs):
            lambda: RM.original_offsets(orig, only_top))
 
 
+def add_laws(a=2.0):
+    """The laws of building on the original (rudder_laws_setup.laws): P2 and P3 from the original's heights
+    in mm up to a times them, P1 as high as P2, P2's x from the original's forward to the LE, P3's between the
+    two lines through the original P3. Every low law the original's side."""
+    x2, te = "orig.LE+orig.P2x*orig.chord", "orig.LE+orig.chord"
+    y2, y3 = "orig.P2z*orig.chord", "orig.P3z*orig.chord"
+    return {"P2x": (f"({x2}-LE)/chord", "0"), "P2z": (f"{y2}/chord", f"{a:g}*{y2}/chord"), "P1z": ("P2z", "P2z"),
+            "P3z": (f"{y3}/chord", f"{a:g}*{y3}/chord"),
+            "P3x": (f"min({te}-LE, {x2}-LE+(orig.P3x-orig.P2x)*orig.chord*(P3z*chord-{y2})/({y3}-{y2}))/chord",
+                    f"max({x2}-LE, {te}-LE+(orig.P3x-1)*orig.chord*P3z*chord/({y3}))/chord")}
+
+
+def test_laws(p, orig):
+    print("\nbounding laws: a curve between a low law and a high law; the original as the lower bound "
+          "(synthetic rudder)")
+    import json
+    ys = np.linspace(0.0, Z_OPT, 41)
+    g0 = RM.baseline_design(orig, Z_OPT, join="G0")
+    v0 = RM.curve_values(g0, ys)
+    ctrl0, chord0 = BS.polygon_from_values(v0, 4), orig.x_te(ys) - v0["LE"]
+    cs0 = BS.sharp_chord(ctrl0, chord0, R_TE)[0]
+    thin = ctrl0.copy()
+    thin[3, 1:4, 1] = 1.0e-4                               # one section too thin for the TE radius
+    cs_thin = RM.sharp_chord(thin, chord0, R_TE)
+    f = BS.fillet(ctrl0, R_TE / cs0)
+    x_te, t = BS.te_x_from(ctrl0, R_TE / cs0, f["t"] + 0.01)
+    check("te_x_from: Newton from nearby tangent points finds fillet's (None from a start that leaves the curve); "
+          "sharp_chord: bezier_section's, and the chord itself for a section that cannot be rounded",
+          [np.abs(x_te - f["x_te"]).max(), np.abs(t - f["t"]).max(), BS.te_x_from(ctrl0, R_TE / cs0, 0.0 * t) is None,
+           np.abs(RM.sharp_chord(ctrl0, chord0, R_TE) - cs0).max(), cs_thin[3] - chord0[3],
+           np.abs(np.delete(cs_thin - cs0, 3)).max()], [0, 0, 1, 0, 0, 0], 1e-10)
+
+    laws = add_laws()
+    canon = RM.canonical_laws({"P2z": (" orig.P2z * orig.chord / chord ", 2)}, orig.names)
+    bad = [({"P2z": ("P3z +", "1")}, "the low law of P2z, 'P3z +': a number or a variable is missing"),
+           ({"P2z": ("0", "foo")}, "the high law of P2z, 'foo': 'foo' is not a name a law can use here"),
+           ({"P2z": ("0", "2*P2z")}, "cannot use the curve itself"),
+           ({"LE": ("orig.LE-chord", "orig.LE")}, "the laws of the LE cannot use it"),
+           ({"P2z": ("P3z", "2*P3z"), "P3z": ("0.5*P2z", "P2z")}, "in a loop (P2z -> P3z -> P2z)"),
+           ({"LE": ("orig.LE-100*P2z", "orig.LE"), "P2z": ("0", "10/chord")}, "in a loop (LE -> P2z -> LE)"),
+           ({"Q9": ("0", "1")}, "'Q9' is not a curve of this design")]
+    msgs = []
+    for lw, _ in bad:
+        try:
+            RM.canonical_laws(lw, orig.names)
+            msgs.append("")
+        except ValueError as exc:
+            msgs.append(str(exc))
+    check("a law: the curves at the same height, the original's (orig.), TE, chord, orig.chord; written as one "
+          "word; what is no law is refused, saying which and why (the chord counts as the LE in a loop)",
+          [RM.law_names(["LE", "P1x"]) == ["LE", "P1x", "orig.LE", "orig.P1x", "TE", "chord", "orig.chord"],
+           canon == {"P2z": ("orig.P2z*orig.chord/chord", "2")}, *[w in m for (_, w), m in zip(bad, msgs)]],
+          [1] * (2 + len(bad)), 0)
+
+    d = RM.baseline_design(orig, Z_OPT, join="G0", laws=laws, te_radius_mm=R_TE)
+    v1 = RM.curve_values(d, ys, orig, R_TE)
+    check("the original between its laws is the original: every curve's values, the fractions 0 (each low law "
+          "the original's side); P1z set by its law (no control points); the curves with laws join with their "
+          "value only",
+          [max(np.abs(v1[c] - v0[c]).max() for c in orig.names),
+           max(np.abs(d.curves[c].v).max() for c in ("P2x", "P2z", "P3x", "P3z")), d.curves["P1z"].order,
+           all(d.curves[c].join == "G0" for c in laws), len(RM.control_points(d, orig, "P1z", R_TE)[0]),
+           np.abs(RM.control_points(d, orig, "P2z", R_TE)[1] - orig.value("P2z", d.curves["P2z"].s * Z_OPT)).max()],
+          [0, 0, 1, 1, 0, 0], 1e-11)
+
+    sp = RM.DesignSpace(orig, join="G0", laws=laws, te_radius_mm=R_TE)
+    vals = sp.values(d)
+    fb = sp.all_bounds[[sp.all_names.index(n) for n in sp.all_names if ".f" in n]]
+    check("the design space: a curve with laws has its d and the fractions of C1 .. Cn (P2z.f1 ..), bounds 0 .. 1, "
+          "no control values; a curve its laws set has no variables",
+          [[n for n in sp.all_names if n.startswith("P2z.")] == ["P2z.d1", "P2z.d2", "P2z.f1", "P2z.f2", "P2z.f3"],
+           not any(n.startswith("P1z.") for n in sp.all_names), len(sp.all_names), fb.min(), fb.max(),
+           max(abs(vals[n]) for n in vals if ".f" in n), sp.join["P2z"] == "G0"], [1, 1, 31, 0, 1, 0, 1], 1e-11)
+    vals.update({"LE.dx3": -60.0, "LE.dx2": -30.0, "LE.dx1": -10.0})
+    d2 = sp.design_of(vals)
+    s2, so = RM.modified_sections(d2, orig, 41, 200, R_TE), RM.modified_sections(g0, orig, 41, 200, R_TE)
+
+    def mm(q, i):                                          # control point i of the sections q, mm
+        return np.array([[q_.x_le + q_.ctrl[i, 0] * q_.cs, q_.ctrl[i, 1] * q_.cs] for q_ in q])
+    _, bands, cs = RM.law_state(d2, orig, ys, R_TE)
+    check("the LE 60 mm forward at the root, every fraction 0: the chords longer, P2 and P3 where the original's "
+          "are in mm at every section, P1 as high as P2; the chord the laws name is the built sections' sharp chord",
+          [s2[0].chord - so[0].chord, np.abs(mm(s2, 2) - mm(so, 2)).max(), np.abs(mm(s2, 3) - mm(so, 3)).max(),
+           max(abs(q.ctrl[1, 1] - q.ctrl[2, 1]) for q in s2), np.abs(cs - [q.cs for q in s2]).max(),
+           len(RM.law_warnings(d2, orig, 41, R_TE)), len(RM.design_problems(d2, orig, 41, R_TE))],
+          [60.0, 0, 0, 0, 0, 0, 0], 1e-8)
+    rng = np.random.default_rng(3)
+    worst, n_ok = 0.0, 0
+    for _ in range(25):
+        dd = sp.to_design(sp.bounds[:, 0] + rng.random(len(sp.names)) * (sp.bounds[:, 1] - sp.bounds[:, 0]))
+        val, bands, _ = RM.law_state(dd, orig, np.linspace(0.0, dd.H, 31), R_TE)
+        n_ok += not RM.design_problems(dd, orig, 31, R_TE)
+        for c, (lo, hi) in bands.items():
+            worst = max(worst, float((np.minimum(lo, hi) - val[c]).max()), float((val[c] - np.maximum(lo, hi)).max()))
+    check("25 random vectors of the space: every curve between its laws at every height, whatever the fractions",
+          [worst <= 1e-12, n_ok > 5], [1, 1], 0)
+    rec = json.loads(json.dumps(sp.to_dict(d2)))
+    sp_b, d_b = RM.DesignSpace.from_dict(orig, rec)
+    d_r = RM.design_from_record(json.loads(json.dumps(RM.design_record(d2, orig, R_TE))))
+    v2, v_r = RM.curve_values(d2, ys, orig, R_TE), RM.curve_values(d_r, ys, orig, R_TE)
+    check("to_dict / from_dict and design_record / design_from_record carry the laws: the same variables, values "
+          "and curves",
+          [sp_b.all_names == sp.all_names, sp_b.laws == sp.laws, sp_b.te_radius_mm,
+           rec["laws"]["P1z"] == ["P2z", "P2z"],
+           max(abs(sp_b.values(d_b)[n] - vals[n]) for n in vals), d_r.laws == d2.laws,
+           max(np.abs(v_r[c] - v2[c]).max() for c in orig.names)], [1, 1, R_TE, 1, 0, 1, 0], 1e-12)
+
+    m = g0.copy()
+    m.curves["P3z"].v[1:] *= 1.3                           # thicker at P3 below H
+    m = RM.pin(m, orig)
+    w = RM.with_laws(m, orig, "P3z", *laws["P3z"], te_radius_mm=R_TE)
+    back = RM.with_laws(w, orig, "P3z", te_radius_mm=R_TE)
+    low = g0.copy()
+    low.curves["P3z"].v[1:] *= 0.8                         # thinner than the original: outside its laws
+    wl = RM.with_laws(RM.pin(low, orig), orig, "P3z", *laws["P3z"], te_radius_mm=R_TE)
+    vm, vw, vb, vl = (RM.curve_values(q, ys, orig, R_TE)["P3z"] for q in (m, w, back, wl))
+    up = RM.refit_curve(w, orig, "P3z", 5, te_radius_mm=R_TE)
+    check("with_laws: a curve put between laws keeps its shape (its fractions fitted, in 0 .. 1), and taken off "
+          "them again; one that lay outside them lies on the nearer law; refit_curve refits the fraction",
+          [np.abs(vw - vm).max() < 2e-4, np.abs(vb - vm).max() < 2e-4, w.curves["P3z"].v.min() >= 0.0,
+           w.curves["P3z"].v.max() <= 1.0, "P3z" not in back.laws, np.abs(vl - v0["P3z"]).max() < 1e-9,
+           up.curves["P3z"].order, np.abs(RM.curve_values(up, ys, orig, R_TE)["P3z"] - vw).max() < 2e-4],
+          [1, 1, 1, 1, 1, 1, 5, 1], 0)
+
+    def warned(lw):
+        return " | ".join(RM.law_warnings(RM.baseline_design(orig, Z_OPT, join="G0", laws=lw, te_radius_mm=R_TE),
+                                          orig, 41, R_TE))
+    cross = warned({"P3z": ("orig.P3z+0.01*(orig.LE-3)", "orig.P3z")})
+    out = warned({"P2z": ("1.1*orig.P2z", "2*orig.P2z")})
+    step = warned({"P2z": ("1.2*orig.P2z", "1.2*orig.P2z")})
+    zero = RM.baseline_design(orig, Z_OPT, join="G0", laws={"P2z": ("orig.P2z", "1/(LE-LE)")}, te_radius_mm=R_TE)
+    try:
+        RM.modified_sections(zero, orig, 41, 200, R_TE)
+        built = ""
+    except ValueError as exc:
+        built = str(exc)
+    check("law_warnings: laws that cross, the original outside its laws at H, laws that meet at H away from the "
+          "original (none for the low law the larger at every height); a law that divides by zero is a problem",
+          ["P3z: its laws cross" in cross, "P2z: the original at H" in out and "lies outside its laws there" in out,
+           "P2z: its laws meet at H" in step and "a step in the surface at H" in step,
+           "the bounding laws of P2z give no number at 41 of 41 sections" in " ".join(
+               RM.design_problems(zero, orig, 41, R_TE)), "the bounding laws of P2z give no number there" in built],
+          [1] * 5, 0)
+
+    def brute(design):                                     # the same measure on the built sections' points
+        a, b = RM.modified_sections(design, orig, 41, 400, R_TE), RM.modified_sections(g0, orig, 41, 400, R_TE)
+        out = []
+        for qa, qb in zip(a, b):
+            ua, ub = qa.selig[:200][::-1], qb.selig[:200][::-1]
+            out.append(max(0.0, float((ub[:, 1] - np.interp(qb.x_le + ub[:, 0], qa.x_le + ua[:, 0], ua[:, 1],
+                                                              left=0.0, right=0.0)).max())))
+        return np.array(out)
+    thin_d = g0.copy()
+    thin_d.curves["P3z"].v[1:] *= 0.9
+    thin_d = RM.pin(thin_d, orig)
+    thick = g0.copy()
+    for c in ("P1z", "P2z", "P3z"):
+        thick.curves[c].v[1:] *= 1.1
+    ins0, ins1, ins2, ins3 = (RM.inside_original(q, orig, 41, R_TE) for q in (g0, thin_d, RM.pin(thick, orig), d2))
+    b1, b3 = brute(thin_d), brute(d2)
+    print(f"       inside the original: P3 10 % lower {ins1['depth']:.3f} mm (at {ins1['x_c']:.2f} of the chord, "
+          f"y {ins1['y']:.1f} mm), 10 % thicker {ins2['depth']:.4f} mm, the LE forward with every fraction 0 "
+          f"{ins3['depth']:.3f} mm")
+    check("inside_original: 0 for the original and for a thicker rudder; a thinner one inside by what the built "
+          "sections show (mm), where and at which height; the LE moved forward on the laws alone not quite "
+          "enclosing it (the measure tells)",
+          [ins0["depth"], ins0["depths"].max(), ins2["depth"], ins1["depth"] > 0.5,
+           np.abs(ins1["depths"] - b1).max() < 5e-3,
+           ins1["y"], 0.2 < ins1["x_c"] < 0.6, len(ins1["depths"]), ins3["depth"] > 0.0,
+           np.abs(ins3["depths"] - b3).max() < 5e-3], [0, 0, 0, 1, 1, 0.0, 1, 41, 1, 1], 1e-12)
+    try:
+        RM.change_degree(d2, orig, 5)
+        refused = ""
+    except ValueError as exc:
+        refused = str(exc)
+    with tempfile.TemporaryDirectory() as tmp:
+        res = RM.write_case(tmp, "laws", d2, orig, p["xcad"], 41, 200, R_TE, plot=True, space=sp)
+        jrec = json.load(open(res["paths"]["json"]))
+        check("write_case: the design's laws in its JSON (and the fractions as the curve's values), the vector's "
+              "fraction names, the check plot; change_degree refused while curves have laws",
+              [jrec["design"]["laws"]["P2z"] == list(sp.laws["P2z"]), jrec["design"]["curves"]["P2z"]["low"] ==
+               sp.laws["P2z"][0], "P2z.f1" in jrec["vector"]["names"], os.path.exists(res["paths"]["png"]),
+               "keeps its section degree" in refused], [1] * 5, 0)
+
+
 def test_real():
     print("\nthe real rudder (outputs/ of the extraction)")
     paths = {k: os.path.join(HERE, v) for k, v in REAL.items()}
@@ -776,6 +961,7 @@ def main():
         test_xcad_and_writers(p, orig, base, secs)
         test_span(p, orig, base, secs)
         test_offsets(p, orig, base, secs)
+        test_laws(p, orig)
     test_real()
     print()
     if _FAILED:

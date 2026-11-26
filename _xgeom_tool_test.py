@@ -795,6 +795,246 @@ def test_gui():
         os.chdir(cwd)
 
 
+def test_laws():
+    print("\nbounding laws and the original as the lower bound (xgeom_rudder: set_laws, set_keep_inside; "
+          "rudder_laws_setup.py)")
+    need = ["outputs/corner_points.dat", "outputs/thickness_params_H80_info.dat",
+            "outputs/sections_xcad_with_cap_y0_y200_m.dat", "outputs/sections_stack_y0_y200_raw_mm.dat"]
+    missing = [p for p in need if not os.path.exists(os.path.join(HERE, p))]
+    if missing:
+        print("       skipped, not here: " + ", ".join(missing))
+        return
+    import rudder_laws_setup as RL
+    import rudder_modify as RM
+    import xgeom_rudder as XR
+    cwd = os.getcwd()
+    os.chdir(HERE)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            ad = XR.RudderAdapter(out_dir=tmp)
+            pv = ad.preview()
+            ad.set_tangent_all(False)
+            v = ad.get("P3z.v3")
+            ad.set("P3z.v3", 0.9 * v)                             # P3 lower at the root: inside the original there
+            warn = ad.preview()
+            ad.set_keep_inside(False)
+            off = ad.preview()
+            ad.set_keep_inside(True, 5.0)
+            wide = ad.preview()
+            ad.set("P3z.v3", v)
+            ad.set_keep_inside(True, XR.INSIDE_TOL)
+            check("the original is the lower bound of the shape: kept inside by measure from the start (0.01 mm), "
+                  "nothing to say of the original itself; a control point lowered is warned of, with how far and "
+                  "where; not when switched off (no measure then) or inside a wider tolerance",
+                  [ad.settings["keep_inside"], ad.settings["inside_tol_mm"], pv["inside"]["depth"],
+                   len(pv["warnings"]), pv["bands"] == {}, 0.5 < warn["inside"]["depth"] < 2.0, warn["inside"]["y"],
+                   sum("lies inside the original by up to" in w for w in warn["warnings"]), off["inside"] is None,
+                   len(off["warnings"]), wide["inside"]["depth"] - warn["inside"]["depth"], len(wide["warnings"])],
+                  [1, 0.01, 0, 0, 1, 1, 0.0, 1, 1, 0, 0, 0], 1e-12)
+
+            RL.set_up(ad, 2.0, 2.0)                               # the rule of building on the original
+            pv = ad.preview()
+            rows = {c: [r.name for r in ad.curve_rows(c)] for c in ("P2z", "P1z", "P1x")}
+            check("rudder_laws_setup: P2x, P2z, P3x, P3z between their laws (their rows the fractions f1 .., 0 .. 1), "
+                  "P1z set by its law (no variables), 26 free variables; the original itself: every fraction 0, no "
+                  "problem, no warning, enclosed",
+                  [sorted(ad.laws) == ["P1z", "P2x", "P2z", "P3x", "P3z"],
+                   ad.laws_of("P2z") == ("orig.P2z*orig.chord/chord", "2*orig.P2z*orig.chord/chord"),
+                   rows["P2z"] == ["", "P2z.d1", "P2z.f1", "P2z.d2", "P2z.f2", "P2z.f3"], rows["P1z"] == [""],
+                   rows["P1x"][-1] == "P1x.v3", ad.law_defined("P1z"), ad.n_free()[0], ad.tangent_state() == "none",
+                   ad.bounds("P2z.f2") == (0.0, 1.0), max(abs(ad.get(n)) for n in ad.space.all_names if ".f" in n),
+                   sorted(pv["bands"]) == ["P1z", "P2x", "P2z", "P3x", "P3z"], len(pv["problems"]),
+                   len(pv["warnings"]), pv["inside"]["depth"], ad.row_info("P2z.f2").startswith("y ")],
+                  [1, 1, 1, 1, 1, 1, 26, 1, 1, 0, 1, 0, 0, 0, 1], 1e-9)
+            base = RM.build_sections(ad.design, ad.orig, [0.0, 40.0], 200, ad.settings["te_radius_mm"])
+            for n, x in (("LE.dx3", -80.0), ("LE.dx2", -40.0), ("LE.dx1", -20.0)):
+                ad.set(n, x)
+            fwd = ad.preview()
+            moved = RM.build_sections(ad.design, ad.orig, [0.0, 40.0], 200, ad.settings["te_radius_mm"])
+            ad.set("P3z.f3", 0.5)
+            ad.set("P2z.f3", 0.25)
+            up = RM.build_sections(ad.design, ad.orig, [0.0], 200, ad.settings["te_radius_mm"])[0]
+
+            def mm(sec, i):
+                return np.array([sec.x_le + sec.ctrl[i, 0] * sec.cs, sec.ctrl[i, 1] * sec.cs])
+            check("the LE 80 mm forward at the root, the fractions left at 0: P2 and P3 stay where the original's are "
+                  "in mm, and the rudder lies 0.3 mm inside the original near mid chord, which the measure warns "
+                  "of; P3's fraction 0.5 puts it 1.5 times as high, P2's 0.25 it and P1 1.25 times",
+                  [moved[0].x_le - base[0].x_le, max(np.abs(mm(a, i) - mm(b, i)).max() for a, b in zip(moved, base)
+                                                      for i in (2, 3)), 0.3 < fwd["inside"]["depth"] < 0.4,
+                   0.3 < fwd["inside"]["x_c"] < 0.6, sum("lies inside the original" in w for w in fwd["warnings"]),
+                   mm(up, 3)[1] / mm(base[0], 3)[1], mm(up, 2)[1] / mm(base[0], 2)[1],
+                   mm(up, 1)[1] / mm(base[0], 2)[1]],
+                  [-80.0, 0, 1, 1, 1, 1.5, 1.25, 1.25], 1e-9)
+
+            path = ad.save_space(os.path.join(tmp, "laws_design_space.json"))
+            rec = json.load(open(path))
+            space, design, _ = RM.load_design_space(path)
+            ad2 = XR.RudderAdapter(out_dir=tmp)
+            ad2.load_space(path)
+            x = space.to_vector(design)
+            check("the set-up: the laws, the measure's switch and tolerance saved; rudder_modify.load_design_space "
+                  "gives the optimiser 26 variables (the fractions among them, 0 .. 1) and the design back; the "
+                  "adapter loads it as it was",
+                  [rec["space"]["laws"]["P1z"] == ["P2z", "P2z"], rec["settings"]["keep_inside"],
+                   rec["settings"]["inside_tol_mm"], len(space.names), "P3z.f3" in space.names,
+                   max(abs(a - b) for a, b in zip(space.to_vector(space.to_design(x)), x)),
+                   ad2.laws == ad.laws, ad2.space.all_names == ad.space.all_names,
+                   max(abs(ad2.get(n) - ad.get(n)) for n in ad.space.all_names), ad2.settings["keep_inside"]],
+                  [1, 1, 0.01, 26, 1, 0, 1, 1, 0, 1], 1e-12)
+            shape = ad2.preview()["curves"]["P3x"]
+            ad2.set_laws("P3x")
+            kept = np.abs(ad2.preview()["curves"]["P3x"] - shape).max()
+            said = []
+            for fn in (lambda: ad2.set_laws("P2z", "0", "foo"), lambda: ad2.set_laws("P2z", "0"),
+                       lambda: ad2.set_tangent("P2z", True), lambda: ad2.set_degree(5)):
+                try:
+                    fn()
+                    said.append("")
+                except ValueError as exc:
+                    said.append(str(exc))
+            ad2.set_tangent_all(True)
+            check("laws taken off a curve: its control values again, its shape kept as closely as they can; a text "
+                  "that is no law, one law alone, a tangent join for a curve between laws and another section "
+                  "degree are refused, saying why; tangent at H for all leaves the curves between laws as they are",
+                  ["P3x" not in ad2.laws, [r.name for r in ad2.curve_rows("P3x")][-1] == "P3x.v3",
+                   kept < 0.02, "'foo' is not a name a law can use" in said[0],
+                   "a low law and a high law, or neither" in said[1], "lies between bounding laws" in said[2],
+                   "keeps its section degree" in said[3], ad2.laws_of("P2z") == ad.laws_of("P2z"),
+                   ad2.design.curves["P2z"].join == "G0", ad2.design.curves["LE"].join == "G1"], [1] * 10, 0)
+            res = ad.build_xcad("laws", plot=True, cad=XL.occ_available())
+            jrec = json.load(open(res["case"]["paths"]["json"]))
+            got = [jrec["design"]["laws"]["P3z"][1] == ad.laws_of("P3z")[1],
+                   os.path.exists(res["case"]["paths"]["png"]),
+                   json.load(open(res["case"]["paths"]["space"]))["space"]["laws"] == rec["space"]["laws"]]
+            if res["loft"] is not None:
+                got += [res["loft"].valid, bool(res["loft"].joint)]
+            check("the case written with laws: the design's JSON and the set-up name them, the check plot draws "
+                  "them; its CAD one valid solid, lofted below and above H and joined there",
+                  got, [1] * len(got), 0)
+    finally:
+        os.chdir(cwd)
+
+
+def test_gui_laws():
+    print("\nthe window: a curve's laws, keep the original inside, the Rudder slot's two options")
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+    except Exception as exc:                                   # no tkinter or no display
+        print(f"       skipped: {exc}")
+        return
+    import importlib.util
+    import xgeom_tool as XT
+    cwd = os.getcwd()
+    os.chdir(HERE)
+
+    def settle(n=6):
+        for _ in range(n):
+            root.update()
+            time.sleep(0.02)
+
+    def typed(side, text):
+        app.law[side].delete(0, "end")
+        app.law[side].insert(0, text)
+    try:
+        app = XT.App(root, "rudder")
+        settle()
+        app.tangent_all.set(False)
+        app.on_tangent_all()
+        app.curve.set("P3z")
+        app.on_curve()
+        settle()
+        first = [app.law["low"].get(), app.law["high"].get(), app.keep_inside.get(), app.inside_tol.get(),
+                 app.inside_label.cget("text")]
+        typed("low", "orig.P3z * orig.chord / chord")
+        app.on_laws()                                              # one law alone waits for the other
+        alone = app.ad.laws_of("P3z")
+        typed("high", "2 orig.P3z*orig.chord/chord")
+        app.on_laws()
+        app.update_views()
+        settle()
+        rows = [r.name for r in app.rows]
+        set_ = [app.ad.laws_of("P3z"), app.law["low"].get(), app.law["high"].get(), app.tangent.get()]
+        typed("high", "2*foo")
+        app.on_laws()
+        bad = [app.status.cget("background") == XT.STATUS["error"][0], "'foo' is not a name a law can use" in
+               app.status.cget("text"), app.ad.laws_of("P3z") == set_[0]]
+        typed("low", "")
+        typed("high", "")
+        app.on_laws()
+        settle()
+        check("the Curve box's low law and high law: one alone waits; both given, the curve lies between them (the "
+              "boxes as the tool writes them, its rows the fractions, its tangent switch off); a text that is no "
+              "law is said in red and changes nothing; both emptied, its laws are taken off",
+              [first == ["", "", True, "0.01", "now: the original is enclosed"], alone is None,
+               set_ == [("orig.P3z*orig.chord/chord", "2*orig.P3z*orig.chord/chord"), "orig.P3z*orig.chord/chord",
+                        "2*orig.P3z*orig.chord/chord", False], "P3z.f1" in rows and "P3z.v1" not in rows, *bad,
+               app.ad.laws_of("P3z") is None, "P3z.v1" in [r.name for r in app.rows]], [1] * 9, 0)
+        app.set_value("P3z.v3", 0.9 * app.ad.get("P3z.v3"), None)
+        app.update_views()
+        inside = [app.inside_label.cget("text").startswith("now: inside the original by up to"),
+                  app.status.cget("background") == XT.STATUS["warn"][0], "lies inside the original" in
+                  app.status.cget("text")]
+        app.inside_tol.delete(0, "end")
+        app.inside_tol.insert(0, "abc")
+        app.on_keep_inside()
+        refused = [app.status.cget("background") == XT.STATUS["error"][0], app.inside_tol.get() == "0.01"]
+        app.inside_tol.delete(0, "end")
+        app.inside_tol.insert(0, "3")
+        app.on_keep_inside()
+        app.update_views()
+        wide = [app.ad.settings["inside_tol_mm"], app.status.cget("background") == XT.STATUS["ok"][0]]
+        app.keep_inside.set(False)
+        app.on_keep_inside()
+        app.update_views()
+        check("the Region box's keep the original inside: a section lowered shows how far inside and warns; a "
+              "tolerance that is no number is refused; a wider one stops the warning; unticked, nothing is measured",
+              [*inside, *refused, *wide, app.ad.settings["keep_inside"], app.inside_label.cget("text") == ""],
+              [1, 1, 1, 1, 1, 3.0, 1, 0, 1], 0)
+        if importlib.util.find_spec("xgeom_wing") is None:
+            print("       the Rudder slot's two options: skipped, the planar model is not here (no xgeom_wing.py)")
+            return
+        ad_mod, ask = app.ad, XT.filedialog.askopenfilename
+        app.vrudder.set("new")
+        app.on_rudder()
+        settle()
+        new = [XT.rudder_of(app.ad), app.ad.title, app.vrudder.get(), type(app.rudders.get("modify")).__name__]
+        ad_new = app.ad
+        app.set_value("span", 240.0, None)
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                mine = app.ad.save_file(os.path.join(tmp, "mine.txt"))
+                app.set_value("span", 200.0, None)
+                XT.filedialog.askopenfilename = lambda **kw: mine
+                app.on_load_params()                               # a planar rudder's file: into the new rudder
+                settle()
+                loaded = [XT.rudder_of(app.ad), app.ad.get("span"), app._job is None]
+                app.vrudder.set("modify")
+                app.on_rudder()
+                settle()
+                back = [app.ad is ad_mod, app.rudders.get("new") is ad_new, hasattr(app, "keep_inside")]
+                app.vrudder.set("new")
+                app.on_rudder()
+                settle()
+                again = [app.ad is ad_new, app.ad.get("span")]
+                setup = ad_mod.save_space(os.path.join(tmp, "m_design_space.json"))
+                XT.filedialog.askopenfilename = lambda **kw: setup
+                app.on_load_params()                               # a set-up of the other option: the slot on it
+                settle()
+                over = [XT.rudder_of(app.ad), app.rudders.get("new") is ad_new, app.vrudder.get()]
+            finally:
+                XT.filedialog.askopenfilename = ask
+        check("the Rudder box: design a new rudder puts the slot on the planar model (rudder.txt the first time), "
+              "modify an existing rudder back on the one modified below H; each keeps its state; Load ... of a "
+              "planar rudder's file goes into the new rudder, of a set-up modified below H onto that option",
+              [new == ["new", "Rudder (rudder.txt)", "new", "RudderAdapter"], loaded == ["new", 240.0, True],
+               back == [True, True, True], again == [True, 240.0], over == ["modify", True, "modify"]], [1] * 5, 0)
+    finally:
+        root.destroy()
+        os.chdir(cwd)
+
+
 def test_from_cad():
     print("\nset-ups from other files (xgeom_from_cad.py, the rudder adapter on an extraction folder)")
     import modify_control as MC
@@ -913,10 +1153,12 @@ def main():
     test_loft()
     test_adapter()
     test_span()
+    test_laws()
     test_from_cad()
     test_temp_cad()
     if "--gui" in sys.argv:
         test_gui()
+        test_gui_laws()
     print()
     if _FAILED:
         print(f"{len(_FAILED)} check(s) FAILED: " + ", ".join(_FAILED))

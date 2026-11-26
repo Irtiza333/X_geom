@@ -41,6 +41,15 @@ assembly. XGeom is the pre-optimization design step.
   dependent, like is the case in my msc prop optimization"): low or high is then an expression in place of a
   number, the variable keeps its place between its bounds, and its entry in an optimiser's design vector is
   that place, the fraction 0 to 1, as the MSc pipeline's y4_frac, d1 and d2 are.
+- Bounds between curves, and the original as a lower bound (26 Nov 2026, the user: rudder optimisation commonly
+  builds on an existing rudder, adding mass to the original structure, "so it is a valid bound law to have";
+  the tool stays general: two options for a rudder, to modify an existing one, where "the original shape in
+  the modified zone becomes the lower bounding law to abide by", or "to let people design a rudder for a
+  vehicle (with no original shape)"). A bound now has three levels: a number; an expression of other
+  variables (a dependent bound); a law between curves (a bounding law: the curve lies between a low law and a
+  high law, each an expression of other curves at the same span position, and its variables are the fraction
+  of the way). Bounding laws are built for the rudder modified below H (Bounding laws, below); writing them
+  on the curve line of a component file, for the blade, the wing and the hull, is the next step.
 
 ## Component file
 
@@ -298,6 +307,92 @@ samples para_control's own variables, which are these fractions already, with it
 `violations`, `crossed`; `SpaceRelations` for the design spaces, `AdapterRelations` for the tool's adapters).
 The self-check is `_xgeom_relations_test.py`.
 
+## Bounding laws: a curve between two laws
+
+A curve of the rudder modified below H may be given a low law and a high law (26 Nov 2026). Its value at every
+height y is then
+
+    value(y) = low(y) + f(y) [high(y) - low(y)]
+
+where f is the curve's own Bezier law over the height, its control values the fractions 0 to 1. A Bezier curve
+lies within its control values, so the curve lies between its two laws at every height whatever the fractions
+are. The fractions are the curve's variables: `P2z.f1`, `P2z.f2`, .. (C1 to the root's Cn; bounds 0 to 1), with
+the control heights `P2z.d1` .. as before. C0, at H, is the fraction that puts the curve on the original there
+(0 when the two laws meet at H), so such a curve joins the original with its value only (no tangent switch),
+and the CAD is two lofts joined at H.
+
+A law is a number or an expression in the grammar of the relations (+ - * / and brackets), with `min( )` and
+`max( )` of two or more expressions (new on 26 Nov, in relations and dependent bounds too), written as one
+word. The names it may use, each meaning the value at the same height:
+
+| name | |
+|---|---|
+| `LE`, `P1x`, `P1z`, `P2x`, .. | the design's own curves (LE: x of the leading edge, mm; the others: fractions of the sharp chord) |
+| `orig.LE`, `orig.P2z`, .. | the original's |
+| `TE` | x of the TE line, mm |
+| `chord` | the section's sharp chord, mm: the length its coordinates are fractions of |
+| `orig.chord` | the original's sharp chord at that height |
+
+So `orig.P2z*orig.chord/chord` is the original's P2 height in mm, as a fraction of the new chord: as the low law
+of P2z it keeps P2 at least as high as the original's wherever the LE goes. The curves are worked out in the
+order of their dependence; a curve cannot use itself, a loop is refused (the chord counts as the LE: it follows
+from it, so the LE's own laws cannot use it). The chord a law names is the sharp chord of the section the laws
+give, found with them (a fixed point of a few steps; it equals the built sections' to 1e-12 mm).
+
+- The low law is where the fraction is 0; it may be the larger of the two (the fraction then runs down).
+- Low and high the same expression set the curve: no variables (P1z with `P2z` and `P2z` is as high as P2).
+- Warnings (the preview's, in the status bar): laws that cross along the span; the original at H outside its
+  laws (the curve then leaves them near H); laws that meet at H away from the original (a step at H). A law
+  that gives no number (a division by zero) is a problem: no build.
+- A design with laws keeps its section degree (the laws name its curves).
+
+In the set-up JSON: `space.laws` (`{"P2z": ["orig.P2z*orig.chord/chord", "10*orig.P2z*orig.chord/chord"]}`) and
+`space.te_radius_mm` (the TE radius the chord is found with); the slots of such a curve are its `d` and `f`
+records. `<case>_design.json` has `design.laws`, and for a curve with laws its `low` and `high` and its
+fractions as `value`.
+
+### The original as the lower bound (keep the original inside)
+
+Laws and bounds act on control points. They make most designs enclose the original, not all: with every
+fraction 0 and the root LE 80 mm forward the wind-tunnel rudder's modified section lies 0.34 mm inside the
+original near mid chord. What tells is a measure on the built sections: `rudder_modify.inside_original(design,
+orig, n_sections, te_radius_mm)` gives the largest depth (mm) of the modified half-thickness under the
+original's at the same x, over the sections from the root to H (`depth`, with its height `y` and station
+`x_c`; `depths` per section; 0 for the original itself). The set-up's settings carry `keep_inside` (default
+on) and `inside_tol_mm` (default 0.01): the tool warns when the depth is beyond the tolerance, and an
+optimiser keeps `depth <= inside_tol_mm` as a constraint (`rudder_modify.load_design_space`'s text shows how).
+
+### The set-up that builds on the original (rudder_laws_setup.py)
+
+`python rudder_laws_setup.py [--a 10] [--b 10]` writes `outputs/modified/add_to_original_design_space.json`
+for the wind-tunnel rudder: the rule of the planar-rudder optimisation (the folder `Planar_Rudder_Optimization`)
+as bounding laws. Every curve a cubic, no curve tangent at H, 26 free variables (H; 5 for the LE; 5 for each of
+P2x, P2z, P3x, P3z); P1x held at 0. With X2 = `orig.LE+orig.P2x*orig.chord` (x of the original P2, mm), TE0 =
+`orig.LE+orig.chord` (the original's sharp TE), y2 = `orig.P2z*orig.chord` and y3 = `orig.P3z*orig.chord` (the
+original P2 and P3 heights, mm):
+
+| curve | low law (fraction 0: the original) | high law (fraction 1) |
+|---|---|---|
+| P2z | `y2/chord` | `a*y2/chord` |
+| P1z | `P2z` | `P2z` |
+| P3z | `y3/chord` | `b*y3/chord` |
+| P2x | `(X2-LE)/chord` | `0` |
+| P3x | `min(TE0-LE, X2-LE+(orig.P3x-orig.P2x)*orig.chord*(P3z*chord-y2)/(y3-y2))/chord` | `max(X2-LE, TE0-LE+(orig.P3x-1)*orig.chord*P3z*chord/y3)/chord` |
+
+The LE is a free cubic with dependent bounds: `LE.dx3` -160 to 0; `LE.d1` 0.05 to 0.95; `LE.d2` 0 to
+`1-0.05/(1-d1)`; `LE.dx1` from `dx3-0.07*(1-d1)*H` to 0 and `LE.dx2` from `dx3-0.07*(1-d1)*(1-d2)*H` to 0 (the
+control points between the original LE at their heights and the root's x; 0.07 the original LE's slope).
+Checked against the folder's own code on 40 random designs (the same 26 numbers, the original's P2 and P3
+taken from each section's own LE): P0 to P3 of every section agree within 0.08 mm with a = b = 2 and within
+0.23 mm with a = b = 10 (their table read linearly between sections and their laws on 100 samples, against
+fits and exact curves here).
+
+Code: `xgeom_relations.py` (`parse_law`, `sequence`, `min`/`max`), `rudder_modify.py` (`Design.laws`,
+`law_names`, `canonical_laws`, `law_state`, `law_bands`, `law_warnings`, `with_laws`, `control_points`,
+`inside_original`; `DesignSpace(laws=, te_radius_mm=)`), `xgeom_rudder.py` (`set_laws`, `laws_of`,
+`law_defined`, `law_names`, `set_keep_inside`). Self-checks: `_xgeom_relations_test.py`,
+`_rudder_modify_test.py`, `_xgeom_tool_test.py`.
+
 ## Assembly file
 
 ```
@@ -349,6 +444,16 @@ The self-check is `_xgeom_relations_test.py`.
   the limits the variable has now; the slider runs over them, and the variable follows the ones it depends on.
   With `=` the row's slider, value and free box are off. Unticked again: independent, the relation dropped and
   the dependent bounds numbers where they are.
+- The rudder modified below H (26 Nov 2026): the Curve box has a low law and a high law box (both given: the
+  curve lies between them and its rows are the fractions; one alone waits for the other; both emptied: no
+  laws; the curve view draws the two laws). The Region box has keep the original inside with its tolerance
+  (mm) and, beside it, how far inside the rudder is now.
+- The Rudder slot has two options (26 Nov 2026; a Rudder box at the top of its panel, where the planar model
+  is): modify an existing rudder (rudder-h: the panel above) or design a new rudder (the planar model, the
+  wing's panel, starting from the new sample `rudder.txt`: 200 mm span, chord 180 to 152 mm, LE swept 14 mm,
+  NACA 0018). Each keeps its state while the other is shown. In the new rudder's File box Load ... of a planar
+  rudder's file loads it there, and of a rudder-h set-up puts the slot on that option; a new rudder saved with
+  Save set-up loads in the other option as the original to modify (a planar rudder's file there, below).
 - From CAD ... (13 Nov 2026, `xgeom_from_cad.py`): in the File box of the blade and the hull and in the
   rudder's Set-up box. A STEP or IGES file of the component is extracted (blade_extraction.py, hull_extraction's
   stations, Rudder_geom_extraction.py with the per-section fits), every curve is fitted in each candidate form
@@ -372,8 +477,8 @@ The self-check is `_xgeom_relations_test.py`.
   the LE, the LE and TE lines straight, the section the rows' mean thickness shape
   (`<case>_section.dat`) with the change points that fit best, the tilt and the radius cap of parameters.json.
   The wind-tunnel rudder's is `outputs/wind_tunnel_rudder.txt`.
-- The Rudder slot shows the modified-below-H model (rudder-h, its JSON set-ups and From CAD) whatever is
-  loaded. Since 19 Nov 2026 (the user: loading BB2's or the wind-tunnel rudder's set-up must give the same
+- The Rudder slot's modify option shows the modified-below-H model (rudder-h, its JSON set-ups and From CAD)
+  whatever is loaded there. Since 19 Nov 2026 (the user: loading BB2's or the wind-tunnel rudder's set-up must give the same
   panel, tangent at H with it) `--file` with a planar rudder's component file, or Load ... of one in the
   Set-up box, makes that rudder the rudder-h model's original (`xgeom_from_cad.rudder_from_planar`; `python
   xgeom_from_cad.py rudder <file>.txt` the same without the window): its sections, tip and cap written as an
@@ -381,7 +486,8 @@ The self-check is `_xgeom_relations_test.py`.
   points each), the sections fitted (about 25 s the first time), the set-up
   `<name>_original_design_space.json` there (the rudder unchanged, H 0.1 to 0.4 of the top section, its TE
   radius), read back while the file and its section file are unchanged; the cases of it go to that folder.
-  From 13 to 19 Nov such a file put the rudder on the planar model (the wing's panel).
+  From 13 to 19 Nov such a file put the rudder on the planar model (the wing's panel); since 26 Nov that
+  model is the slot's other option, design a new rudder.
 - Vehicle tab (step 4): Load assembly ... and Save assembly ... (each component written to its file; old .dat
   sources as new .txt files beside the assembly).
 - `python xgeom_tool.py --file <component file>` (`--params` the same); `--assembly <file>` (step 4).
@@ -483,3 +589,19 @@ the bounds numbers where they are); `is_dependent(name)` is true for a dependent
 moves the variables whose bounds use `name` with it; `preview()["warnings"]` also names bounds that cross. The
 spaces: `factors`, `dependent_bounds`, `bound_text(name)`, `bounds_of(values)`; `to_vector` and `to_design`
 carry the fractions; `xgeom_files.Var` has `lo_expr` and `hi_expr` (`''` for a number).
+
+26 Nov 2026: bounding laws, the original as the lower bound, and the Rudder slot's two options (Bounding laws,
+above; GUI). Nothing changes for a set-up without laws except two new settings (`keep_inside` true,
+`inside_tol_mm` 0.01) and, in `space`, `laws` (empty) and `te_radius_mm`. For the web app: additive. The
+rudder adapter gains `laws_of(curve)`, `set_laws(curve, low, high)`, `law_defined(curve)`, `law_names()`,
+`set_keep_inside(on, tol_mm)`; its `preview()` gains `"bands"` ({curve: (low, high)} at `yy`, for the curves
+with laws) and `"inside"` (`inside_original`'s result, None when not measured), and its `"warnings"` may name
+the laws and the depth inside the original. A curve with laws has variables `<curve>.f<k>` in place of
+`<curve>.v<k>` (rows "C1 fraction" ..), its `design.curves[c].v` are those fractions and its join is G0:
+`rudder_modify.control_points(design, orig, curve, te_radius_mm)` gives its control points as a plot of the
+curve shows them, and `curve_values(design, ys, orig, te_radius_mm)` every curve's values (a design with laws
+needs the original there). `set_tangent(curve, True)` and `set_degree` raise ValueError for a curve, or a
+design, with laws. `xgeom_relations`: `parse_law`, `sequence`, `min( )`/`max( )` in every expression;
+`bezier_section.te_x_from`; `rudder_modify.sharp_chord` (bezier_section's, faster). New files: `rudder.txt`
+(the new rudder's start) and `rudder_laws_setup.py` (a script; the app does not need it). The self-checks:
+relations 138 with the window, rudder_modify 147, the tool 83 with the window, wing 80.

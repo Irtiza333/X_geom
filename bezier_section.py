@@ -279,6 +279,38 @@ def te_x(ctrl, r):
     return fillet(ctrl, r)["x_te"]
 
 
+def te_x_from(ctrl, r, t, tol=1e-10, max_iter=12):
+    """(x of the rounded TE, the tangent point's parameter), (m,) each, for the
+    TE radius r, as fillet finds them, by Newton's method from the parameters
+    t (m,): those of nearly the same sections or radius, where a few steps do
+    what fillet's bisection takes 64 for. None when Newton does not settle
+    (take fillet then)."""
+    c = as_stack(ctrl)
+    m, n = c.shape[0], c.shape[1] - 1
+    r = np.broadcast_to(np.asarray(r, dtype=float), (m,))
+    d1 = n * np.diff(c, axis=1)
+    d2 = (n - 1) * np.diff(d1, axis=1)
+    t = np.array(t, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        for _ in range(int(max_iter)):
+            p, dp, ddp = (_eval(q, t[:, None])[:, 0] for q in (c, d1, d2))
+            slope = dp[:, 1] / dp[:, 0]
+            h = np.sqrt(1.0 + slope * slope)
+            dg = dp[:, 1] * h + p[:, 1] * slope * (ddp[:, 1] * dp[:, 0] - dp[:, 1] * ddp[:, 0]) / (dp[:, 0]**2 * h)
+            step = (p[:, 1] * h - r) / dg
+            t = t - step
+            if not np.all((t > 0.0) & (t < 1.0)):            # left the curve (or no number)
+                return None
+            if np.max(np.abs(step)) <= tol:
+                break
+        else:
+            return None
+        p, dp = (_eval(q, t[:, None])[:, 0] for q in (c, d1))
+        slope = dp[:, 1] / dp[:, 0]
+    cx = p[:, 0] + slope * p[:, 1]
+    return cx + np.hypot(p[:, 0] - cx, p[:, 1]), t
+
+
 def sharp_chord(ctrl, chord, r_abs, tol=1e-13, max_iter=50):
     """The sharp chord cs of each section whose TE, rounded with the radius
     r_abs (units of chord), lies `chord` behind its LE: cs = chord / x_te(r_abs

@@ -26,9 +26,14 @@ The variable stays where it is until a relation would break and is then moved on
 the relations of a design vector (violations) or moves it onto them (project): the MSc pipeline's coupled
 limits (chord_sum, pitch_diff: reject or project).
 
-An expression: numbers, names, + - * / and brackets ('0.5v4' is 0.5*v4). Several relations are separated by
-commas ('> 0.5*v4, < 0.9*v0'). A variable is named as the files name it ('chord.v2', 'span'); one of the same
-curve by its own key too ('v2'). A variable may depend on dependent ones but not, in a loop, on itself.
+An expression: numbers, names, + - * /, brackets and min( ) and max( ) ('0.5v4' is 0.5*v4). Several relations are
+separated by commas ('> 0.5*v4, < 0.9*v0'). A variable is named as the files name it ('chord.v2', 'span'); one of
+the same curve by its own key too ('v2'). A variable may depend on dependent ones but not, in a loop, on itself.
+
+A bounding law (26 Nov 2026) is the same one level up: a curve declared between a low law and a high law,
+expressions of other curves at the same span position (parse_law). The curve's own variables are then the
+fraction of the way from the low law to the high one, and its value there is low + fraction (high - low), so it
+lies between its laws at every position (the rudder modified below H has them: rudder_modify.py).
 
 One structure in every set-up file (claude/xgeom-file-formats.md): the var line of a component file,
 
@@ -59,6 +64,7 @@ Standard library and numpy only.
 
 from __future__ import annotations
 
+import functools
 import math
 import re
 from dataclasses import dataclass
@@ -73,6 +79,7 @@ _SPELLINGS = (("\u2264", "<="), ("\u2265", ">="), ("==", "="))
 _NUMBER = re.compile(r"(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
 _NAME = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?")
 _PREC = {"+": 1, "-": 1, "*": 2, "/": 2}
+FUNCTIONS = {"min": np.minimum, "max": np.maximum}
 
 
 def curve_of(name):
@@ -103,7 +110,7 @@ def _tokens(text):
             out.append(("name", m.group()))
             i = m.end()
             continue
-        if ch in "+-*/()":
+        if ch in "+-*/(),":
             if ch == "(" and out and out[-1][0] == "num":    # 2(a + b) is 2*(a + b)
                 out.append(("op", "*"))
             out.append(("op", ch))
@@ -114,7 +121,8 @@ def _tokens(text):
 
 
 class _Parser:
-    """expr: term (+|- term)*; term: factor (*|/ factor)*; factor: number | name | (expr) | -factor."""
+    """expr: term (+|- term)*; term: factor (*|/ factor)*; factor: number | name | (expr) | -factor |
+    min(expr, expr, ...) | max(expr, expr, ...)."""
 
     def __init__(self, tokens, resolve):
         self.t, self.i, self.resolve = tokens, 0, resolve
@@ -145,6 +153,19 @@ class _Parser:
         kind, v = self.take()
         if kind == "num":
             return ("num", v)
+        if kind == "name" and self.peek() == ("op", "("):     # a function: min( ) or max( )
+            if v not in FUNCTIONS:
+                raise ValueError(f"'{v}(' is not a function (there are min( ) and max( ))")
+            self.take()
+            args = [self.expr()]
+            while self.peek() == ("op", ","):
+                self.take()
+                args.append(self.expr())
+            if self.take() != ("op", ")"):
+                raise ValueError("a bracket is not closed")
+            if len(args) < 2:
+                raise ValueError(f"{v}( ) takes two or more expressions, separated by commas")
+            return ("fn", v, tuple(args))
         if kind == "name":
             return ("var", self.resolve(v))
         if (kind, v) == ("op", "("):
@@ -170,6 +191,8 @@ def _tree(text, resolve):
         kind, v = tokens[p.i]
         if v == ")":
             raise ValueError("a bracket too many")
+        if v == ",":
+            raise ValueError("a comma belongs inside min( ) or max( )")
         raise ValueError(f"an operator is missing before '{_number(v) if kind == 'num' else v}'")
     return node
 
@@ -189,7 +212,9 @@ def _text(node, curve=None, spaced=True):
         return name[len(curve) + 1:] if curve and name.startswith(curve + ".") else name
     if kind == "neg":
         inner = _text(node[1], curve, spaced)
-        return "-" + (inner if node[1][0] == "var" else f"({inner})")
+        return "-" + (inner if node[1][0] in ("var", "fn") else f"({inner})")
+    if kind == "fn":
+        return f"{node[1]}({(', ' if spaced else ',').join(_text(a, curve, spaced) for a in node[2])})"
     a, b = node[1], node[2]
     ta, tb = _text(a, curve, spaced), _text(b, curve, spaced)
     if a[0] in _PREC and _PREC[a[0]] < _PREC[kind]:
@@ -200,24 +225,47 @@ def _text(node, curve=None, spaced=True):
 
 
 def _value(node, values):
+    """The tree's value at {name: value}; the values are numbers, or arrays (a law at many positions), which
+    then give an array (a division by zero: inf or nan there, no error)."""
     kind = node[0]
     if kind == "num":
         return node[1]
     if kind == "var":
-        return float(values[node[1]])
+        v = values[node[1]]
+        return v if isinstance(v, np.ndarray) else float(v)
     if kind == "neg":
         return -_value(node[1], values)
+    if kind == "fn":
+        out = functools.reduce(FUNCTIONS[node[1]], [_value(a, values) for a in node[2]])
+        return out if isinstance(out, np.ndarray) and out.ndim else float(out)
     a, b = _value(node[1], values), _value(node[2], values)
+    if kind == "/" and (isinstance(a, np.ndarray) or isinstance(b, np.ndarray)):
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return a / b
     return a + b if kind == "+" else a - b if kind == "-" else a * b if kind == "*" else a / b
 
 
 def _names(node, out):
     if node[0] == "var":
         out.append(node[1])
+    elif node[0] == "fn":
+        for child in node[2]:
+            _names(child, out)
     elif node[0] != "num":
         for child in node[1:]:
             _names(child, out)
     return out
+
+
+def _split(source):
+    """A text split at its commas and semicolons, those inside brackets left alone (min(a, b))."""
+    parts, depth, start = [], 0, 0
+    for i, ch in enumerate(source):
+        depth += (ch == "(") - (ch == ")")
+        if ch in ",;" and depth <= 0:
+            parts.append(source[start:i])
+            start = i + 1
+    return parts + [source[start:]]
 
 
 def _resolver(names, curve):
@@ -335,7 +383,7 @@ def parse(relation, names=None, curve=None, own=None):
         return ()
     resolve = _resolver(names, curve)
     out = []
-    for part in re.split(r"[,;]", source):
+    for part in _split(source):
         part = part.strip()
         if not part:
             continue
@@ -359,6 +407,53 @@ def parse(relation, names=None, curve=None, own=None):
     return tuple(out)
 
 
+def parse_law(law, names, own=None):
+    """A bounding law, as a set-up has it: an expression of the names a law may use there (curves at the same
+    span position, the component's built-in names), or a number. own: the curve the law is for, which it
+    cannot use. Returns an Expression, whose value(values) takes numbers or arrays ({name: array over the
+    positions}). ValueError says what is wrong with the text."""
+    source = str(law if law is not None else "").strip()
+    if not source:
+        raise ValueError("a bounding law is a number or an expression of other curves")
+    known = set(names)
+
+    def resolve(token):
+        if token in known:
+            return token
+        raise ValueError(f"'{token}' is not a name a law can use here ({', '.join(names)})")
+    try:
+        e = Expression(_tree(source, resolve))
+    except ValueError as exc:
+        raise ValueError(f"'{source}': {exc}") from None
+    if own is not None and own in e.names:
+        raise ValueError(f"'{source}': a curve's law cannot use the curve itself")
+    return e
+
+
+def sequence(uses, what="variables"):
+    """The names of {name: the names it uses} in the order of their dependence, each after the ones it uses
+    (names used that are not keys are left out); ValueError for a loop, which is named."""
+    out, state = [], {}
+
+    def visit(n, path):
+        if state.get(n) == 2:
+            return
+        if state.get(n) == 1:
+            loop = path[path.index(n):] + [n]
+            raise ValueError(f"{what} that depend on each other in a loop (" + " -> ".join(loop)
+                             + "): one of them has to be independent")
+        state[n] = 1
+        for m in uses[n]:
+            if m in uses:
+                visit(m, path + [n])
+        state[n] = 2
+        out.append(n)
+
+    for n in uses:
+        visit(n, [])
+    return out
+
+
 def text(relations, curve=None):
     """The relations as one text, as the files write it and parse reads it back ('' for none); the variables of
     curve by their keys."""
@@ -371,27 +466,8 @@ def order(relations, exprs=None):
     ones its relations and bounds use; ValueError for a loop."""
     exprs = exprs or {}
     nodes = list(dict.fromkeys(list(relations) + list(exprs)))
-    known = set(nodes)
-    uses = {n: [m for r in relations.get(n, ()) for m in r.names if m in known]
-            + [m for e in exprs.get(n, ()) if e is not None for m in e.names if m in known] for n in nodes}
-    out, state = [], {}
-
-    def visit(n, path):
-        if state.get(n) == 2:
-            return
-        if state.get(n) == 1:
-            loop = path[path.index(n):] + [n]
-            raise ValueError("variables that depend on each other in a loop (" + " -> ".join(loop)
-                             + "): one of them has to be independent")
-        state[n] = 1
-        for m in uses[n]:
-            visit(m, path + [n])
-        state[n] = 2
-        out.append(n)
-
-    for n in nodes:
-        visit(n, [])
-    return out
+    return sequence({n: [m for r in relations.get(n, ()) for m in r.names]
+                     + [m for e in exprs.get(n, ()) if e is not None for m in e.names] for n in nodes})
 
 
 def _tol(*xs):

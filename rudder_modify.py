@@ -31,6 +31,24 @@ Degree    The original sections are quartics (the PSO section fits of the
           (exact), so the original shape is the same whatever the degree; adding
           a section control point raises the degree by one and adds two curves
           (change_degree carries a design over).
+Laws      A curve may instead lie between a low law and a high law (bounding
+          laws, Design.laws, with_laws): expressions, in the grammar of
+          xgeom_relations, of the other curves at the same height ("P3z"), of
+          the original's ("orig.P2z"), of the TE line ("TE") and of the sharp
+          chords ("chord", "orig.chord"; law_names). The curve's control
+          values are then the fraction of the way from its low law to its high
+          one, 0 .. 1, and
+              value(y) = low(y) + fraction(y) [high(y) - low(y)],
+          so it lies between its laws at every height whatever the fractions
+          are. "orig.P2z*orig.chord/chord" as the low law of P2z keeps that
+          control point at least as high in mm as the original's wherever the
+          LE goes. The low law is where the fraction is 0; it may be the
+          larger of the two (the fraction then runs down). Such a curve meets
+          the original at H with its value only (join "G0").
+Inside    inside_original measures, on the built sections, how far the
+          modified rudder goes inside the original (mm; 0 when the original is
+          enclosed). Laws and bounds act on control points and make most
+          designs pass; the measure is what tells.
 Original  The original shape is known at every height up to z_top from Bezier
           fits to its distributions (fit_original): the LE of corner_points.dat
           and the coordinates of the per-section fits of fit_section_table (the
@@ -85,6 +103,7 @@ from __future__ import annotations
 
 import copy
 import datetime
+import functools
 import json
 import os
 import re
@@ -99,6 +118,9 @@ from replica_funcs import bernstein, build_half_airfoil, mirror_selig
 BASE_DEGREE = 4                  # the section table's fits are quartics; no lower degree is exact
 DEFAULT_ORDER = 3
 _TOL_Y = 1.0e-9                  # mm, slack on heights read back from files
+TE_RADIUS = 0.75                 # mm, the TE radius the builders take when none is given (build_sections)
+_LAW_TOL = 1.0e-9                # a band is closed when its laws are this close (times the larger of 1 and them)
+_LAW_STEPS = 60                  # steps, at most, of the fixed point that finds the chord the laws use
 
 
 def curve_names(degree):
@@ -537,14 +559,18 @@ class CurveDesign:
 class Design:
     """The modified shape below H: one CurveDesign for each of
     curve_names(degree). pin() sets the control points that follow from the
-    original shape at H."""
+    original shape at H. laws = {curve: (low law, high law)} puts curves
+    between bounding laws (with_laws): the control values of such a curve are
+    its fractions of the way from its low law to its high one."""
     H: float
     curves: dict
     degree: int = None
+    laws: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if self.degree is None:
             self.degree = _degree_of(self.curves)
+        self.laws = {str(c): (str(v[0]), str(v[1])) for c, v in dict(self.laws or {}).items()}
 
     @property
     def names(self):
@@ -554,28 +580,321 @@ class Design:
         return copy.deepcopy(self)
 
     def curve(self, name):
-        """The curve as a Bezier in the (y, value) plane, heights in mm."""
+        """The curve as a Bezier in the (y, value) plane, heights in mm (a
+        curve with bounding laws: its fraction between them; curve_values
+        gives the values of every curve)."""
         c = self.curves[name]
         return Bezier(np.column_stack((np.asarray(c.s, dtype=float) * self.H, c.v)), c.w)
+
+
+# --------------------------------------------------------------------------
+# Bounding laws
+# --------------------------------------------------------------------------
+
+def law_names(names):
+    """The names a bounding law of a design with these curves may use: the
+    curves themselves (the design's value at the same height), the original's
+    ("orig.P2z"), "TE" (x of the TE line, mm), "chord" (the section's sharp
+    chord, mm: the length its coordinates are fractions of) and "orig.chord"
+    (the original's sharp chord at that height)."""
+    names = list(names)
+    return names + [f"orig.{c}" for c in names] + ["TE", "chord", "orig.chord"]
+
+
+def _law_key(laws):
+    return tuple((c, v[0], v[1]) for c, v in sorted(laws.items()))
+
+
+@functools.lru_cache(maxsize=256)
+def _law_plan(key, names):
+    """The laws ((curve, low, high), ...) of a design with the curves `names`,
+    parsed: ({curve: (low, high) as expressions}, the curves that have laws in
+    the order of their dependence, whether a law uses the chord, the curves
+    defined by their laws (low and high the same expression: nothing left to
+    vary)). ValueError for a law that cannot be read, a curve that uses
+    itself, the LE using the chord, curves that depend on each other in a loop
+    (the chord counts as the LE: it follows from it)."""
+    allowed = law_names(names)
+    exprs = {}
+    for c, low, high in key:
+        if c not in names:
+            raise ValueError(f"'{c}' is not a curve of this design ({', '.join(names)})")
+        pair = []
+        for side, text in (("low", low), ("high", high)):
+            try:
+                e = REL.parse_law(text, allowed, own=c)
+            except ValueError as exc:
+                raise ValueError(f"the {side} law of {c}, {exc}") from None
+            if c == "LE" and "chord" in e.names:
+                raise ValueError(f"the {side} law of LE, '{text}': the chord follows from the LE, so the laws "
+                                 f"of the LE cannot use it")
+            pair.append(e)
+        exprs[c] = tuple(pair)
+    uses = {c: [("LE" if n == "chord" else n) for e in pair for n in e.names] for c, pair in exprs.items()}
+    order = REL.sequence(uses, "curves")
+    uses_chord = any("chord" in e.names for pair in exprs.values() for e in pair)
+    return exprs, tuple(order), uses_chord, frozenset(c for c, (lo, hi) in exprs.items() if lo.tree == hi.tree)
+
+
+def law_plan(design):
+    """(expressions, order, uses the chord, defined curves) of a design's laws
+    (_law_plan)."""
+    return _law_plan(_law_key(design.laws), tuple(design.names))
+
+
+def canonical_laws(laws, names):
+    """{curve: (low, high)} with every law written as the tool writes it (one
+    word, as a dependent bound); ValueError says what is wrong with a law."""
+    laws = {str(c): (str(v[0]), str(v[1])) for c, v in dict(laws or {}).items()}
+    exprs = _law_plan(_law_key(laws), tuple(names))[0]
+    return {c: (exprs[c][0].text(), exprs[c][1].text()) for c in names if c in exprs}
+
+
+def _law_array(expr, env, n):
+    """A law's value at the n heights of env ({name: array}); nan where it has
+    none (a division by zero)."""
+    try:
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            v = np.asarray(expr.value(env), dtype=float)
+    except ZeroDivisionError:
+        return np.full(n, np.nan)
+    v = np.array(np.broadcast_to(v, (n,)), dtype=float)
+    v[~np.isfinite(v)] = np.nan
+    return v
+
+
+def _open(lo, hi):
+    """Where a band is open: its laws have numbers and lie apart."""
+    with np.errstate(invalid="ignore"):
+        return np.isfinite(lo) & np.isfinite(hi) & (np.abs(hi - lo) > _LAW_TOL * np.maximum(
+            1.0, np.maximum(np.abs(lo), np.abs(hi))))
+
+
+def _orig_radius(orig, te_radius_mm=None):
+    """The TE radius of the original's model sections: its own when known
+    (the section table's R_orig_mm, as original_offsets takes it), else the
+    builders'."""
+    if orig.te_radius is not None:
+        return float(orig.te_radius)
+    return TE_RADIUS if te_radius_mm is None else float(te_radius_mm)
+
+
+def _te(ctrl, r, t=None):
+    """(x of the rounded TE, the tangent point's parameter) of each section:
+    Newton's method from t when given (bezier_section.te_x_from), fillet's
+    bisection otherwise or when Newton does not settle (ValueError when the
+    radius does not fit a section)."""
+    out = None if t is None else BS.te_x_from(ctrl, r, t)
+    if out is None:
+        f = BS.fillet(ctrl, r)
+        out = (f["x_te"], f["t"])
+    return out
+
+
+def _chord_step(ctrl, chord, r_abs, cs, t=None, ok=None):
+    """(cs, t, ok): cs one step closer to the sharp chords, chord / x of the
+    rounded TE (the fixed point of bezier_section.sharp_chord); t the tangent
+    points' parameters, the start of the next step; ok the sections that can
+    be rounded. The others keep their chord (design_problems names them)."""
+    out = np.array(chord, dtype=float)
+    ok = np.ones(len(out), dtype=bool) if ok is None else ok
+    for again in (True, False):
+        try:
+            if np.any(ok):
+                x_te, tk = _te(ctrl[ok], r_abs / np.maximum(cs[ok], out[ok]), None if t is None else t[ok])
+                t = np.full(len(out), np.nan)
+                out[ok], t[ok] = out[ok] / x_te, tk
+            return out, t, ok
+        except ValueError:
+            if not again:
+                break
+            ok, t = ~np.any(_problem_masks(out, ctrl, r_abs), axis=0), None
+    return np.array(chord, dtype=float), None, ok
+
+
+def _rounding(ctrl, chord, r_abs, t=None):
+    """(cs, t): the sharp chord of each section, as bezier_section.sharp_chord
+    finds it, and the parameter of its TE circle's tangent point (None when a
+    section cannot be built: that one's cs is its chord). t: the tangent
+    parameters of nearly the same sections, to start from."""
+    chord = np.array(chord, dtype=float)
+    cs, ok = chord, None
+    for _ in range(_LAW_STEPS):
+        new, t, ok = _chord_step(ctrl, chord, r_abs, cs, t, ok)
+        with np.errstate(invalid="ignore"):
+            moved = np.any(np.abs(new - cs) > 1.0e-13 * np.abs(new))
+        cs = new
+        if not moved or t is None:
+            break
+    return cs, (t if t is not None and bool(np.all(ok)) else None)
+
+
+def sharp_chord(ctrl, chord, r_abs):
+    """The sharp chord of each section, as bezier_section.sharp_chord finds
+    it (to rounding) in a fraction of the time; the chord itself for a
+    section that cannot be built."""
+    return _rounding(ctrl, chord, r_abs)[0]
+
+
+_sharp = sharp_chord
+
+
+_MEMO_KEEP = {"pin": 64, "pins": 16, "env": 8, "state": 6, "inside": 2}
+
+
+def _memo(orig, key, make):
+    """make() once for key, kept with the original (the latest few of each
+    kind, key[0]: a tool asks the same things of it again and again)."""
+    store = orig.__dict__.setdefault("_memo", {}).setdefault(key[0], {})
+    try:
+        return store[key]
+    except KeyError:                                        # (a build off the GUI thread may clear it meanwhile)
+        value = make()
+        if len(store) >= _MEMO_KEEP[key[0]]:
+            store.clear()
+        store[key] = value
+        return value
+
+
+def _orig_env(orig, ys, exprs, te_radius_mm=None):
+    """What laws may use of the original at the heights ys: "orig.<curve>",
+    "TE" and, when one of `exprs` uses it, "orig.chord" (the sharp chord of
+    the original's model section, rounded with the original's TE radius)."""
+    ys = np.asarray(ys, dtype=float)
+    chord = any("orig.chord" in e.names for pair in exprs.values() for e in pair)
+    r = _orig_radius(orig, te_radius_mm)
+
+    def make():
+        env = {f"orig.{c}": orig.value(c, ys) for c in orig.names}
+        env["TE"] = orig.x_te(ys)
+        if chord:
+            ctrl = BS.polygon_from_values({c: env[f"orig.{c}"] for c in orig.names if c != "LE"}, orig.degree)
+            env["orig.chord"] = _sharp(ctrl, env["TE"] - env["orig.LE"], r)
+        for v in env.values():
+            v.flags.writeable = False
+        return env
+    return dict(_memo(orig, ("env", chord, r, ys.tobytes()), make))
+
+
+def law_state(design, orig, ys, te_radius_mm=None):
+    """(values, bands, chord) of a pinned design at the heights ys: {curve:
+    its values}; {curve: (low, high)} for the curves with bounding laws; the
+    sections' sharp chords when a law uses them (else None).
+
+    The curves with laws are worked out in the order of their dependence,
+    value = low + fraction (high - low). The chord a law names is the sharp
+    chord of the section the laws give, so the two are found together: a
+    fixed point from the chord to the rounded TE, a few steps (the sharp
+    chord changes little with the shape). te_radius_mm is the TE radius the
+    sections are built with (default TE_RADIUS, as the builders)."""
+    ys = np.atleast_1d(np.asarray(ys, dtype=float))
+    names = design.names
+    if not design.laws:
+        return {c: design.curve(c).at(ys)[:, 1] for c in names}, {}, None
+    if orig is None:
+        raise ValueError("a design with bounding laws needs the original shape for its values")
+    r = TE_RADIUS if te_radius_mm is None else float(te_radius_mm)
+    key = ("state", float(design.H), _law_key(design.laws), r, ys.tobytes(), tuple(
+        (np.asarray(cd.s, dtype=float).tobytes(), np.asarray(cd.v, dtype=float).tobytes(),
+         None if cd.w is None else np.asarray(cd.w, dtype=float).tobytes())
+        for cd in (design.curves[c] for c in names)))
+    val, bands, cs = _memo(orig, key, lambda: _law_state(design, orig, ys, r, te_radius_mm))
+    return dict(val), dict(bands), cs
+
+
+def _law_state(design, orig, ys, r, te_radius_mm):
+    """law_state for a design that has laws (arrays not to be written to: they are kept)."""
+    names = design.names
+    raw = {c: design.curve(c).at(ys)[:, 1] for c in names}
+    exprs, order, uses_chord, _ = law_plan(design)
+    env = _orig_env(orig, ys, exprs, te_radius_mm)
+    val = {c: raw[c] for c in names if c not in exprs}
+    bands = {}
+
+    def work(curves):
+        for c in curves:
+            lo, hi = (_law_array(e, {**env, **val}, len(ys)) for e in exprs[c])
+            bands[c] = (lo, hi)
+            val[c] = lo + raw[c] * (hi - lo)
+
+    def done(cs):
+        for v in [*val.values(), *(q for pair in bands.values() for q in pair)] + ([] if cs is None else [cs]):
+            v.flags.writeable = False
+        return {c: val[c] for c in names}, bands, cs
+
+    if not uses_chord:
+        work(order)
+        return done(None)
+    env["chord"] = np.full(len(ys), np.nan)
+    if "LE" in exprs:                                       # the LE and what its laws use do not use the chord
+        work(order[:order.index("LE") + 1])
+    chord = env["TE"] - val["LE"]
+    cs, t, ok = chord, None, None                           # first guess: the chord to the rounded TE
+    for _ in range(_LAW_STEPS):
+        env["chord"] = cs
+        work(order)
+        new, t, ok = _chord_step(BS.polygon_from_values(val, design.degree), chord, r, cs, t, ok)
+        with np.errstate(invalid="ignore"):
+            moved = np.any(np.abs(new - cs) > 1.0e-13 * np.abs(new))
+        cs = new
+        if not moved or t is None:
+            break
+    return done(cs)
+
+
+def law_bands(design, orig, ys, te_radius_mm=None):
+    """{curve: (low, high)} at the heights ys, for the curves of a pinned
+    design that have bounding laws (law_state)."""
+    return law_state(design, orig, ys, te_radius_mm)[1]
+
+
+def _law_pins(design, orig, te_radius_mm=None):
+    """{curve: (f0, low, high, original)} at H for the curves with laws. f0 is
+    the fraction that puts the curve on the original at H, (original - low) /
+    (high - low), every curve being the original's there (0 when its laws meet
+    there or have no number)."""
+    exprs, _, uses_chord, _ = law_plan(design)
+    r = TE_RADIUS if te_radius_mm is None else float(te_radius_mm)
+
+    def make():
+        env = _orig_env(orig, np.array([float(design.H)]), exprs, te_radius_mm)
+        for c in orig.names:
+            env[c] = env[f"orig.{c}"]
+        if uses_chord:
+            ctrl = BS.polygon_from_values({c: env[c] for c in orig.names if c != "LE"}, orig.degree)
+            env["chord"] = _sharp(ctrl, env["TE"] - env["LE"], r)
+        out = {}
+        for c, pair in exprs.items():
+            lo, hi = (_law_array(e, env, 1) for e in pair)
+            o = float(env[c][0])
+            out[c] = (float((o - lo[0]) / (hi[0] - lo[0])) if _open(lo, hi)[0] else 0.0, float(lo[0]), float(hi[0]), o)
+        return out
+    return _memo(orig, ("pins", _law_key(design.laws), float(design.H), r), make)
 
 
 def _pins(orig, name, s, H, join):
     """{index: value} of the control values fixed by the original at H: C0,
     and with join 'G1' C1, on the original's tangent at its own height."""
-    v0 = float(orig.value(name, H)[0])
+    v0, slope = _memo(orig, ("pin", name, float(H)),
+                      lambda: (float(orig.value(name, H)[0]), float(orig.slope(name, H)[0])))
     if join == "G0":
         return {0: v0}
     if join == "G1":
-        return {0: v0, 1: v0 + float(orig.slope(name, H)[0]) * (s[1] - 1.0) * H}
+        return {0: v0, 1: v0 + slope * (s[1] - 1.0) * H}
     raise ValueError(f"{name}: join must be 'G1' or 'G0', not {join!r}")
 
 
-def pin(design, orig):
+def pin(design, orig, te_radius_mm=None):
     """A copy of the design with its pinned control points set from the
     original at H: s_0 = 1 and s_n = 0; the value at H; with join 'G1' the
     value of C1 on the original's tangent at H (its height as designed).
+    A curve with bounding laws is pinned by its fraction at H, the one that
+    puts it on the original there, and joins with its value only ('G0'); a
+    curve its laws define (low and high the same) keeps no control points.
     Checks that H lies in (0, z_top], that the design and the original have
-    the same section degree and that no curve's heights rise towards the root."""
+    the same section degree, that no curve's heights rise towards the root
+    and that the laws can be read. te_radius_mm: the TE radius the sections
+    are built with (the laws' chord follows from it; default TE_RADIUS)."""
     d = design.copy()
     d.H = float(d.H)
     if not 0.0 < d.H <= orig.z_top + _TOL_Y:
@@ -584,25 +903,39 @@ def pin(design, orig):
         raise ValueError(f"the design has sections of degree {d.degree} and the original of degree "
                          f"{orig.degree} (curves {sorted(d.curves)}); use change_degree or orig.at_degree")
     d.H = min(d.H, orig.z_top)
+    unknown = sorted(set(d.laws) - set(orig.names))
+    if unknown:
+        raise ValueError(f"bounding laws for curves the design does not have: {unknown}")
+    f0 = _law_pins(d, orig, te_radius_mm) if d.laws else {}
+    defined = law_plan(d)[3] if d.laws else ()
     for name in orig.names:
         c = d.curves[name]
+        if name in defined:                                 # the law is the curve
+            c.s, c.v, c.w, c.join = np.array([1.0, 0.0]), np.zeros(2), None, "G0"
+            continue
         c.s, c.v = np.array(c.s, dtype=float), np.array(c.v, dtype=float)
         if len(c.s) != len(c.v) or len(c.s) < 2:
             raise ValueError(f"{name}: s and v need one entry per control point, at least 2")
         c.s[0], c.s[-1] = 1.0, 0.0
         if np.any(np.diff(c.s) > 0.0):
             raise ValueError(f"{name}: control heights must not rise from H down to the root")
+        if name in d.laws:
+            c.join = "G0"
+            c.v[0] = f0[name][0]
+            continue
         for k, val in _pins(orig, name, c.s, d.H, c.join).items():
             c.v[k] = val
     return d
 
 
-def baseline_design(orig, H, orders=None, join="G1", weights=None, n_samples=401):
+def baseline_design(orig, H, orders=None, join="G1", weights=None, n_samples=401, laws=None, te_radius_mm=None):
     """The original shape below H as a design: for each curve, evenly spaced
     control heights and the values that fit the original's fitted curve on
     [0, H] best with the pins held. When the order is at least that of the
     original's fit (unit weights) the curve is the original exactly (the
-    de Casteljau split of the fit, raised to the order)."""
+    de Casteljau split of the fit, raised to the order). laws = {curve: (low,
+    high)}: those curves between their bounding laws, as near the original
+    as the laws let them be (with_laws)."""
     H = float(H)
     orders = dict(orders or {})
     weights = weights or {}
@@ -614,7 +947,10 @@ def baseline_design(orig, H, orders=None, join="G1", weights=None, n_samples=401
         w = None if weights.get(c) is None else np.asarray(weights[c], dtype=float)
         v, _ = fit_values(s * H, yd, orig.value(c, yd), w, _pins(orig, c, s, H, jn))
         curves[c] = CurveDesign(s, v, w, jn)
-    return pin(Design(H, curves, orig.degree), orig)
+    d = pin(Design(H, curves, orig.degree), orig)
+    for c, (low, high) in canonical_laws(laws, orig.names).items():
+        d = with_laws(d, orig, c, low, high, te_radius_mm, n_samples)
+    return d
 
 
 def change_degree(design, orig, degree, n_samples=401):
@@ -634,6 +970,9 @@ def change_degree(design, orig, degree, n_samples=401):
     o2 = orig.at_degree(degree)
     if degree == orig.degree:
         return d, o2, 0.0
+    if d.laws:
+        raise ValueError("a design with bounding laws keeps its section degree (the laws name its curves): "
+                         "take the laws off first")
     yd = np.linspace(0.0, d.H, int(n_samples))
     val = curve_values(d, yd)
     new = BS.values_from_polygon(BS.change_degree(BS.polygon_from_values(val, d.degree), degree))
@@ -665,12 +1004,14 @@ def default_bounds(z_top, h_min=None, h_max=None):
     most z_top); height fractions d in [0.05, 0.95]; LE control points up to
     4 h_max forward of the original LE and not behind it (the range of
     Alternate truncation/Geometry.py); section x coordinates in [0, 1] and z
-    coordinates in [0, 0.2] (fractions of the sharp chord)."""
+    coordinates in [0, 0.2] (fractions of the sharp chord); the fractions of a
+    curve with bounding laws in [0, 1], the whole way between its laws."""
     h_max = float(z_top) if h_max is None else float(h_max)
     h_min = 0.25 * h_max if h_min is None else float(h_min)
     if not 0.0 < h_min <= h_max <= z_top + _TOL_Y:
         raise ValueError(f"H bounds [{h_min:g}, {h_max:g}] mm must satisfy 0 < h_min <= h_max <= z_top = {z_top:g}")
-    return {"H": (h_min, h_max), "d": (0.05, 0.95), "LE": (-4.0 * h_max, 0.0), "x": (0.0, 1.0), "z": (0.0, 0.2)}
+    return {"H": (h_min, h_max), "d": (0.05, 0.95), "LE": (-4.0 * h_max, 0.0), "x": (0.0, 1.0), "z": (0.0, 0.2),
+            "f": (0.0, 1.0)}
 
 
 class DesignSpace(REL.SpaceRelations):
@@ -689,10 +1030,18 @@ class DesignSpace(REL.SpaceRelations):
                most orig.z_top)
     bounds     overrides entries of default_bounds(z_top, h_min, h_max) by group
                ("LE", "d" for every height fraction, "x" / "z" for every
-               section x / z coordinate), by curve ("P2z") or by slot name
+               section x / z coordinate, "f" for every fraction between
+               bounding laws), by curve ("P2z") or by slot name
                ("LE.dx3": (-40, 0)); a slot beats its curve, a curve its group
     fixed      {slot name: value} of the slots held fixed: they stay out of
                the vector x (the design variables are the other slots)
+    laws       {curve: (low law, high law)}: these curves lie between their
+               bounding laws (Design.laws). Their slots after the d are the
+               fractions of C1 .. Cn, "P2z.f1" .. (C0 follows from the
+               original at H), bounds 0 .. 1; a curve its laws define (low
+               and high the same) has no slots
+    te_radius_mm  the TE radius the sections are built with (the chord the
+               laws name follows from it; default TE_RADIUS)
 
     all_names / all_bounds cover every slot, names / bounds the free ones;
     len(space) is the number of design variables.
@@ -705,21 +1054,30 @@ class DesignSpace(REL.SpaceRelations):
     vector (full_vector works it out)."""
 
     def __init__(self, orig, orders=None, join="G1", weights=None, bounds=None, h_min=None, h_max=None,
-                 fixed=None):
+                 fixed=None, laws=None, te_radius_mm=None):
         self.orig = orig
         self.curves = orig.names
+        self.laws = canonical_laws(laws, self.curves)
+        self.defined = set(_law_plan(_law_key(self.laws), tuple(self.curves))[3])
+        self.te_radius_mm = None if te_radius_mm is None else float(te_radius_mm)
         orders = dict(orders or {})
         self.orders = {c: int(orders.get(c, DEFAULT_ORDER)) for c in self.curves}
-        self.join = {c: (join.get(c, "G1") if isinstance(join, dict) else join) for c in self.curves}
+        self.join = {c: ("G0" if c in self.laws else join.get(c, "G1") if isinstance(join, dict) else join)
+                     for c in self.curves}
         weights = weights or {}
         self.weights = {c: (None if weights.get(c) is None else np.asarray(weights[c], dtype=float))
                         for c in self.curves}
         b = {**default_bounds(orig.z_top, h_min, h_max), **(bounds or {})}
         self._slots = [("", "H", 0)]
         for c in self.curves:
+            if c in self.defined:
+                continue
             n = self.orders[c]
             self._slots += [(c, "d", k) for k in range(1, n)]
-            self._slots += [(c, "v", k) for k in range(2 if self.join[c] == "G1" else 1, n + 1)]
+            if c in self.laws:
+                self._slots += [(c, "f", k) for k in range(1, n + 1)]
+            else:
+                self._slots += [(c, "v", k) for k in range(2 if self.join[c] == "G1" else 1, n + 1)]
         self.all_names = [self.slot_name(*sl) for sl in self._slots]
         self.all_bounds = np.array([self._bound(b, n, sl) for n, sl in zip(self.all_names, self._slots)], dtype=float)
         self.fixed = {str(n): float(v) for n, v in (fixed or {}).items()}
@@ -739,6 +1097,8 @@ class DesignSpace(REL.SpaceRelations):
             return b["H"]
         if kind == "d":
             return b.get(f"{c}.d", b["d"])
+        if kind == "f":
+            return b.get(f"{c}.f", b["f"])
         if c in b:
             return b[c]
         return b["LE"] if c == "LE" else b[c[-1]]
@@ -747,6 +1107,8 @@ class DesignSpace(REL.SpaceRelations):
     def slot_name(c, kind, k):
         if kind == "H":
             return "H"
+        if kind == "f":
+            return f"{c}.f{k}"
         return f"{c}.d{k}" if kind == "d" else f"{c}.{'dx' if c == 'LE' else 'v'}{k}"
 
     def __len__(self):
@@ -771,24 +1133,29 @@ class DesignSpace(REL.SpaceRelations):
                 vals[c][k] = xv
         curves = {}
         for c in self.curves:
+            if c in self.defined:                           # the law is the curve
+                curves[c] = CurveDesign(np.array([1.0, 0.0]), np.zeros(2), None, "G0")
+                continue
             s = heights_from_fractions(d[c])
             v = vals[c]
             free = [k for (cc, kind, k) in self._slots if cc == c and kind == "v"]
             if c == "LE" and free:
                 v[free] = v[free] + self.orig.value("LE", s[free] * H)
             curves[c] = CurveDesign(s, v, self.weights[c], self.join[c])
-        return pin(Design(H, curves, self.orig.degree), self.orig)
+        return pin(Design(H, curves, self.orig.degree, self.laws), self.orig, self.te_radius_mm)
 
     def values(self, design):
         """{slot name: value} of a design, every slot (fixed ones as the
-        design has them)."""
-        dd = pin(design, self.orig)
+        design has them). The design has this space's bounding laws."""
+        dd = pin(design, self.orig, self.te_radius_mm)
+        if canonical_laws(dd.laws, self.curves) != self.laws:
+            raise ValueError("the design's bounding laws are not this space's")
         out = {"H": dd.H}
         for (c, kind, k), name in zip(self._slots[1:], self.all_names[1:]):
             cd = dd.curves[c]
             if kind == "d":
                 out[name] = float(fractions_from_heights(cd.s)[k - 1])
-            elif c == "LE":
+            elif kind == "v" and c == "LE":
                 out[name] = float(cd.v[k] - self.orig.value("LE", cd.s[k] * dd.H)[0])
             else:
                 out[name] = float(cd.v[k])
@@ -798,22 +1165,25 @@ class DesignSpace(REL.SpaceRelations):
         """The space and a design in it, as plain data (JSON): the section
         degree, orders, joins, weights, every slot with its value, bounds,
         whether it is free and (a dependent variable) its relation and the
-        expressions of its dependent bounds, and the design vector (names,
-        values, bounds; a slot with a dependent bound as its fraction between
-        its bounds). from_dict reads it back."""
+        expressions of its dependent bounds, the bounding laws and the TE
+        radius they take, and the design vector (names, values, bounds; a
+        slot with a dependent bound as its fraction between its bounds).
+        from_dict reads it back."""
         vals = self.values(design)
         return {"z_top_mm": self.orig.z_top, "h_min_mm": float(self.all_bounds[0, 0]),
                 "h_max_mm": float(self.all_bounds[0, 1]),
                 "degree": int(self.orig.degree),
                 "orders": {c: int(self.orders[c]) for c in self.curves}, "join": dict(self.join),
                 "weights": {c: (None if self.weights[c] is None else self.weights[c].tolist()) for c in self.curves},
+                "laws": {c: list(v) for c, v in self.laws.items()}, "te_radius_mm": self.te_radius_mm,
                 "slots": self.slot_records(vals),
                 "vector": self.vector_record(vals)}
 
     @classmethod
-    def from_dict(cls, orig, rec):
+    def from_dict(cls, orig, rec, te_radius_mm=None):
         """(space, design) from to_dict's output; the space's original is
-        orig at the record's section degree."""
+        orig at the record's section degree. te_radius_mm: the TE radius the
+        sections are built with, when not the record's."""
         orig = orig.at_degree(int(rec.get("degree", orig.degree)))
         slots = rec["slots"]
         if any(q["name"] == "H" and (q.get("lo_expr") or q.get("hi_expr")) for q in slots):
@@ -822,7 +1192,8 @@ class DesignSpace(REL.SpaceRelations):
         fixed = {q["name"]: q["value"] for q in slots if not q["free"]}
         weights = {c: w for c, w in (rec.get("weights") or {}).items() if w is not None}
         space = cls(orig, rec["orders"], rec["join"], weights, bounds, h_min=bounds["H"][0], h_max=bounds["H"][1],
-                    fixed=fixed)
+                    fixed=fixed, laws=rec.get("laws"),
+                    te_radius_mm=rec.get("te_radius_mm") if te_radius_mm is None else te_radius_mm)
         space.set_slot_relations(slots)
         return space, space.design_of({q["name"]: q["value"] for q in slots})
 
@@ -837,7 +1208,10 @@ def load_design_space(path):
         space, design, rec = load_design_space("outputs/modified/gui_design_space.json")
         x0, bounds = space.to_vector(design), space.bounds      # the free variables
         d = space.to_design(x)                                  # a candidate x
-        problems = design_problems(d, space.orig, rec["settings"]["n_sections"])
+        s = rec["settings"]
+        problems = design_problems(d, space.orig, s["n_sections"], s["te_radius_mm"])
+        if s.get("keep_inside"):                                # the original as the lower bound of the shape
+            ok = inside_original(d, space.orig, s["n_sections"], s["te_radius_mm"])["depth"] <= s["inside_tol_mm"]
         write_case(out_dir, name, d, space.orig, rec["files"]["xcad_original"], ...)
     """
     with open(path) as fh:
@@ -848,23 +1222,104 @@ def load_design_space(path):
     orig = fit_original(f["corner_points"], f["section_table"], z_top, s.get("fit_orders"),
                         free_heights=s.get("fit_free_heights", False),
                         degree=rec["space"].get("degree", BASE_DEGREE)).scaled(k)
-    space, design = DesignSpace.from_dict(orig, rec["space"])
+    space, design = DesignSpace.from_dict(orig, rec["space"], s.get("te_radius_mm"))
     return space, design, rec
 
 
-def refit_curve(design, orig, name, order, n_samples=401):
+def refit_curve(design, orig, name, order, n_samples=401, te_radius_mm=None):
     """The design with curve `name` refitted at another order: evenly spaced
     control heights and the least-squares values (pins held, weights reset)
-    that follow the curve's present shape on [0, H] most closely."""
-    d = pin(design, orig)
+    that follow the curve's present shape on [0, H] most closely. A curve
+    with bounding laws: its fraction, kept in 0 .. 1 (a curve its laws define
+    has nothing to refit)."""
+    d = pin(design, orig, te_radius_mm)
     cd = d.curves[name]
+    banded = name in d.laws
+    if banded and name in law_plan(d)[3]:
+        return d
     yd = np.linspace(0.0, d.H, n_samples)
     vd = d.curve(name).at(yd)[:, 1]
     s = uniform_heights(int(order))
-    v, _ = fit_values(s * d.H, yd, vd, None, _pins(orig, name, s, d.H, cd.join))
+    v, _ = fit_values(s * d.H, yd, vd, None, {0: float(cd.v[0])} if banded else _pins(orig, name, s, d.H, cd.join))
+    if banded:
+        v[1:] = np.clip(v[1:], 0.0, 1.0)
     out = d.copy()
     out.curves[name] = CurveDesign(s, v, None, cd.join)
-    return pin(out, orig)
+    return pin(out, orig, te_radius_mm)
+
+
+def with_laws(design, orig, name, low=None, high=None, te_radius_mm=None, n_samples=401, order=None):
+    """The design with curve `name` put between a low law and a high law
+    (both given; law_names says what they may use), or with its laws taken
+    off (both None), its present shape kept as closely as that allows:
+
+    laws given  the curve's control values become the fractions between the
+                laws that follow its present values on [0, H] most closely
+                (least squares at its control heights, C0 pinned to the
+                original at H), kept in 0 .. 1: where the curve lay outside
+                its laws it now lies on the nearer one. Low and high the same
+                expression define the curve, which then has no control points.
+    laws off    the control values that follow its present values most
+                closely, C0 on the original at H (join 'G0').
+
+    order: the curve's order, when it has no control heights to keep (it was
+    defined by its laws; default DEFAULT_ORDER). ValueError says what is
+    wrong with a law."""
+    d = pin(design, orig, te_radius_mm)
+    if name not in d.curves:
+        raise ValueError(f"'{name}' is not a curve of this design ({', '.join(d.names)})")
+    low, high = (None if q is None or not str(q).strip() else str(q).strip() for q in (low, high))
+    if (low is None) != (high is None):
+        raise ValueError(f"{name}: a curve has a low law and a high law, or neither")
+    if low is None and name not in d.laws:
+        return d
+    yd = np.linspace(0.0, d.H, int(n_samples))
+    val, _, cs = law_state(d, orig, yd, te_radius_mm)
+    out = d.copy()
+    kept = name not in d.laws or name not in law_plan(d)[3]
+    s = np.array(d.curves[name].s, dtype=float) if kept else uniform_heights(int(order or DEFAULT_ORDER))
+    laws = dict(d.laws)
+    if low is None:
+        laws.pop(name)
+        out.laws = laws
+        v, _ = fit_values(s * d.H, yd, val[name], None, _pins(orig, name, s, d.H, "G0"))
+        out.curves[name] = CurveDesign(s, v, None, "G0")
+        return pin(out, orig, te_radius_mm)
+    laws[name] = (low, high)
+    out.laws = canonical_laws(laws, d.names)
+    exprs, _, _, defined = law_plan(out)
+    if name in defined:
+        out.curves[name] = CurveDesign(np.array([1.0, 0.0]), np.zeros(2), None, "G0")
+        return pin(out, orig, te_radius_mm)
+    pair = exprs[name]
+    env = {**_orig_env(orig, yd, {name: pair}, te_radius_mm), **val}
+    if any("chord" in e.names for e in pair):               # the chord of the design as it is now
+        env["chord"] = cs if cs is not None else _sharp(
+            BS.polygon_from_values(val, d.degree), env["TE"] - val["LE"],
+            TE_RADIUS if te_radius_mm is None else float(te_radius_mm))
+    lo, hi = (_law_array(e, env, len(yd)) for e in pair)
+    opened = _open(lo, hi)
+    f = np.clip(np.where(opened, (val[name] - lo) / np.where(opened, hi - lo, 1.0), 0.0), 0.0, 1.0)
+    out.curves[name] = CurveDesign(s, np.zeros(len(s)), None, "G0")
+    v, _ = fit_values(s * d.H, yd, f, None, {0: _law_pins(out, orig, te_radius_mm)[name][0]})
+    v[1:] = np.clip(v[1:], 0.0, 1.0)
+    out.curves[name] = CurveDesign(s, v, None, "G0")
+    return pin(out, orig, te_radius_mm)
+
+
+def control_points(design, orig, name, te_radius_mm=None):
+    """(heights, values) of a pinned design's control points of curve `name`,
+    as a plot of the curve's values shows them. A curve with bounding laws:
+    each control fraction placed between the laws at its own height (none for
+    a curve its laws define)."""
+    cd = design.curves[name]
+    y = np.asarray(cd.s, dtype=float) * design.H
+    if name not in design.laws:
+        return y, np.array(cd.v, dtype=float)
+    if name in law_plan(design)[3]:
+        return np.zeros(0), np.zeros(0)
+    lo, hi = law_bands(design, orig, y, te_radius_mm)[name]
+    return y, lo + np.asarray(cd.v, dtype=float) * (hi - lo)
 
 
 # --------------------------------------------------------------------------
@@ -923,9 +1378,11 @@ class ModSection:
         return xcad_loop(xy, x_le, self.y)
 
 
-def curve_values(design, ys):
-    """{curve: its values at the heights ys} for a pinned design."""
-    return {c: design.curve(c).at(ys)[:, 1] for c in design.names}
+def curve_values(design, ys, orig=None, te_radius_mm=None):
+    """{curve: its values at the heights ys} for a pinned design. A design
+    with bounding laws needs the original and takes the TE radius its
+    sections are built with (law_state)."""
+    return law_state(design, orig, ys, te_radius_mm)[0]
 
 
 def _problem_masks(chord, ctrl, te_radius_mm):
@@ -946,17 +1403,30 @@ _PROBLEM_TEXT = ("the LE is at or behind the TE",
                  "the TE radius does not fit under the half-thickness")
 
 
-def build_sections(design, orig, ys, num_pts=200, te_radius_mm=0.75, first_index=1, offsets=None):
-    """The sections of a pinned design at the heights ys (all at once, see
-    modified_sections). Raises ValueError naming the first section that
-    cannot be built and why. With offsets (original_offsets) each section
-    also carries what the extracted original has at its height that the model
-    leaves out, and is written with it (ModSection.written); a section too
-    thin to take them (its outline would pass through the chord line) cannot
-    be built either."""
-    d = pin(design, orig)
-    ys = np.atleast_1d(np.asarray(ys, dtype=float))
-    val = curve_values(d, ys)
+def _lawless(design, val):
+    """(curve, mask) of the first curve, in the order of dependence, whose
+    bounding laws give no number at some height (a division by zero); None
+    when every curve has its values."""
+    if not design.laws:
+        return None
+    for c in law_plan(design)[1]:
+        bad = ~np.isfinite(val[c])
+        if np.any(bad):
+            return c, bad
+    return None
+
+
+def _model(design, orig, ys, te_radius_mm, first_index=1, pinned=False):
+    """(pinned design, curve values, x of the LE, x of the TE, chords, control
+    polygons) at the heights ys; ValueError naming the first section that
+    cannot be built and why. pinned: the design is pinned already."""
+    d = design if pinned else pin(design, orig, te_radius_mm)
+    val = curve_values(d, ys, orig, te_radius_mm)
+    hit = _lawless(d, val)
+    if hit:
+        k = int(np.argmax(hit[1]))
+        raise ValueError(f"section {first_index + k} at y = {ys[k]:.4f} mm: the bounding laws of {hit[0]} give "
+                         f"no number there (a division by zero)")
     x_le, x_te = val["LE"], orig.x_te(ys)
     chord = x_te - x_le
     ctrl = BS.polygon_from_values(val, d.degree)
@@ -966,6 +1436,19 @@ def build_sections(design, orig, ys, num_pts=200, te_radius_mm=0.75, first_index
             raise ValueError(f"section {first_index + k} at y = {ys[k]:.4f} mm: {text} "
                              f"({', '.join(f'{n} {v[k]:.5f}' for n, v in val.items() if n != 'LE')}, "
                              f"LE x {x_le[k]:.4f}, TE x {x_te[k]:.4f})")
+    return d, val, x_le, x_te, chord, ctrl
+
+
+def build_sections(design, orig, ys, num_pts=200, te_radius_mm=0.75, first_index=1, offsets=None):
+    """The sections of a pinned design at the heights ys (all at once, see
+    modified_sections). Raises ValueError naming the first section that
+    cannot be built and why. With offsets (original_offsets) each section
+    also carries what the extracted original has at its height that the model
+    leaves out, and is written with it (ModSection.written); a section too
+    thin to take them (its outline would pass through the chord line) cannot
+    be built either."""
+    ys = np.atleast_1d(np.asarray(ys, dtype=float))
+    d, val, x_le, x_te, chord, ctrl = _model(design, orig, ys, te_radius_mm, first_index)
     selig, cs, r = BS.sections(ctrl, chord, te_radius_mm, num_pts)
     dx, res = (np.zeros(len(ys)), [None] * len(ys)) if offsets is None else offsets.at(ys, num_pts)
     if offsets is not None:                   # the written outline must stay clear of the chord line, as the model's
@@ -990,7 +1473,7 @@ def modified_sections(design, orig, n_sec=50, num_pts=200, te_radius_mm=0.75, of
     that puts the TE, rounded with te_radius_mm, on the TE line
     (bezier_section.sharp_chord). num_pts points per section in the
     extraction's layout. offsets: see build_sections."""
-    d = pin(design, orig)
+    d = pin(design, orig, te_radius_mm)
     return build_sections(d, orig, np.linspace(0.0, d.H, int(n_sec)), num_pts, te_radius_mm, offsets=offsets)
 
 
@@ -1004,16 +1487,22 @@ def design_problems(design, orig, n_sec=50, te_radius_mm=0.75):
     """What would stop modified_sections, found cheaply at its n_sec heights:
     control heights out of order or H out of range, an LE at or behind the TE,
     section control points folding the half-section back, a thickness that is
-    not positive, a TE radius that does not fit under the half-thickness. A
-    list of messages, empty when the design builds; for an interactive tool
-    and as a feasibility test for an optimiser. (A section too thin to take
-    the original's offsets is found only by building it, build_sections.)"""
+    not positive, a TE radius that does not fit under the half-thickness; a
+    bounding law that cannot be read or gives no number. A list of messages,
+    empty when the design builds; for an interactive tool and as a
+    feasibility test for an optimiser. (A section too thin to take the
+    original's offsets is found only by building it, build_sections.)"""
     try:
-        d = pin(design, orig)
+        d = pin(design, orig, te_radius_mm)
     except ValueError as exc:
         return [str(exc)]
     ys = np.linspace(0.0, d.H, int(n_sec))
-    val = curve_values(d, ys)
+    val = curve_values(d, ys, orig, te_radius_mm)
+    hit = _lawless(d, val)
+    if hit:
+        y = ys[hit[1]]
+        return [f"the bounding laws of {hit[0]} give no number at {int(hit[1].sum())} of {len(ys)} sections "
+                f"(y = {y.min():.2f} .. {y.max():.2f} mm): a division by zero"]
     chord = orig.x_te(ys) - val["LE"]
     out = []
     for bad, what in zip(_problem_masks(chord, BS.polygon_from_values(val, d.degree), te_radius_mm), _PROBLEM_TEXT):
@@ -1021,6 +1510,122 @@ def design_problems(design, orig, n_sec=50, te_radius_mm=0.75):
             y = ys[bad]
             out.append(f"{what} at {int(bad.sum())} of {len(ys)} sections (y = {y.min():.2f} .. {y.max():.2f} mm)")
     return out
+
+
+def law_warnings(design, orig, n_sec=50, te_radius_mm=None):
+    """What the bounding laws of a design leave open, as lines for a tool,
+    found at modified_sections' n_sec heights: a curve whose laws cross
+    (the low law above the high one at some heights and below it at others;
+    the curve still lies between them, the fraction running the other way);
+    a curve that the laws keep off the original at H (they leave the
+    original out there, so the curve leaves them near H; or they meet there
+    away from the original, a step in the surface at H). Empty without laws,
+    and when the design cannot be pinned (design_problems says why)."""
+    if not design.laws:
+        return []
+    try:
+        d = pin(design, orig, te_radius_mm)
+    except ValueError:
+        return []
+    ys = np.linspace(0.0, d.H, int(n_sec))
+    bands = law_bands(d, orig, ys, te_radius_mm)
+    pins = _law_pins(d, orig, te_radius_mm)
+    out = []
+    for c in law_plan(d)[1]:
+        lo, hi = bands[c]
+        opened = _open(lo, hi)
+        with np.errstate(invalid="ignore"):
+            above = opened & (lo > hi)
+        if np.any(above) and np.any(opened & ~above):       # one way at some heights, the other at others
+            y = ys[above]
+            out.append(f"{c}: its laws cross, the low law above the high one at {int(above.sum())} of {len(ys)} "
+                       f"sections (y = {y.min():.2f} .. {y.max():.2f} mm)")
+        f0, l0, h0, o = pins[c]
+        if not (np.isfinite(l0) and np.isfinite(h0)):
+            continue
+        if not _open(np.array([l0]), np.array([h0]))[0]:
+            if abs(l0 - o) > 1.0e-5 * max(1.0, abs(o)):
+                out.append(f"{c}: its laws meet at H at {l0:.5g}, away from the original ({o:.5g}): a step in "
+                           f"the surface at H")
+        elif f0 < -1.0e-7 or f0 > 1.0 + 1.0e-7:
+            out.append(f"{c}: the original at H ({o:.5g}) lies outside its laws there ({min(l0, h0):.5g} .. "
+                       f"{max(l0, h0):.5g}), so the curve leaves them near H")
+    return out
+
+
+_INSIDE_EPS = 1.0e-6             # mm: a depth under the enclosure measure's own resolution counts as none
+
+
+def _half_outline(ctrl, cs, x_le, t_f, n=321, n_arc=24):
+    """The rounded half-outline of model sections, mm in the rudder's frame:
+    (points (m, n + n_arc, 2) from the LE to the TE, the half-section at n
+    parameters up to its TE circle's tangent point (parameter t_f; closer
+    together towards the LE) and n_arc points of the circle; n; the circle's
+    centre x and radius; x of the tangent point), to measure other outlines
+    against and to be measured (_half_at)."""
+    p = BS.points(ctrl, t_f[:, None] * (np.linspace(0.0, 1.0, int(n))**1.5)[None, :])
+    dp = BS.derivative(ctrl, t_f[:, None])[:, 0]
+    end = p[:, -1]
+    cx = end[:, 0] + dp[:, 1] / dp[:, 0] * end[:, 1]
+    rr = np.hypot(end[:, 0] - cx, end[:, 1])
+    ang = np.arctan2(end[:, 1], end[:, 0] - cx)[:, None] * (1.0 - np.arange(1, int(n_arc) + 1) / int(n_arc))[None, :]
+    arc = np.stack((cx[:, None] + rr[:, None] * np.cos(ang), rr[:, None] * np.sin(ang)), axis=2)
+    pts = np.concatenate((p, arc), axis=1) * cs[:, None, None]
+    pts[:, :, 0] += x_le[:, None]
+    return pts, int(n), x_le + cx * cs, rr * cs, x_le + end[:, 0] * cs
+
+
+def _half_at(x, outline, i):
+    """Half-thickness (mm) of section i of an outline (_half_outline) at the
+    stations x (mm): between its half-section's points up to the tangent
+    point, on the circle itself from there, nothing ahead of the LE or
+    behind the TE."""
+    pts, n, cx, rr, x_tan = outline
+    z = np.interp(x, pts[i, :n, 0], pts[i, :n, 1], left=0.0)
+    arc = x > x_tan[i]
+    z[arc] = np.sqrt(np.clip(rr[i]**2 - (x[arc] - cx[i])**2, 0.0, None))
+    return z
+
+
+def inside_original(design, orig, n_sec=50, te_radius_mm=0.75):
+    """How far the modified rudder goes inside the original: on the model's
+    sections at modified_sections' n_sec heights, the largest depth (mm) of
+    the modified half-thickness under the original's at the same x, over the
+    points of the original's rounded half-outline. 0 where the modified
+    section encloses the original's (a depth under a millionth of a mm, the
+    measure's own resolution, counts as none); the baseline design gives 0.
+
+    Returns {"depth": the largest depth (mm), "y": the height it is at (mm),
+    "x_c": its station (fraction of the original's chord there), "ys": the
+    heights, "depths": the largest depth at each}. The original's sections
+    take its own TE radius when known (as original_offsets). Laws and bounds
+    on control points do not settle this; an optimiser keeps "depth" within
+    its tolerance. ValueError when a section cannot be built
+    (design_problems)."""
+    d = pin(design, orig, te_radius_mm)
+    ys = np.linspace(0.0, d.H, int(n_sec))
+    d, val, x_le, x_te, chord, ctrl = _model(d, orig, ys, te_radius_mm, pinned=True)
+    r_o = _orig_radius(orig, te_radius_mm)
+
+    def original():                                         # the original's half-outline, and its tangent points
+        vo = {c: orig.value(c, ys) for c in orig.names}
+        ctrl_o = BS.polygon_from_values(vo, orig.degree)
+        cs_o, t_o = _rounding(ctrl_o, x_te - vo["LE"], r_o)
+        if t_o is None:
+            raise ValueError("the original's own sections cannot be rounded with its TE radius")
+        return _half_outline(ctrl_o, cs_o, vo["LE"], t_o)[0], t_o, vo["LE"]
+    pts_o, t_o, le_o = _memo(orig, ("inside", r_o, ys.tobytes()), original)
+    cs, t = _rounding(ctrl, chord, te_radius_mm, t_o)
+    if t is None:
+        raise ValueError("a section cannot be rounded with the TE radius (design_problems)")
+    out = _half_outline(ctrl, cs, x_le, t)
+    depth = np.array([pts_o[i, :, 1] - _half_at(pts_o[i, :, 0], out, i) for i in range(len(ys))])
+    k = depth.argmax(axis=1)
+    per = np.maximum(depth[np.arange(len(ys)), k], 0.0)
+    per[per < _INSIDE_EPS] = 0.0
+    i = int(np.argmax(per))
+    x_c = (pts_o[i, k[i], 0] - le_o[i]) / (x_te[i] - le_o[i])
+    return {"depth": float(per[i]), "y": float(ys[i]), "x_c": float(x_c), "ys": ys, "depths": per}
 
 
 def section_metrics(sec):
@@ -1525,9 +2130,11 @@ def write_sections_dat(path, sections, notes=()):
         fh.write("\n".join(head + body) + "\n")
 
 
-def design_record(design, orig):
-    """The pinned design as plain lists, for JSON."""
-    d = pin(design, orig)
+def design_record(design, orig, te_radius_mm=None):
+    """The pinned design as plain lists, for JSON. A curve with bounding laws
+    also has them ("low", "high"), and its "value" entries are its fractions
+    between them; "laws" lists them all."""
+    d = pin(design, orig, te_radius_mm)
     out = {"H_mm": d.H, "degree": int(d.degree), "curves": {}}
     for c in d.names:
         cd = d.curves[c]
@@ -1535,6 +2142,11 @@ def design_record(design, orig):
             "order": cd.order, "join": cd.join, "what": describe(c),
             "s": cd.s.tolist(), "y_mm": (cd.s * d.H).tolist(), "value": cd.v.tolist(),
             "weights": (np.ones(cd.order + 1) if cd.w is None else np.asarray(cd.w)).tolist()}
+        if c in d.laws:
+            out["curves"][c].update(low=d.laws[c][0], high=d.laws[c][1],
+                                    what=describe(c) + "; the values are its fractions between its laws")
+    if d.laws:
+        out["laws"] = {c: list(v) for c, v in d.laws.items()}
     return out
 
 
@@ -1554,7 +2166,7 @@ def design_from_record(rec):
     if "T1" in rec["curves"]:
         le = curves["LE"]
         curves["P1x"] = CurveDesign(le.s.copy(), np.zeros_like(le.v), None, le.join)
-    return Design(float(rec["H_mm"]), curves, rec.get("degree"))
+    return Design(float(rec["H_mm"]), curves, rec.get("degree"), rec.get("laws") or {})
 
 
 def original_record(orig):
@@ -1640,7 +2252,7 @@ def write_case(out_dir, case, design, orig, original_xcad, n_sec=50, num_pts=200
     if h_max is not None and design.H > float(h_max) + _TOL_Y:
         raise ValueError(f"{case}: H = {design.H:g} mm is above h_max = {float(h_max):g} mm")
     os.makedirs(out_dir, exist_ok=True)
-    d = pin(design, orig)
+    d = pin(design, orig, te_radius_mm)
     off = original_offsets(orig, stack_of_xcad(original_xcad, original_units, orig.scale), te_radius_mm)
     secs = modified_sections(d, orig, n_sec, num_pts, te_radius_mm, off)
     gap_max, gap_rms = off.gap(d.H)                         # how far the model alone is from the extracted sections
@@ -1675,7 +2287,7 @@ def write_case(out_dir, case, design, orig, original_xcad, n_sec=50, num_pts=200
                         "te_radius_mm": te_radius_mm, "gap_mm": xinfo["gap_mm"], "xcad_units": units},
            "thickness_format": ("written" if quartic else
                                 "not written: the sections are not quartics with P1x = 0 and P1z = P2z"),
-           "design": design_record(d, orig),
+           "design": design_record(d, orig, te_radius_mm),
            "original": {**original_record(orig),
                         "at_H": {c: {"value": float(orig.value(c, d.H)[0]),
                                      "slope_per_mm": float(orig.slope(c, d.H)[0])} for c in orig.names}},
@@ -1686,7 +2298,7 @@ def write_case(out_dir, case, design, orig, original_xcad, n_sec=50, num_pts=200
     with open(p["json"], "w") as fh:
         json.dump(rec, fh, indent=1)
     if plot:
-        plot_case(p["png"], case, d, orig, secs, stack)
+        plot_case(p["png"], case, d, orig, secs, stack, te_radius_mm=te_radius_mm)
     else:
         p.pop("png")
     return {"case": case, "design": d, "sections": secs, "xcad": xinfo, "paths": p}
@@ -1742,19 +2354,25 @@ def case_report(res, orig, stack=None):
 # Check plot
 # --------------------------------------------------------------------------
 
-def plot_case(path, case, design, orig, sections, stack=None, every=7):
+def plot_case(path, case, design, orig, sections, stack=None, every=7, te_radius_mm=None):
     """Planform and every spanwise curve (as the rudder stands: x, or the
     curve's value, across and the height up) and three sections of a case, in
-    one PNG. Drawn on a bare Figure (no pyplot), so it also runs off a GUI
-    thread."""
+    one PNG. A curve with bounding laws is drawn with them (dotted). Drawn on
+    a bare Figure (no pyplot), so it also runs off a GUI thread."""
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
     from matplotlib.ticker import MaxNLocator
-    d = pin(design, orig)
+    d = pin(design, orig, te_radius_mm)
     H = d.H
     top = min(orig.z_top, max(1.3 * H, H + 20.0))           # the plots show the original up to here
     yy = np.linspace(0.0, H, 400)
     yz = np.linspace(0.0, top, 400)
+    val, bands, _ = law_state(d, orig, yy, te_radius_mm)
+
+    def said(c):
+        cd = d.curves[c]
+        return "set by its laws" if not len(control_points(d, orig, c, te_radius_mm)[0]) else (
+            f"order {cd.order}, " + ("between its laws" if c in d.laws else cd.join))
     coords = BS.coord_names(d.degree)
     ncol = 4
     nrow = -(-(len(coords) + 2) // ncol)
@@ -1766,12 +2384,11 @@ def plot_case(path, case, design, orig, sections, stack=None, every=7):
     m = orig.y_rows <= top
     ax.plot(orig.x_le_rows[m], orig.y_rows[m], "k--", lw=1, label="original LE")
     ax.plot(orig.x_te_rows[m], orig.y_rows[m], "k-", lw=1, label="TE line (kept)")
-    le = d.curve("LE")
-    pts = le.at(yy)
+    cy, cv = control_points(d, orig, "LE", te_radius_mm)
     for s in sections[::every] + [sections[-1]]:
         ax.plot([s.x_le, s.x_te], [s.y, s.y], color="0.75", lw=0.6)
-    ax.plot(pts[:, 1], pts[:, 0], "b-", lw=2, label=f"new LE (order {le.order}, {d.curves['LE'].join})")
-    ax.plot(le.ctrl[:, 1], le.ctrl[:, 0], "o--", color="tab:blue", ms=5, lw=0.8, mfc="w", label="LE control points")
+    ax.plot(val["LE"], yy, "b-", lw=2, label=f"new LE ({said('LE')})")
+    ax.plot(cv, cy, "o--", color="tab:blue", ms=5, lw=0.8, mfc="w", label="LE control points")
     ax.axhline(H, color="r", ls=":", lw=1, label=f"H = {H:g} mm")
     ax.set_xlabel("x (mm)")
     ax.set_ylabel("y, height (mm)")
@@ -1780,17 +2397,21 @@ def plot_case(path, case, design, orig, sections, stack=None, every=7):
     ax.legend(fontsize=6, loc="upper right")
 
     for ax, c in zip(axs[1:], coords):
-        law = d.curve(c)
+        cy, cv = control_points(d, orig, c, te_radius_mm)
         yd, vd = orig.data[c]
         yd, vd = yd[yd <= top], vd[yd <= top]
         ax.plot(vd, yd, "k.", ms=3, label="section fits (original)")
         ax.plot(orig.value(c, yz), yz, "k-", lw=1, label=f"original (order {orig.curves[c].order})")
-        ax.plot(law.at(yy)[:, 1], yy, "b-", lw=2, label=f"design (order {law.order}, {d.curves[c].join})")
-        ax.plot(law.ctrl[:, 1], law.ctrl[:, 0], "o--", color="tab:blue", ms=5, lw=0.8, mfc="w",
-                label="control points")
-        ax.plot(law.ctrl[0, 1], law.ctrl[0, 0], "rs", ms=6, label="pinned at H")
+        if c in bands:
+            ax.plot(bands[c][0], yy, ":", color="tab:green", lw=1, label="low law")
+            ax.plot(bands[c][1], yy, ":", color="tab:red", lw=1, label="high law")
+        ax.plot(val[c], yy, "b-", lw=2, label=f"design ({said(c)})")
+        if len(cy):
+            ax.plot(cv, cy, "o--", color="tab:blue", ms=5, lw=0.8, mfc="w", label="control points")
+            ax.plot(cv[0], cy[0], "rs", ms=6, label="pinned at H")
         ax.axhline(H, color="r", ls=":", lw=1)
-        shown = np.concatenate((vd, law.ctrl[:, 1], orig.value(c, yz)))
+        shown = np.concatenate((vd, cv, val[c], orig.value(c, yz)))
+        shown = shown[np.isfinite(shown)]
         lo, hi = shown.min(), shown.max()
         pad = 0.08 * (hi - lo) if hi - lo > 1e-6 * max(abs(hi), 1e-3) else 1e-3 * max(abs(hi), 1e-3)
         ax.set_xlim(lo - pad, hi + pad)                 # a constant curve gets a readable axis too
