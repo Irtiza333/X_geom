@@ -41,11 +41,16 @@ moves the root section, which may make room for them).
 The hub (13 Nov 2026; prop_hub.py): a cylinder of the hub radius centred on
 x = 0 (the DRDC hub sector), or a cone with a rounded nose, set_hub_shape:
 its base radius, top radius and base x are variables like the hub height (held
-to start with; defaults when switched on: the hub radius, half of it, the hub
-centred on x = 0), and the hub radius is then the blade's root radius, where
-the table starts; the blade is extended into the hub and trimmed by it in the
-CAD. set_part chooses what the CAD button writes (blade_modify.PARTS): the
-whole propeller, half of it (an even Z) or one blade on its 1/Z of the hub (the
+to start with; defaults when switched on: the hub radius, half of it, the base
+plane where the cylinder's upstream end is), and the hub radius is then the
+blade's root radius, where the table starts; the blade is extended into the hub
+and trimmed by it in the CAD. set_hub_extends (26 Nov 2026) chooses which end
+of the hub moves when its height changes: fore (the upstream end), aft (the
+tip) or both (half each); the hub's own to start with (the cylinder both, the
+cone aft). It is saved with the set-up (hub_extends), so an optimiser moves the
+same end; the cone's base x follows it (its bounds widen when it has to).
+set_part chooses what the CAD button writes (blade_modify.PARTS): the whole
+propeller, half of it (an even Z) or one blade on its 1/Z of the hub (the
 default; with the cylinder the DRDC files of the MSc pipeline, otherwise
 solids). The vehicle builds the whole propeller.
 
@@ -89,7 +94,7 @@ class BladeAdapter(REL.AdapterRelations):
         s = BC.settings
         self.settings = {"clearance_mm": float(s.clearance_mm), "sections": int(s.sections),
                          "tip_band": float(s.tip_band), "tip_sections": int(s.tip_sections), "hub": bool(s.hub),
-                         "part": str(getattr(s, "part", "sector")),
+                         "part": str(getattr(s, "part", "sector")), "hub_extends": None,
                          "plot": bool(s.plot), "orders": dict(BC.ORDERS), "segments": dict(BC.SEGMENTS),
                          "free": tuple(BC.FREE)}
         self.out_dir = BC.OUT_DIR
@@ -104,6 +109,7 @@ class BladeAdapter(REL.AdapterRelations):
         ld = BM.load_component(path, self.settings["orders"], self.settings["segments"], self.settings["free"])
         self.params, self.design = ld.params, ld.design
         self.meta = self.meta_of(ld.space)          # each variable's bounds, free flag and (dependent) relation
+        self.settings["hub_extends"] = None         # the hub's own unless the file names an end
         self.settings.update(ld.settings)
         self.file, self.notes, self.extra = os.path.abspath(path), ld.notes, ld.extra
         self.file_blades = self.params.blades       # the file's Z (set_blades may change the one in use)
@@ -143,7 +149,8 @@ class BladeAdapter(REL.AdapterRelations):
         self.meta = {n: self.meta.get(n, {"lo": float(lo), "hi": float(hi), "free": n.split(".")[0] in free0})
                      for n, (lo, hi) in zip(full.all_names, full.all_bounds)}
         self.space = BM.BladeSpace(self.params, self.design,
-                                   bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()})
+                                   bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()},
+                                   hub_extends=self.settings.get("hub_extends"))
         self.values = self.space.values(self.design)
         self.follow(note=True)
 
@@ -155,8 +162,20 @@ class BladeAdapter(REL.AdapterRelations):
 
     def set(self, name, value):
         """Set one variable; returns the value used (kept inside its limits: its bounds and, a dependent
-        variable, its relations). The variables that depend on it follow."""
+        variable, its relations). The variables that depend on it follow; a new hub height moves the end of the
+        hub that hub_extends names (a cone's base x with it, its bounds widened to the mm when it leaves them)."""
+        before = self.design
         vals, value, moved = self._moved(name, value)
+        if "hub_x" in vals and name != "hub_x" and "hub_x" not in moved and vals["hub_height"] != before.hub_height:
+            x = before.hub_front - BM.EXTEND_SHARE[self.hub_extends] * (vals["hub_height"] - before.hub_height)
+            if x != vals["hub_x"]:
+                vals["hub_x"] = x
+                moved.append("hub_x")
+                m = self.meta["hub_x"]
+                if not m.get("lo_expr") and x < m["lo"]:
+                    m["lo"] = float(np.floor(x * 1000.0) / 1000.0)
+                if not m.get("hi_expr") and x > m["hi"]:
+                    m["hi"] = float(np.ceil(x * 1000.0) / 1000.0)
         self.design = self.space.design_of(vals)
         self.values = self.space.values(self.design)
         for n in moved:
@@ -302,6 +321,25 @@ class BladeAdapter(REL.AdapterRelations):
                 self.meta[n]["free"] = False
         return self.design.hub.describe()
 
+    hub_ends = BM.HUB_EXTENDS     # which end of the hub may move with its height: the tool offers the choice
+
+    @property
+    def hub_extends(self):
+        """Which end of the hub moves when its height changes: fore, aft or both (blade_modify.hub_extends_of:
+        the setting, else the hub's own, both for the cylinder and aft for the cone)."""
+        return BM.hub_extends_of(self.design, self.settings.get("hub_extends"))
+
+    def set_hub_extends(self, end):
+        """Which end of the hub moves when its height changes from now on: fore (the upstream end, the base
+        plane; the tip stays), aft (the tip; the base plane stays) or both (half each; the middle stays); the
+        hub itself does not move. Saved with the set-up (the setting hub_extends), so an optimiser that varies
+        the hub height moves the same end. ValueError for any other end. Returns it."""
+        end = BM.hub_extends_of(self.design, end)
+        if end != self.hub_extends:
+            self.settings["hub_extends"] = end
+            self._rebuild()                         # the space keeps the hub's point at the other end now
+        return end
+
     def set_part(self, part):
         """What the CAD button writes (blade_modify.cad_part): whole, half or sector; refused when half does not
         tile the propeller (an odd Z)."""
@@ -340,8 +378,8 @@ class BladeAdapter(REL.AdapterRelations):
         if name == "hub_radius":
             return f"r/R {d.r0:.3f}"
         if name == "hub_height":
-            hp = d.hub
-            return f"x {hp.x_base:.3f} to {hp.x_tip:.3f}" if d.hub_cone else f"x ±{0.5 * d.hub_height:.3f}"
+            x0 = d.hub_front
+            return f"x {x0:.3f} to {x0 + d.hub_height:.3f}"
         if name == "hub_base":
             return f"x {d.hub.x_base:.3f}"
         if name == "hub_top":
@@ -371,8 +409,11 @@ class BladeAdapter(REL.AdapterRelations):
     def summary(self):
         d = self.design
         kept = [c for c in BM.CURVES if d.curves[c].segments == 0]
-        hub = (f"hub a cone, base radius {d.hub_base:.4g} m, top {d.hub_top:.4g} m, {d.hub_height:.4g} m to the tip "
-               f"from x {d.hub_x:.4g} m" if d.hub_cone else f"hub height {d.hub_height:.4g} m")
+        if d.hub_cone:
+            hub = (f"hub a cone, base radius {d.hub_base:.4g} m, top {d.hub_top:.4g} m, {d.hub_height:.4g} m to the "
+                   f"tip from x {d.hub_x:.4g} m")
+        else:
+            hub = f"hub height {d.hub_height:.4g} m" + ("" if d.hub_x is None else f" from x {d.hub_x:.4g} m")
         return (f"{self.free_text()}; R {d.radius:.4g} m, {'blade root' if d.hub_cone else 'hub'} radius "
                 f"{d.hub_radius:.4g} m (r/R {d.r0:.3f}), {hub}, {self.params.blades} blades; CAD: "
                 f"{self.part_label()}" + (f"; as the file (vary N): {', '.join(kept)}" if kept else ""))
@@ -502,12 +543,14 @@ class BladeAdapter(REL.AdapterRelations):
     # ---------------------------------------------------------------- output
     def free_space(self):
         """The design space with the unticked variables held fixed and the
-        dependent ones' relations: the one an optimiser gets."""
+        dependent ones' relations: the one an optimiser gets (the hub's end
+        that moves with its height, hub_extends)."""
         fixed = {n: self.values[n] for n in self.space.all_names if not self.meta[n]["free"]}
         return self.related(BM.BladeSpace(self.params, self.design,
-                                          bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()}, fixed=fixed))
+                                          bounds={n: (m["lo"], m["hi"]) for n, m in self.meta.items()}, fixed=fixed,
+                                          hub_extends=self.settings.get("hub_extends")))
 
-    CASE_KEYS = ("clearance_mm", "sections", "tip_band", "tip_sections", "hub", "part")
+    CASE_KEYS = ("clearance_mm", "sections", "tip_band", "tip_sections", "hub", "part", "hub_extends")
 
     def _case_settings(self):
         return {k: self.settings[k] for k in self.CASE_KEYS}

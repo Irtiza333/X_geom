@@ -125,7 +125,7 @@ Keys and columns:
 
 | kind | geometry | settings | columns |
 |---|---|---|---|
-| blade | diameter_m, blades, root_r, hub_height_m, hub_base_m, hub_top_m, hub_x_m, section, section_tables | sections, tip_band, tip_sections, clearance_mm, hub, part | r/R P/D c/D t/c f/c skew_deg rake/D |
+| blade | diameter_m, blades, root_r, hub_height_m, hub_base_m, hub_top_m, hub_x_m, section, section_tables | sections, tip_band, tip_sections, clearance_mm, hub, part, hub_extends | r/R P/D c/D t/c f/c skew_deg rake/D |
 | rudder, fin, wing, bwb | span_mm, section, ref_xc, camber_xc, tip_tilt_deg, cap and its keys (below) | sections, change_points, half, cap_loops | eta pitch_deg chord_mm t/c f/c sweep_mm rake_mm [dt1 .. dtk dc1 .. dck] |
 | rudder_h | corner_points, section_table, xcad_original, stack, degree, span_mm, fit_orders, fit_free_heights | sections, points, te_radius_mm, half, strip_frac, tip_drop, keep_inside, inside_tol_mm | y_mm LE_mm P1x P1z .. P(n-1)x P(n-1)z |
 | hull | nose_m, middle_m, tail_m, cap_m, axisymmetric | | x_m r_m [rp_m] |
@@ -157,7 +157,17 @@ Rules:
   nose (the sphere tangent to the cone through the tip, `hub_height_m` from the base), and the x of the base
   plane in the blade frame (m, downstream positive; the generator line is x = 0). With them `root_r` is the
   blade root, where the table starts; the blade runs on into the hub. Their var lines `hub_base`, `hub_top`,
-  `hub_x` (held unless Y). Without them the hub is the cylinder of the root radius, centred on x = 0.
+  `hub_x` (held unless Y). Without them the hub is the cylinder of the root radius, centred on x = 0; with
+  `hub_x_m` alone (26 Nov 2026) the cylinder starts there instead (its upstream end, m), written when it is not
+  centred (after its height changed at one end, below). No var line: the cylinder's position is no variable.
+- `hub_extends` (blade setting, 26 Nov 2026; the user: the cylinder grew at both ends and the cone only aft, there
+  should be "freedom to choose: which end the user wants to extend (fore or aft) or both together"): which end of
+  the hub moves when `hub_height` changes, `fore` (its upstream end, the base plane; the tip stays), `aft` (the
+  tip; the base plane stays) or `both` (half each; the middle stays). Absent: the hub's own, `both` for the
+  cylinder and `aft` for the cone, so files without it behave as before. The tool and an optimiser that varies
+  `hub_height` move the same end (`BladeSpace(hub_extends=)`: the hub keeps the file's point at the other end);
+  a cone whose `hub_x` is free has it set by the optimiser instead. Moving the upstream end moves the propeller's
+  blades relative to the hull in the Vehicle tab, which places the hub by its upstream end (`prop_x`).
 - `part` (blade setting): what the CAD writes, `whole`, `half` (an even Z) or `sector` (one blade on 1/Z of the
   hub, the default). The Vehicle CAD takes the same part, as a solid (19 Nov 2026; it had always taken the
   whole propeller); `outputs/vehicle/<case>_vehicle_setup.json` names it in its propeller record (`part`, and
@@ -704,6 +714,15 @@ design, with laws. `xgeom_relations`: `parse_law`, `sequence`, `min( )`/`max( )`
 `bezier_section.te_x_from`; `rudder_modify.sharp_chord` (bezier_section's, faster). New files: `rudder.txt`
 (the new rudder's start) and `rudder_laws_setup.py` (a script; the app does not need it). The self-checks:
 relations 138 with the window, rudder_modify 147, the tool 83 with the window, wing 80.
+
+26 Nov 2026, later: which end of a propeller's hub moves when its height changes (`hub_extends`, above), for the
+cylinder and the cone; a cylinder may sit off-centre (`hub_x_m` alone). For the web app: additive. Files without
+the setting read and write as before (the samples unchanged); a file with it, or with `hub_x_m` alone, needs this
+version to read. The blade adapter gains `hub_extends` (the end in use), `hub_ends` (the choices) and
+`set_hub_extends(end)`; `set("hub_height", v)` moves that end (a cone's `hub_x` with it, its bounds widened to
+the mm when it leaves them); `blade_modify.BladeDesign.hub_front` (x of the hub's upstream end, either hub),
+`hub_extends_of(design, setting)`, `HUB_EXTENDS`, `BladeSpace(..., hub_extends=)`. `preview()["hub_outline"]` and
+the Vehicle tab already draw the hub where it is; the DRDC hub sector and the solids follow it.
 
 26 Nov 2026, later: every set-up a component file (the user: "everything should be in the current set up
 format, delete anything extra or old"). The rudder modified below H is kind `rudder_h` (Component file, above):

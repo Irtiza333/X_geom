@@ -115,7 +115,7 @@ GEOMETRY = {"blade": ("diameter_m", "blades", "root_r", "hub_height_m", "hub_bas
             MODIFIED: ("corner_points", "section_table", "xcad_original", "stack", "degree", "span_mm",
                        "fit_orders", "fit_free_heights"),
             "hull": ("nose_m", "middle_m", "tail_m", "cap_m", "axisymmetric")}
-SETTINGS = {"blade": ("sections", "tip_band", "tip_sections", "clearance_mm", "hub", "part"),
+SETTINGS = {"blade": ("sections", "tip_band", "tip_sections", "clearance_mm", "hub", "part", "hub_extends"),
             **{k: ("sections", "change_points", "half", "cap_loops") for k in PLANAR},
             MODIFIED: ("sections", "points", "te_radius_mm", "half", "strip_frac", "tip_drop", "keep_inside",
                        "inside_tol_mm"),

@@ -1053,6 +1053,30 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   with the window, wing 80, files 60, hull 65, blade 79, hull_modify 17; the contract test 271 checks (268). On
   the user's machine (no window, no OCC): relations 120, rudder_modify 151, tool 37, wing 62, files 41, hull 39,
   blade 69, hull_modify 14, contract 272; the Rudder folder relations 36, rudder_modify 140, tool 3.
+- Which end of the propeller's hub moves when its height changes (26 Nov 2026; the user: the cylinder grew at
+  both ends and the cone only aft, there should be "freedom to choose: which end the user wants to extend (fore
+  or aft) or both together"). A blade setting `hub_extends`: `fore` (the upstream end, the base plane; the tip
+  stays), `aft` (the tip; the base plane stays) or `both` (half each; the middle stays); absent, the hub's own
+  (the cylinder both, the cone aft), so every file and sample behaves and saves as before. The cylinder may now
+  sit off-centre: `hub_x_m` alone in the geometry is its upstream end, written only when it is not centred
+  (`BladeDesign.hub_front` gives the upstream end of either hub; `hub` builds the cylinder from it).
+  `blade_modify`: `HUB_EXTENDS`, `EXTEND_SHARE`, `hub_extends_of`; `BladeSpace(..., hub_extends=)` keeps the
+  hub's point at the end that does not move, so an optimiser that varies `hub_height` moves the same end as the
+  tool (a cone's `hub_x` held follows it; free, the optimiser sets it); `load_component` reads the setting
+  (another word refused, the file named) and gives it to the space; `write_component` and `write_params` write
+  `hub_x_m` for an off-centre cylinder; `design_checks` checks the cylinder from where it is (its message says
+  where); `write_cad` gives the DRDC hub sector its centre (`X_CAD(hub_center=)`, which hub_new had), and the
+  solids take the hub's profile as before. `xgeom_blade`: `hub_extends`, `hub_ends`, `set_hub_extends(end)` (the
+  hub itself does not move; saved with the set-up); `set("hub_height", v)` moves the chosen end, a cone's
+  `hub_x` with it (its bounds widened to the mm when it leaves them); the hub height row says where the hub runs
+  (x from .. to ..). The tool: a "hub extends" row of three radio buttons in the Blade and hub box. The Vehicle
+  tab places the hub by its upstream end (`prop_x`), so extending it fore moves the blades aft along the hull;
+  `vehicle_cad`'s fallback for an older set-up's DRDC faces takes the hub's recorded upstream end.
+  `xgeom_files`: `hub_extends` among the blade's settings (the file is shared with the Rudder folder). For the
+  web app: additive (claude/xgeom-file-formats.md, Status 26 Nov, later); a file with the setting, or with
+  `hub_x_m` alone, needs this version to read. Tests: blade 90 with the window and the CAD (82 before) (an
+  off-centre cylinder's DRDC sector and 1/Z solid from -250 to 550 mm, as placed), relations 138, files 60,
+  contract 271, tool 83, hull 65, wing 80.
 
 ## Next steps
 
@@ -1077,10 +1101,10 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   relations) when a campaign needs it (it samples para_control's variables today).
 - Set-ups: the vehicle's is the last one in JSON (`<case>_vehicle_setup.json`, written by Vehicle CAD and not
   loaded back): the assembly file in the Vehicle tab (step 4 of the input files) replaces it. A planar
-  component metres across (kind rudder, fin, wing, bwb; a wing 40 times the sample): saved, opened and saved
-  again its table changes in the last decimal once (12 figures on the var lines against 8 decimals of mm); the
-  rudder modified below H writes its table from the design as the file's figures give it, the same for
-  `wing_modify` when wanted.
+  component metres across (kind rudder, fin, wing, bwb; a wing 40 times the sample), and a blade written from a
+  fitted design (its skew in deg, on the user's machine): saved, opened and saved again its table changes in the
+  last decimal once (12 figures on the var lines against 8 decimals); the rudder modified below H writes its
+  table from the design as the file's figures give it, the same for `wing_modify` and `blade_modify` when wanted.
 - Rudder: the tip tilt and cap parameters into the design space. If the mesher draws the tip's rounded edge
   the way it drew the TE: a band of its own for it (as the TE strip now is for the TE's round).
 - Open items: section-fit bounds (X2 on its bound) and an LE-radius constraint; plain-named rudder outputs are

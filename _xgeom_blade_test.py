@@ -507,6 +507,7 @@ def test_hub(tmp, table):
            ld.design.hub_top, ld.design.hub_x, ld.design.hub_base, ld.space.names == sp.names,
            pd.hub_top, pd.hub_x, pd.hub_cone, refused(BM.read_params, os.path.join(tmp, "two.txt"))],
           [1, 1, 1, 0.05, -0.35, 0.2, 1, 0.05, -0.35, 1, 1], 1e-12)
+    test_hub_extends(tmp, p, d, dc)
     parts = [BM.cad_part({"part": s}, 6) for s in ("whole", "half", "sector")] + [BM.cad_part({}, 6)]
     check("cad_part: whole (6 blades), half (3), sector (1), the default sector; half of 5 blades refused, an "
           "unknown part refused",
@@ -536,6 +537,73 @@ def test_hub(tmp, table):
           [isinstance(bs1, SectionsBladeSurface), diff, len(read_tables(tables)), "section_tables tables.dat" in
            open(comp2).read(), os.path.basename(ld2.params.tables_path()) == "tables.dat",
            refused(BM.load_component, _without_tables(comp2, tmp))], [1, 0, 3, 1, 1, 1], 1e-7)
+
+
+def test_hub_extends(tmp, p, d, dc):
+    """Which end of the hub moves when its height changes (hub_extends, 26 Nov 2026): the cylinder d (centred) and
+    the cone dc, in the design space, the component file and the checks."""
+    def ends(design):
+        return [design.hub_front, design.hub_front + design.hub_height]
+    h = d.hub_height
+    check("the end that moves with the hub height: the hub's own (the cylinder both, the cone aft) unless named; "
+          "fore, aft, both named in any case; another word refused",
+          [BM.hub_extends_of(d) == "both", BM.hub_extends_of(dc) == "aft", BM.hub_extends_of(d, "Fore") == "fore",
+           BM.hub_extends_of(dc, "both") == "both", refused(BM.hub_extends_of, d, "sideways")], [1] * 5, 0)
+    got = []
+    for design in (d, dc):
+        for end in (None, "fore", "aft", "both"):
+            sp = BM.BladeSpace(p, design, free=("hub_height",), hub_extends=end)
+            x = sp.to_vector(design)
+            x[sp.names.index("hub_height")] = h + 0.2
+            got.append(ends(sp.to_design(x)) + [sp.to_design(x).hub_x is None])
+    x0, x1 = ends(d)
+    c0, c1 = ends(dc)
+    check("the space, the hub height 0.2 m more (an optimiser): the cylinder's own (both) and both 0.1 m each way "
+          "(still centred: no hub_x), fore the upstream end 0.2 m, aft the tip 0.2 m; the cone's own (aft) the tip, "
+          "fore its base plane, both half each (its base x held follows)",
+          got, [[x0 - 0.1, x1 + 0.1, 1], [x0 - 0.2, x1, 0], [x0, x1 + 0.2, 0], [x0 - 0.1, x1 + 0.1, 1],
+                [c0, c1 + 0.2, 0], [c0 - 0.2, c1, 0], [c0, c1 + 0.2, 0], [c0 - 0.1, c1 + 0.1, 0]], 1e-12)
+    sp = BM.BladeSpace(p, dc, free=("hub_height", "hub_x"), hub_extends="fore")
+    x = sp.to_vector(dc)
+    x[sp.names.index("hub_height")], x[sp.names.index("hub_x")] = h + 0.2, -0.45
+    check("the cone's base x free as well: the vector sets it (the end named moves only what is held)",
+          ends(sp.to_design(x)), [-0.45, -0.45 + h + 0.2], 1e-12)
+    shifted = d.copy()
+    shifted.hub_x = -0.25                                  # a cylinder from x -0.25, its height as before
+    sp = BM.BladeSpace(p, shifted, free=("hub_height",), hub_extends="fore")
+    path = BM.write_component(os.path.join(tmp, "cyl_fore.txt"), p, shifted, sp, {"hub_extends": "fore"})
+    text = open(path).read()
+    ld = BM.load_component(path)
+    again = BM.write_component(os.path.join(tmp, "cyl_fore_again.txt"), ld.params, ld.design, ld.space, ld.settings,
+                               "cyl_fore")
+    centred = BM.write_component(os.path.join(tmp, "cyl.txt"), p, d, BM.BladeSpace(p, d))
+    table = BM.write_params(os.path.join(tmp, "cyl_table.txt"), BM.design_params(shifted, p))
+    bad = text.replace("# hub_extends   fore", "# hub_extends   sideways")
+    with open(os.path.join(tmp, "cyl_bad.txt"), "w") as fh:
+        fh.write(bad)
+    try:
+        BM.load_component(os.path.join(tmp, "cyl_bad.txt"))
+        said = ""
+    except ValueError as exc:
+        said = str(exc)
+    def head(f):                                           # the lines above the table (its last decimal may
+        with open(f) as fh:                                # change once from a design not yet rounded to the
+            return [ln for ln in fh.read().splitlines() if ln.startswith("#")]     # var lines' 12 figures)
+    check("a cylinder off-centre in the component file: hub_x_m alone (its upstream end) and the setting hub_extends; "
+          "read back (the space's end fore), written again the same header and var lines; a centred one has "
+          "neither; a table file carries hub_x_m too; an end that is none refused, naming the file",
+          ["# hub_x_m       -0.25\n" in text, "# hub_extends   fore\n" in text, ld.design.hub_x,
+           ld.design.hub_top is None, ld.space.hub_extends == "fore", head(again) == head(path),
+           "hub_x_m" in open(centred).read() or "hub_extends" in open(centred).read(), BM.read_params(table).hub_x,
+           "cyl_bad.txt: hub_extends is fore, aft or both, not 'sideways'" in said],
+          [1, 1, -0.25, 1, 1, 1, 0, -0.25, 1], 1e-12)
+    a, b = BM.root_extent(d, p)
+    far = d.copy()
+    far.hub_x = b - 0.1                                    # the cylinder starts behind the blade root
+    prob = BM.design_checks(far, p)[0]
+    check("a cylinder that no longer covers the blade root: a problem that says where the hub is",
+          [len(prob), "does not cover the blade root" in prob[0], f"the hub from {1000 * (b - 0.1):.0f} to" in prob[0],
+           len(BM.design_checks(shifted, p)[0])], [1, 1, 1, 0], 0)
 
 
 def _without_tables(comp, tmp):
@@ -747,6 +815,36 @@ def test_adapter(tmp, table):
           [1, 1, 1, 2, 0, -0.2, 1, 1, 1, 1, -0.2, 1, 3, 1, 3], 1e-12)
     ad.set_blades(5)
     ad.set_part("sector")
+    import xgeom_vehicle as XV
+    h = ad.get("hub_height")
+    own = [ad.hub_extends, ad.set_hub_extends("both"), ad.settings["hub_extends"] is None]   # the own: nothing set
+    ad.set_hub_extends("fore")
+    ad.set("hub_height", h + 0.2)
+    fore = [ad.design.hub_front, ad.design.hub_front + ad.design.hub_height, ad.row_info("hub_height"),
+            XV.hub_front(XV.blade_part(ad))[0]]
+    comp = ad.save_file(os.path.join(tmp, "fore_gui.txt"))
+    ad2 = XBL.BladeAdapter(params=comp)
+    ad2.set("hub_height", h)                               # back, the tip still held: centred again
+    back = [ad2.hub_extends, ad2.design.hub_front, ad2.design.hub_x is None]
+    ad.set_hub_shape("cone")                               # its base plane where the cylinder's upstream end is
+    ad.set_bounds("hub_height", 0.1, 3.0)
+    f0, h1, lo0 = ad.design.hub_front, ad.get("hub_height"), ad.bounds("hub_x")[0]
+    ad.set("hub_height", h1 + 0.7)                         # fore on the cone: its base x 0.7 m further upstream,
+    cone = [f0, ad.get("hub_x"), ad.bounds("hub_x")[0], lo0 > f0 - 0.7,      # past its bounds (x -+ h1 / 2)
+            ad.design.hub_front + ad.design.hub_height, ad.hub_extends]
+    bad = refused(ad.set_hub_extends, "sideways")
+    plain = XBL.BladeAdapter(params=path)
+    check("the adapter's hub extends: the cylinder's own (both: nothing set); fore: a 0.2 m higher hub reaches "
+          "0.2 m further upstream, the tip where it was (the row says where, the Vehicle tab places the hub's "
+          "front there); saved and read back with it (back to its height: centred again); the cone from the "
+          "cylinder's upstream end, its base x following fore, its bounds widened to the mm, the tip held; another "
+          "end refused; another file starts with the hub's own",
+          [own == ["both", "both", True], fore[0], fore[1], fore[2] == f"x {fore[0]:.3f} to {fore[1]:.3f}", fore[3],
+           back[0] == "fore", back[1], back[2], cone[0], cone[1], cone[2], cone[3], cone[4], cone[5] == "fore", bad,
+           plain.hub_extends == "both", plain.settings["hub_extends"] is None],
+          [1, -0.5 * h - 0.2, 0.5 * h, 1, -0.5 * h - 0.2, 1, -0.5 * h, 1, -0.5 * h - 0.2, -0.5 * h - 0.9,
+           np.floor((-0.5 * h - 0.9) * 1000.0) / 1000.0, 1, f0 + h1, 1, 1, 1, 1], 1e-9)
+    ad.set_hub_shape("cylinder")
 
 
 def test_adapter_vary(tmp, table):
@@ -910,6 +1008,16 @@ def test_gui(tmp, table):
         part6 = app.ad.settings["part"]
         app.vhub.set("cylinder")
         app.on_hub_shape()
+        h = app.ad.get("hub_height")
+        app.vhub_end.set("aft")
+        app.on_hub_extends()
+        said_end = app.status.cget("text")
+        app.set_value("hub_height", h + 0.1, None)
+        aft = [app.ad.design.hub_front, app.ad.design.hub_front + app.ad.design.hub_height]
+        app.set_value("hub_height", h, None)
+        check("the window: hub extends aft from its radio (the status bar says so); the hub height 0.1 m more moves "
+              "the tip only", [app.ad.hub_extends == "aft", said_end == "hub: a new height moves its tip (the base "
+                               "stays)", aft[0], aft[1]], [1, 1, -0.5 * h, 0.5 * h + 0.1], 1e-9)
         check("the window: hub cone from the radio (3 more rows, the cone drawn in the propeller tab), CAD writes "
               "half refused with 5 blades (said in red) and taken with 6; cylinder again",
               [rows_cone - rows0, n_hub > 14, part5 == "sector", "even number of blades" in said5, part6 == "half",
@@ -945,6 +1053,11 @@ def test_gui(tmp, table):
                app.status.cget("background") == XT.STATUS["ok"][0]], [1, 1, 1, 1, 1, 1], 0)
     finally:
         root.destroy()
+
+
+def PH_read_step(path):
+    import xcad_loft as XL
+    return XL.read_step(path)
 
 
 def test_cad(tmp, table):
@@ -1003,6 +1116,27 @@ def test_cad(tmp, table):
           [res["blades"], res["R_mm"] / 700.0, res["table"][0, 0] / design.r0, res["flipped"], res["mirrored"],
            max(err.values()) < 0.015, res["deviation"][0, :, 0].max() < 1.0,
            os.path.exists(res["paths"]["component"])], [1, 1, 1, 1, 0, 1, 1, 1], 2e-3)
+
+    # a cylinder off-centre (hub_extends fore or aft): the DRDC hub sector and the solid from its ends
+    def x_range(shape):                                    # from the vertices (a box is loose on trimmed faces)
+        import xcad_loft as XL
+        import vehicle_cad as VC
+        pnt = XL._static(XL._occ("BRep", "BRep_Tool"), "Pnt")
+        xs = [pnt(v).X() for v in VC._shapes(shape, "VERTEX")]
+        return min(xs), max(xs)
+    shifted = design.copy()
+    shifted.hub_x = -0.25                                  # 0.8 m from x -0.25 m
+    out3 = BM.write_cad(tmp, "cad_aft", shifted, p)
+    rd = STEPControl_Reader()
+    rd.ReadFile(out3["cad_paths"]["step"])
+    rd.TransferRoots()
+    sector = x_range(rd.OneShape())
+    out4 = BM.write_cad(tmp, "cad_aft_solid", shifted, p, {"part": "sector", "solids": True})
+    solid = x_range(PH_read_step(out4["cad_paths"]["step"]))
+    print(f"       the hub from x -250 mm: the DRDC sector from {sector[0]:.2f} to {sector[1]:.2f} mm, the solid from "
+          f"{solid[0]:.2f} to {solid[1]:.2f} mm")
+    check("a cylinder hub off-centre (from x -250 mm, 800 mm long): the DRDC hub sector and the 1/Z solid from -250 "
+          "to 550 mm", [*sector, *solid, out4["valid"]], [-250.0, 550.0, -250.0, 550.0, 1], 0.05)
 
     # a conic hub: one blade on its 1/Z of the hub as a solid (the blade extended into the hub and trimmed)
     import prop_hub as PH

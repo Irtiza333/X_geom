@@ -159,8 +159,12 @@ Left panel (blade)
               file.
     Blade and hub
               the blade radius R, the hub radius and the hub height (m; the hub
-              is centred at x = 0 and must cover the blade root). A change of
-              either radius stretches the distributions over the new span.
+              is centred at x = 0 to start with and must cover the blade root).
+              A change of either radius stretches the distributions over the
+              new span. hub extends (26 Nov 2026): which end moves when the hub
+              height changes, fore (the upstream end), aft (the tip) or both
+              (half each); the hub's own to start with (a cylinder both, a cone
+              aft). Saved with the set-up, so an optimiser moves the same end.
               hub: a cylinder (the above), or a cone (13 Nov 2026, prop_hub.py):
               three more variables, the base radius (the larger end, upstream,
               at the base's x) and the top radius, where the cone meets its
@@ -1341,6 +1345,18 @@ class App:
         if msg is not None:
             self._note = f"hub: {msg}"
 
+    def on_hub_extends(self):
+        """Blade: which end of the hub moves when its height changes (the adapter's set_hub_extends); the hub
+        itself stays where it is."""
+        end = self.vhub_end.get()
+        got = self.guard(lambda: self.ad.set_hub_extends(end))
+        if got is None:
+            self.vhub_end.set(self.ad.hub_extends)
+            return
+        self.say("hub: a new height moves " + ("both ends, half each (the middle stays)" if got == "both" else
+                                              "its upstream end (the tip stays)" if got == "fore" else
+                                              "its tip (the base stays)"))
+
     def on_part(self):
         """Blade: what the CAD button writes (whole, half, one blade on 1/Z of the hub)."""
         part = self.vpart.get()
@@ -2124,11 +2140,20 @@ def blade_panel(app):
                          "radius, closed by the sphere tangent to it through the tip, hub height from the base; "
                          "root r is where the table starts: the blade runs on into the hub, which trims it"
                          if ad.hub_shape == "cone" else
-                         "a cylinder of the hub radius centred on x = 0 (the blade root ring lies on it); a cone: "
-                         "base and top radii, the base's x and a rounded nose"),
+                         "a cylinder of the hub radius (the blade root ring lies on it), centred on x = 0 until its "
+                         "height changes at one end; a cone: base and top radii, the base's x and a rounded nose"),
               foreground=INK2, wraplength=440, justify="left").pack(side="left", padx=6)
     row = ttk.Frame(box)
     row.grid(row=grid_row(len(specs) + 2), column=0, columnspan=COLS, sticky="w", padx=2, pady=(2, 2))
+    ttk.Label(row, text="hub extends").pack(side="left", padx=(2, 4))
+    app.vhub_end = tk.StringVar(value=ad.hub_extends)
+    for end in ad.hub_ends:
+        ttk.Radiobutton(row, text=end, value=end, variable=app.vhub_end, command=app.on_hub_extends).pack(side="left")
+    ttk.Label(row, text="the end that moves when the hub height changes: fore (upstream; the tip stays), aft (the "
+                        "tip; the base stays) or both (half each; the middle stays)",
+              foreground=INK2, wraplength=440, justify="left").pack(side="left", padx=6)
+    row = ttk.Frame(box)
+    row.grid(row=grid_row(len(specs) + 3), column=0, columnspan=COLS, sticky="w", padx=2, pady=(2, 2))
     ttk.Label(row, text="blades Z").pack(side="left", padx=(2, 4))
     app.nblades = ttk.Spinbox(row, from_=BM.BLADES[0], to=BM.BLADES[1], width=4, command=app.on_blades)
     app.nblades.set(p.blades)

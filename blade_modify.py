@@ -37,8 +37,8 @@ table:
                    first row); the table starts there
     hub_height_m   axial length of the hub in the CAD, m (optional, default
                    HUB_HEIGHT = hub_new.DEFAULT_HUB_HEIGHT); a cylinder of the
-                   hub radius centred at x = 0, unless the next three keys make
-                   it a cone
+                   hub radius centred at x = 0 (hub_x_m alone: its upstream end
+                   there instead), unless the next three keys make it a cone
     hub_base_m, hub_top_m, hub_x_m
                    a conic hub with a rounded nose (prop_hub.py, 13 Nov 2026):
                    the base radius (the larger end, upstream), the top radius
@@ -50,6 +50,14 @@ table:
                    wider and clear of it where it is narrower: the blade is
                    extended below its root into the hub (root_extension) and
                    the hub trims it in the CAD
+    hub_extends    (a setting, 26 Nov 2026) which end of the hub moves when the
+                   hub height changes: fore (its upstream end, the base plane;
+                   the tip stays), aft (the tip; the base plane stays) or both
+                   (half each; the middle stays). Absent: the hub's own, both
+                   for the cylinder (hub_new centres it) and aft for the cone.
+                   The tool and an optimiser that varies hub_height move the
+                   same end (BladeSpace; a conic hub's hub_x free is set by the
+                   optimiser instead)
     section        the section: a file relative to the component file's folder,
                    para.py's section table (x/c, camber, camber slope and
                    thickness, comma-separated: airfoil_data_fixed.csv) or
@@ -161,6 +169,9 @@ DESCRIPTIONS = {
     "rake": "rake over the diameter, rake/D",
 }
 HUB_KEYS = {"hub_base": "hub_base_m", "hub_top": "hub_top_m", "hub_x": "hub_x_m"}   # the slots' file keys
+HUB_EXTENDS = ("fore", "aft", "both")   # which end of the hub moves when its height changes (the setting hub_extends)
+EXTEND_SHARE = {"fore": 1.0, "aft": 0.0, "both": 0.5}   # the share of a change of height the base plane moves
+                                                         # upstream: the tip keeps its place, the base, the middle
 PARTS = ("whole", "half", "sector")  # what the CAD writes: the whole propeller, half of it (an even Z), one blade
                                      # on its 1/Z of the hub
 ROOT_MARGIN = 0.02                   # a conic hub: the blade runs this fraction of the span below the hub's
@@ -286,6 +297,18 @@ def _extended(spline, r0, r1):
     return fn
 
 
+def hub_extends_of(design, setting=None):
+    """Which end of the hub moves when its height changes (HUB_EXTENDS): the setting, else the hub's own, both ends
+    for the cylinder (hub_new centres it on x = 0) and aft for the cone (its base plane held). ValueError for a
+    setting that is none of them."""
+    if setting is None or not str(setting).strip():
+        return "aft" if design.hub_cone else "both"
+    end = str(setting).strip().lower()
+    if end not in HUB_EXTENDS:
+        raise ValueError(f"hub_extends is {', '.join(HUB_EXTENDS[:-1])} or {HUB_EXTENDS[-1]}, not '{setting}'")
+    return end
+
+
 def vary_free(params):
     """The names flagged Y in the parameter file; None when it has no vary line."""
     if params.vary is None:
@@ -309,13 +332,20 @@ def read_params(path):
 
 
 def _hub_values(head, path):
-    """(hub_base, hub_top, hub_x) in m from a header's hub_base_m, hub_top_m, hub_x_m (all three or none)."""
+    """(hub_base, hub_top, hub_x) in m from a header's hub_base_m, hub_top_m, hub_x_m: all three (a cone), hub_x_m
+    alone (a cylinder placed by its upstream end) or none (a cylinder centred on x = 0)."""
     keys = tuple(HUB_KEYS.values())
     have = [k for k in keys if k in head]
     if not have:
         return None, None, None
+    if have == ["hub_x_m"]:
+        try:
+            return None, None, float(head["hub_x_m"])
+        except ValueError as exc:
+            raise ValueError(f"{path}: {exc}") from None
     if len(have) != 3:
-        raise ValueError(f"{path}: a conic hub needs {', '.join(keys)} together ({', '.join(have)} given)")
+        raise ValueError(f"{path}: a conic hub needs {', '.join(keys)} together ({', '.join(have)} given; "
+                         f"hub_x_m alone places a cylinder)")
     try:
         vals = [float(head[k]) for k in keys]
     except ValueError as exc:
@@ -349,6 +379,8 @@ def write_params(path, params, name=None, notes=()):
     if params.hub_cone:
         for slot, key in HUB_KEYS.items():
             g[key] = XF.num(getattr(params, slot))
+    elif params.hub_x is not None:               # a cylinder off-centre: its upstream end
+        g["hub_x_m"] = XF.num(params.hub_x)
     g.update(_section_keys(params, folder))
     if params.vary is not None:                  # a cylinder hub: no lines for the cone's slots
         comp.vary = {n: (v.on, v.lo, v.hi) for n, v in params.vary.items() if params.hub_cone or n not in HUB_SLOTS}
@@ -618,7 +650,9 @@ class BladeDesign:
     radius / R) to r1 (the tip). Positions along the curves are fractions of the
     span, so a change of either radius stretches them over the new span. A
     conic hub (prop_hub.py) has its base and top radii and base x (m) too; the
-    hub radius is then the blade's root radius, where the table starts."""
+    hub radius is then the blade's root radius, where the table starts. A
+    cylinder's hub_x is the x of its upstream end when it is not centred on
+    x = 0 (None: centred)."""
     radius: float
     hub_radius: float
     hub_height: float
@@ -641,27 +675,32 @@ class BladeDesign:
         return "cone" if self.hub_cone else "cylinder"
 
     @property
+    def hub_front(self):
+        """x of the hub's upstream end, its base plane (m): hub_x, else the cylinder centred on x = 0."""
+        return -0.5 * float(self.hub_height) if self.hub_x is None else float(self.hub_x)
+
+    @property
     def hub(self):
-        """The hub's profile (prop_hub.HubProfile, m): the cylinder of the hub radius centred at x = 0, or
-        the cone."""
+        """The hub's profile (prop_hub.HubProfile, m): the cylinder of the hub radius from hub_front (centred at
+        x = 0 unless placed otherwise), or the cone."""
         if self.hub_cone:
             return HubProfile(self.hub_base, self.hub_top, self.hub_height, self.hub_x)
-        return HubProfile(self.hub_radius, None, self.hub_height, -0.5 * self.hub_height)
+        return HubProfile(self.hub_radius, None, self.hub_height, self.hub_front)
 
     def hub_slots(self):
         """The global slots this design has: GLOBAL_SLOTS, and HUB_SLOTS with a conic hub."""
         return GLOBAL_SLOTS + (HUB_SLOTS if self.hub_cone else ())
 
     def with_hub(self, shape, base=None, top=None, x=None):
-        """The same blade with its hub as a cylinder, or a cone of the base and top radii and base x given
-        (defaults: the hub radius, half of it, the hub centred on x = 0)."""
+        """The same blade with its hub as a cylinder (centred on x = 0), or a cone of the base and top radii and
+        base x given (defaults: the hub radius, half of it, the base plane where the hub's is now)."""
         d = self.copy()
         if shape == "cylinder":
             d.hub_base = d.hub_top = d.hub_x = None
         elif shape == "cone":
             d.hub_base = float(self.hub_radius if base is None else base)
             d.hub_top = float(0.5 * d.hub_base if top is None else top)
-            d.hub_x = float(-0.5 * self.hub_height if x is None else x)
+            d.hub_x = float(self.hub_front if x is None else x)
             d.hub                                                     # refused if impossible
         else:
             raise ValueError(f"a hub is a cylinder or a cone, not '{shape}'")
@@ -924,6 +963,11 @@ class BladeSpace(REL.SpaceRelations):
     fixed    {slot: value} of the held slots (not in the vector); with free
              given instead (curve names and globals), every other slot is held
              at the design's value
+    hub_extends  which end of the hub moves when hub_height changes (the
+             setting, hub_extends_of(); None: the hub's own): the hub keeps the
+             point of the axis that design gives it at that end (the base
+             plane, the tip or the middle), unless the cone's hub_x is a free
+             slot, which the vector then sets
     Dependent variables (xgeom_relations.SpaceRelations): set_relations
     (relations, dependent bounds), relations, dependent_bounds, violations(x),
     project(x). A free slot with a dependent bound is in the vector as its
@@ -932,9 +976,12 @@ class BladeSpace(REL.SpaceRelations):
     vector (full_vector works it out).
     """
 
-    def __init__(self, params, design, bounds=None, fixed=None, free=None):
+    def __init__(self, params, design, bounds=None, fixed=None, free=None, hub_extends=None):
         self.params = params
         self.r1 = float(design.r1)
+        self.hub_extends = hub_extends_of(design, hub_extends)
+        self._hub_share = EXTEND_SHARE[self.hub_extends]
+        self._hub_kept = design.hub_front + self._hub_share * float(design.hub_height)    # the point the hub keeps
         self.forms = {c: (design.curves[c].segments, design.curves[c].order) for c in CURVES}
         self.file_curves = {c: design.curves[c] for c in CURVES if design.curves[c].segments == 0}
         b = {**default_bounds(params, design), **(bounds or {})}
@@ -986,8 +1033,15 @@ class BladeSpace(REL.SpaceRelations):
                 continue
             cls = CURVE_TYPES[seg]
             curves[c] = cls.from_keys({k: vals[f"{c}.{k}"] for k in cls.keys_of(order)}, order)
-        return BladeDesign(vals["radius"], vals["hub_radius"], vals["hub_height"], self.r1, curves,
-                           *(vals.get(g) for g in HUB_SLOTS))
+        height = vals["hub_height"]
+        if "hub_x" in vals and "hub_x" not in self.fixed:     # the cone's base x a variable: as given
+            x = vals["hub_x"]
+        else:                                                 # the hub keeps its point: hub_extends' end moves
+            x = self._hub_kept - self._hub_share * height
+            if "hub_x" not in vals and abs(x + 0.5 * height) <= 1e-12 * max(1.0, abs(height)):
+                x = None                                      # a cylinder centred on x = 0, as before
+        return BladeDesign(vals["radius"], vals["hub_radius"], height, self.r1, curves,
+                           vals.get("hub_base"), vals.get("hub_top"), x)
 
     def values(self, design):
         """{slot name: value} of a design, every slot."""
@@ -997,7 +1051,7 @@ class BladeSpace(REL.SpaceRelations):
     def to_dict(self, design):
         vals = self.values(design)
         return {"forms": {c: f[0] for c, f in self.forms.items()}, "orders": {c: f[1] for c, f in self.forms.items()},
-                "r1": self.r1, "slots": self.slot_records(vals),
+                "r1": self.r1, "hub_extends": self.hub_extends, "slots": self.slot_records(vals),
                 "vector": self.vector_record(vals)}
 
     @classmethod
@@ -1021,15 +1075,15 @@ class BladeSpace(REL.SpaceRelations):
             return BladeCurve(np.linspace(0.0, 1.0, n + 1), np.zeros(n + 1))
         vals = {q["name"]: q["value"] for q in slots}
         hub = [vals.get(g, getattr(params, g)) for g in HUB_SLOTS]          # a conic hub: the slots, else the file's
-        tmpl = BladeDesign(radius, float(rec.get("r0", params.root_r)) * radius, float(hub_h),
+        tmpl = BladeDesign(radius, float(rec.get("r0", params.root_r)) * radius, float(vals.get("hub_height", hub_h)),
                            float(rec.get("r1", 1.0)), {c: template(c) for c in CURVES},
-                           *(hub if all(v is not None for v in hub) else (None, None, None)))
+                           *(hub if all(v is not None for v in hub) else (None, None, params.hub_x)))
         bounds = {q["name"]: (q["lo"], q["hi"]) for q in slots}
         fixed = {q["name"]: q["value"] for q in slots if not q["free"]}
         for g in tmpl.hub_slots():
             if g not in vals:
                 vals[g] = fixed[g] = float(getattr(tmpl, g))
-        space = cls(params, tmpl, bounds, fixed)
+        space = cls(params, tmpl, bounds, fixed, hub_extends=rec.get("hub_extends"))
         space.set_slot_relations(slots)
         return space, space.design_of(vals)
 
@@ -1054,7 +1108,7 @@ def outside_bounds(space, design):
 # --------------------------------------------------------------------------
 
 SETTING_TYPES = {"sections": int, "tip_band": float, "tip_sections": int, "clearance_mm": float, "hub": bool,
-                 "part": str}
+                 "part": str, "hub_extends": str}
 TABLE_TOL = 1e-6                  # a column of a curve with var lines may differ from the curve by this times
                                   # max(1, the column's range) (the file writes 8 decimals)
 GLOBAL_HEAD = {"radius": "diameter_m", "hub_radius": "root_r", "hub_height": "hub_height_m", **HUB_KEYS}
@@ -1178,7 +1232,7 @@ def _component_design(comp, params, orders=None, segments=None):
                              f"gives {v0:.10g}); change both, or delete the var line")
         glob[g] = v
     design = BladeDesign(glob["radius"], glob["hub_radius"], glob["hub_height"], float(r[-1]), curves,
-                         *(glob.get(g) for g in HUB_SLOTS))
+                         glob.get("hub_base"), glob.get("hub_top"), glob.get("hub_x", params.hub_x))
     keep = comp.column("r/R") >= params.root_r - ROW_TOL
     if not keep.all():
         raise ValueError(f"{comp.path}: rows below root_r; the table starts at the root")
@@ -1186,10 +1240,11 @@ def _component_design(comp, params, orders=None, segments=None):
     return design
 
 
-def _component_space(comp, params, design, free=None):
+def _component_space(comp, params, design, free=None, hub_extends=None):
     """The BladeSpace of a blade component: each variable's bounds (numbers, or a dependent bound's
     expression), free flag and relation from its var line; one with none: default_bounds (its curve's vary range
-    for the values) and free as the vary lines say (with none: the names in free)."""
+    for the values) and free as the vary lines say (with none: the names in free); the end of the hub that moves
+    with its height, hub_extends."""
     bounds = {**vary_bounds(params), **{n: (q.lo, q.hi) for n, q in comp.vars.items()}}
     full = BladeSpace(params, design, bounds=bounds)
     unknown = [n for n in comp.vars if n not in full.all_names]
@@ -1201,7 +1256,7 @@ def _component_space(comp, params, design, free=None):
     vals = full.values(design)
     fixed = {n: vals[n] for n in full.all_names
              if not (comp.vars[n].free if n in comp.vars else n.split(".")[0] in free0)}
-    return BladeSpace(params, design, bounds=bounds, fixed=fixed).set_relations(
+    return BladeSpace(params, design, bounds=bounds, fixed=fixed, hub_extends=hub_extends).set_relations(
         {n: q.relation for n, q in comp.vars.items() if q.relation}, comp.path,
         {n: (q.lo_expr, q.hi_expr) for n, q in comp.vars.items() if q.lo_expr or q.hi_expr}, vals)
 
@@ -1211,9 +1266,10 @@ def load_component(path, orders=None, segments=None, free=None):
     (each curve as its var lines give it; a curve without them fitted to its column as fit_design fits it,
     orders and segments, or as the table has it), the design space (every variable, the held ones fixed; a
     variable without a var line free as the vary lines say, else as the names in free; the dependent ones with
-    their relations and dependent bounds, ld.space.relations and ld.space.dependent_bounds), the file's settings
-    (SETTING_TYPES), its name, notes and extra geometry (section_tables). The design is the file's as it is:
-    ld.space.design_violations(ld.design) says what it breaks.
+    their relations and dependent bounds, ld.space.relations and ld.space.dependent_bounds; the hub's end that
+    moves with its height, ld.space.hub_extends), the file's settings (SETTING_TYPES), its name, notes and extra
+    geometry (section_tables). The design is the file's as it is: ld.space.design_violations(ld.design) says what
+    it breaks.
 
         ld = load_component("msc_blade.txt")
         x0, bounds = ld.space.to_vector(ld.design), ld.space.bounds      # a variable with a dependent bound: its
@@ -1225,10 +1281,15 @@ def load_component(path, orders=None, segments=None, free=None):
         raise ValueError(f"{path}: a {comp.kind} file, not a blade's")
     params = _component_params(comp)
     design = _component_design(comp, params, orders, segments)
-    space = _component_space(comp, params, design, free)
+    settings = XF.typed_settings(comp, SETTING_TYPES)
+    if "hub_extends" in settings:
+        try:
+            settings["hub_extends"] = hub_extends_of(design, settings["hub_extends"])
+        except ValueError as exc:
+            raise ValueError(f"{path}: {exc}") from None
+    space = _component_space(comp, params, design, free, settings.get("hub_extends"))
     extra = {k: comp.geometry[k] for k in ("section_tables",) if k in comp.geometry}
-    return XF.Loaded("blade", params, design, space, XF.typed_settings(comp, SETTING_TYPES), comp.name,
-                     list(comp.notes), extra)
+    return XF.Loaded("blade", params, design, space, settings, comp.name, list(comp.notes), extra)
 
 
 def write_component(path, params, design, space, settings=None, name=None, notes=(), extra=None):
@@ -1246,6 +1307,8 @@ def write_component(path, params, design, space, settings=None, name=None, notes
     if design.hub_cone:
         for slot, key in HUB_KEYS.items():
             g[key] = XF.num(getattr(design, slot))
+    elif design.hub_x is not None:               # a cylinder off-centre: its upstream end
+        g["hub_x_m"] = XF.num(design.hub_x)
     g.update(_section_keys(params, folder, extra))
     comp.settings = XF.settings_text(settings, SETTING_TYPES)
     for c in CURVES:
@@ -1372,8 +1435,8 @@ def design_checks(design, params, clearance_mm=CLEARANCE_MM, points=None, gap_mm
     """(problems, warnings) of a design. Problems make it unbuildable: a hub
     radius not between 0 and 90 % of the blade radius; chord, thickness or
     pitch not positive inside the blade; with the hub, a hub too short for the
-    blade root (hub_new: the hub, centred at x = 0, must reach 2 % of the root
-    section's axial extent beyond it); a conic hub that does not reach under
+    blade root (hub_new: the hub, from its upstream end, must reach 2 % of the
+    root section's axial extent beyond it); a conic hub that does not reach under
     the whole root section (the blade, extended into the hub, would stick out
     of its base plane or its nose), or chord, thickness or pitch not positive
     down to the extended root. The warning: blades closer than
@@ -1421,10 +1484,12 @@ def design_checks(design, params, clearance_mm=CLEARANCE_MM, points=None, gap_mm
                                f"cover the blade root extended into it (x from {1000.0 * a2:.0f} to "
                                f"{1000.0 * b2:.0f} mm)")
         else:
-            half = 0.5 * design.hub_height
-            if not (-half < a - margin and b + margin < half):
+            x0 = design.hub_front
+            x1 = x0 + design.hub_height
+            if not (x0 < a - margin and b + margin < x1):
                 out.append(f"hub height {1000.0 * design.hub_height:.0f} mm does not cover the blade root (x from "
-                           f"{1000.0 * a:.0f} to {1000.0 * b:.0f} mm; the hub is centred at x = 0)")
+                           f"{1000.0 * a:.0f} to {1000.0 * b:.0f} mm; the hub from {1000.0 * x0:.0f} to "
+                           f"{1000.0 * x1:.0f} mm)")
     return out, warnings
 
 
@@ -1560,7 +1625,7 @@ def write_cad(out_dir, case, design, params, settings=None):
     out = {"cad_paths": {"iges": iges, "step": step}, "part": part, "blades": k, "hub": design.hub.describe()}
     try:
         shape = X_CAD(grids, 0, output_dir=tmp, hub=st.get("hub", True) and not solids, hub_height=design.hub_height,
-                      n_blades=params.blades)
+                      hub_center=design.hub_front + 0.5 * design.hub_height, n_blades=params.blades)
         if not solids:
             os.replace(cad_output_paths(0, tmp)["iges"], iges)
     finally:

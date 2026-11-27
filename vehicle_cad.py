@@ -432,7 +432,9 @@ def build_from_setup(setup, out_dir, progress=print):
         else:                                        # an older set-up's DRDC faces of one blade: the whole one
             progress(f"the propeller as a solid (the blade closed at its root, {pr['blades']} blades and the hub)")
             blade = blade_solid(shape, pr["hub_radius_mm"])
-            propeller = propeller_solid(blade, pr["blades"], pr["hub_radius_mm"], pr["hub_height_mm"])
+            x_base = (pr.get("hub") or {}).get("x_base_mm")             # the hub's upstream end (centred: -height/2)
+            centre = 0.0 if x_base is None else float(x_base) + 0.5 * float(pr["hub_height_mm"])
+            propeller = propeller_solid(blade, pr["blades"], pr["hub_radius_mm"], pr["hub_height_mm"], centre)
             setup = dict(setup, propeller=dict(pr, part="whole", part_blades=pr["blades"]))
     progress("the parts placed")
     placed = place_parts(hull, solid["rudder"], propeller, setup, solid["fin"], solid["wing"])
