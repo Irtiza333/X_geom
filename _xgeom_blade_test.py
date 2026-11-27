@@ -1139,12 +1139,12 @@ def test_cad(tmp, table):
           "to 550 mm", [*sector, *solid, out4["valid"]], [-250.0, 550.0, -250.0, 550.0, 1], 0.05)
 
     # a conic hub: one blade on its 1/Z of the hub as a solid (the blade extended into the hub and trimmed)
-    import prop_hub as PH
+    import cad_kernel as CK
     import vehicle_cad as VC
     dc = design.with_hub("cone", base=0.2, top=0.07, x=-0.4)
     t0 = time.time()
     out2 = BM.write_cad(tmp, "cone", dc, p, {"part": "sector"})
-    back = PH._xl().read_iges(out2["cad_paths"]["iges"])
+    back = CK.read_iges(out2["cad_paths"]["iges"])
     n_solids, valid, vol = VC.solid_report(back)
     print(f"       the cone sector in {time.time() - t0:.0f} s: {out2['faces']} faces, {vol / 1e6:.3f} dm^3, the "
           f"footprint {out2['footprint_gap_deg']:.1f} deg from the sector's edges")

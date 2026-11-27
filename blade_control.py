@@ -35,7 +35,6 @@ then run
 """
 
 import dataclasses
-import importlib.util
 from dataclasses import dataclass
 
 import blade_modify as BM
@@ -53,7 +52,7 @@ class BladeSettings:
     tip_band: float = 0.93         # the last tip_sections lie from this r/R to the tip, closer together towards
     tip_sections: int = 14         # it; the others evenly spaced from the root (x_blade_new: 56, 0.93, 14)
     hub: bool = True               # the hub sector in the CAD (hub_new.py; its height is the design's)
-    cad: bool = True               # write <case>.iges and <case>.step (needs pythonocc-core)
+    cad: bool = True               # write <case>.iges and <case>.step (needs pythonocc-core or cadquery-ocp)
     plot: bool = True              # write <case>_check.png
 
 settings = BladeSettings( # SET PARAMETERS HERE
@@ -112,9 +111,10 @@ if __name__ == "__main__":
     out = BM.outside_bounds(space, design)
     if out:
         print("note: the file's blade lies outside the ranges of " + ", ".join(out))
-    cad = s.cad and importlib.util.find_spec("OCC") is not None
+    import cad_kernel as CK
+    cad = s.cad and CK.available()
     if s.cad and not cad:
-        print("no pythonocc-core here: the cases are written without the CAD")
+        print("no pythonocc-core or cadquery-ocp here: the cases are written without the CAD")
     st = {"clearance_mm": s.clearance_mm, "sections": s.sections, "tip_band": s.tip_band,
           "tip_sections": s.tip_sections, "hub": s.hub}
     for name, d in (cases(design) if free != () else {"original": design}).items():

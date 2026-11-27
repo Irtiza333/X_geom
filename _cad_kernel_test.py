@@ -3,8 +3,9 @@ _cad_kernel_test.py
 
 Self-check for cad_kernel.py, XGeom's CAD kernel (the one module that calls
 OpenCascade): each function on simple shapes whose answers are known (a box, a
-cube sewn from six faces, a loft between two squares, a B-spline face, STEP and
-IGES written and read back), and that the modules moved over to it call no
+cube sewn from six faces, a loft between two squares, a B-spline face, a
+cylinder, a turned rectangle, the booleans of two boxes, an arc, STEP and IGES
+written and read back), and that the modules moved over to it call no
 OpenCascade themselves. Without pythonocc-core or cadquery-ocp only the second
 part runs.
 
@@ -22,7 +23,8 @@ import cad_kernel as CK
 
 _FAILED = []
 HERE = os.path.dirname(os.path.abspath(__file__))
-MOVED = ("xcad_loft.py",)          # the modules that reach OpenCascade only through the kernel (27 Nov 2026)
+MOVED = ("xcad_loft.py", "X_CAD_new.py", "prop_hub.py")  # the modules that reach OpenCascade only through the
+                                                          # kernel (27 Nov 2026: step 1, xcad_loft; step 2)
 
 
 def check(name, got, want, tol):
@@ -96,6 +98,39 @@ def test_kernel(tmp):
     check("STEP and IGES written and read back: the cube's volume and faces (IGES as faces, and as a BRep "
           "solid)", [CK.mass_properties(s_back)[0], CK.count_faces(s_back), CK.count_faces(i_back),
                      CK.mass_properties(b_back)[0]], [1000.0, 6, 6, 1000.0], 1e-6)
+    shell = CK.sew(cube_faces(), 1.0e-6)
+    loose = CK.sew(cube_faces(), 1.0e-6, fix=False)
+    check("sew: the six faces into one closed shell, fixed and not: 6 faces, valid, 1000 mm^3 inside",
+          [CK.count_faces(shell), CK.is_valid(shell), CK.mass_properties(shell)[0], CK.count_faces(loose),
+           CK.is_valid(loose)], [6, 1, 1000.0, 6, 1], 1e-6)
+    a, c = CK.box((0.0, 0.0, 0.0), (10.0, 10.0, 10.0)), CK.box((5.0, 5.0, 5.0), (15.0, 15.0, 15.0))
+    vols = [CK.mass_properties(op(a, c, fz))[0] for fz in (None, 1.0e-4) for op in (CK.common, CK.cut, CK.fuse)]
+    check("common, cut and fuse of two boxes overlapping 5 x 5 x 5: 125, 875, 1875 mm^3 (no fuzzy value, 1e-4)",
+          vols, [125.0, 875.0, 1875.0] * 2, 1e-6)
+    pair = CK.compound([a, CK.box((20.0, 0.0, 0.0), (21.0, 1.0, 1.0))])
+    check("compound: two boxes apart, 12 faces, 1001 mm^3", [CK.count_faces(pair), CK.mass_properties(pair)[0]],
+          [12, 1001.0], 1e-6)
+    cyl = CK.cylinder((1.0, 0.0, 0.0), (1.0, 0.0, 0.0), 2.0, 10.0)
+    kinds = sorted(CK.surface_kind(f) for f in CK.faces(cyl))
+    check("cylinder: radius 2 from x 1 along x, 10 long: 40 pi mm^3, x 1 .. 11, a cylinder face and two planes",
+          [CK.mass_properties(cyl)[0], *CK.bounding_box(cyl)[:, 0], kinds == ["cylinder", "plane", "plane"]],
+          [40.0 * np.pi, 1.0, 11.0, 1], 1e-6)
+    rect = CK.planar_face(CK.wire([CK.line_edge(p, q) for p, q in
+                                   (((0, 0, 0), (2, 0, 0)), ((2, 0, 0), (2, 1, 0)), ((2, 1, 0), (0, 1, 0)),
+                                    ((0, 1, 0), (0, 0, 0)))]))
+    turned = CK.revolve(rect, (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), 2.0 * np.pi)
+    check("revolve: the rectangle 2 x 1 on the x axis turned about it, a cylinder of 2 pi mm^3",
+          [CK.mass_properties(turned)[0], CK.is_valid(turned)], [2.0 * np.pi, 1], 1e-6)
+    arc = CK.edge_points(CK.arc_edge((3.0, 0.0, 0.0), (0.0, 3.0, 0.0), (-3.0, 0.0, 0.0)), 9)
+    line = CK.edge_points(CK.line_edge((0.0, 0.0, 0.0), (3.0, 0.0, 0.0)), 4)
+    check("arc_edge, edge_points: the half circle of radius 3 through (0, 3, 0), its ends; a straight edge's 4 "
+          "points", [*np.linalg.norm(arc, axis=1), *arc[[0, -1, 4]].ravel(), *line.ravel()],
+          [3.0] * 9 + [3, 0, 0, -3, 0, 0, 0, 3, 0] + [0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 0, 0], 1e-9)
+    srf = CK.bspline_surface(grid, k, k)
+    pts = CK.surface_points(srf, [0.0, 0.5, 1.0], [0.0, 0.25, 1.0])
+    check("bspline_surface, surface_points, natural_face: the flat patch at (u, v), 6 mm^2, a 'bspline' face",
+          [*pts.ravel(), CK.mass_properties(CK.natural_face(srf))[1], CK.surface_kind(CK.natural_face(srf))
+           == "bspline"], [0, 0, 0, 1.5, 0.5, 0, 3, 2, 0, 6, 1], 1e-9)
     verts, tris = CK.tessellate(cube, 0.5, 0.5)
     normals = np.cross(verts[tris[:, 1]] - verts[tris[:, 0]], verts[tris[:, 2]] - verts[tris[:, 0]])
     outward = np.einsum("ij,ij->i", normals, verts[tris].mean(axis=1) - 5.0) > 0.0

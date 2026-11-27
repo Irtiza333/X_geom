@@ -1100,13 +1100,35 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   docstring, is the seam). Tests: kernel 9, tool 83 with the window and OCC, wing 80, hull 65, blade 90 with the
   window and the CAD, hull_eq 15, hull_modify 17, files 60, contract 271, relations 138; the Rudder folder tool
   82, kernel 9.
+- The CAD kernel, step 2 (27 Nov 2026; Eddie's order): `X_CAD_new.py` and `prop_hub.py` call only the kernel.
+  X_CAD_new imported pythonocc-core directly (and pythonocc's own `write_iges_file`), so the DRDC blade CAD ran
+  on pythonocc only; it now runs on either binding and imports without one. New kernel functions (additive):
+  `arc_edge`, `bspline_surface` (the surface as a handle; `surface_face` is now `natural_face` of it),
+  `natural_face`, `surface_points`, `sew` (a shell, fixed or not), `compound`, `cylinder`, `revolve`, `cut` and
+  `fuse` beside `common` (the three with an optional fuzzy value), `edge_points`, `surface_kind`. X_CAD_new: the
+  B-spline surfaces through the grids and their self-check, the faces, the sewing, the root trim (the cut by the
+  hub cylinder, the compound, IGES in BRep mode) and the IGES in Faces mode through the kernel;
+  `grid_to_bspline_surface` still returns the OCC surface (bb2_build makes its own faces of it). prop_hub: the
+  hub solid (the cylinder; the cone's profile turned about x), the booleans with their fuzzy value, the
+  footprint (the faces that are not B-spline, points along their edges) and the IGES through the kernel. The two
+  gates that asked for pythonocc-core before the blade's CAD (the tool's blade panel, `blade_control.py`) ask
+  the kernel now (`available()`). Nothing changed in what the CAD gives: `_cad_compare.py`, with two more cases
+  (the cylinder hub's 1/Z sector as a solid, X_CAD_new's root trimmed at the hub), gave the same faces, volumes,
+  areas, boxes, validity, STEP data and IGES entities for all 14 cases before and after, and the same 14 again
+  on cadquery-ocp alone (where the blade's CAD failed before). The DRDC IGES of `_tip_test_new.py` differs from
+  before only in the two time stamps of its global section. `_tip_test_new.py`: stage 2 through the kernel; it
+  expected five faces, but the DRDC CAD has had the hub sector's three more since the hub came in (eight now).
+  For the web app: additive. Tests: kernel 16, tool 83 with the window and OCC, wing 80, hull 65, blade 90 with
+  the window and the CAD, hull_eq 15, hull_modify 17, files 60, contract 271, relations 138, tip_new all pass
+  (stage 2 on cadquery-ocp alone too); the Rudder folder tool 82, kernel 16.
 
 ## Next steps
 
-- The CAD kernel (cad_kernel.py), Eddie's order: step 2, X_CAD_new.py (imports pythonocc directly: the DRDC
-  blade CAD runs on pythonocc only; its IGES for the CFD pipeline must stay the same) and prop_hub.py onto
-  the kernel; then vehicle_cad, wing_modify and hull_modify; the extraction modules last, if From CAD has
-  to run in the browser. `_cad_compare.py` before and after each, and `_cad_kernel_test.MOVED` grows with them.
+- The CAD kernel (cad_kernel.py), Eddie's order: step 3, vehicle_cad, wing_modify and hull_modify onto the
+  kernel (and the docstrings of vehicle_cad and xgeom_tool that still say the propeller's CAD needs
+  pythonocc-core); the extraction modules last, if From CAD has to run in the browser; bb2_build and the tests
+  that import OCC themselves when it suits. `_cad_compare.py` before and after each, and
+  `_cad_kernel_test.MOVED` grows with them.
 - Wings and fins: the tips (next; user, 8 Oct 2026), then a check on the user's machine of the wing, the fin and
   the vehicle with them (pythonocc-core).
 - Vehicle: the placement is not loaded back yet (the set-up JSON records it); the blended wing body

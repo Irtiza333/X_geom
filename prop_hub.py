@@ -37,7 +37,7 @@ design holds metres, the CAD millimetres (HubProfile.scaled).
     hub.nose                      (x of the sphere's centre, its radius)
     hub.x_tangent                 where the cone ends and the nose begins
 
-CAD (pythonocc-core or cadquery-ocp through xcad_loft's shim; mm):
+CAD (pythonocc-core or cadquery-ocp through cad_kernel, 27 Nov 2026; mm):
     hub_solid(hub)                the hub as a solid of revolution
     propeller_solid(blade, hub, Z, k=Z)
                                   k of the Z blades (the blade solid of
@@ -187,75 +187,48 @@ class HubProfile:
 # CAD (mm)
 # --------------------------------------------------------------------------
 
-def _xl():
-    import xcad_loft as XL
-    return XL
+def _ck():
+    import cad_kernel as CK                  # here, not at the top: HubProfile alone loads no OCCT binding
+    return CK
 
 
 def hub_solid(hub):
-    """The hub (HubProfile in mm) as a solid of revolution about x: the cylinder from BRepPrimAPI, the cone
-    with its nose the profile (the base plane, the cone, the nose arc, the axis) turned about x."""
-    XL = _xl()
-    gp_Pnt, gp_Ax1, gp_Ax2, gp_Dir = XL._occ("gp", "gp_Pnt", "gp_Ax1", "gp_Ax2", "gp_Dir")
+    """The hub (HubProfile in mm) as a solid of revolution about x: the cylinder (cad_kernel.cylinder), the
+    cone with its nose the profile (the base plane, the cone, the nose arc, the axis) turned about x."""
+    CK = _ck()
     if hub.cylinder:
-        BRepPrimAPI_MakeCylinder = XL._occ("BRepPrimAPI", "BRepPrimAPI_MakeCylinder")
-        return BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(hub.x_base, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0)), hub.base,
-                                        hub.height).Solid()
-    MakeEdge, MakeWire, MakeFace = XL._occ("BRepBuilderAPI", "BRepBuilderAPI_MakeEdge", "BRepBuilderAPI_MakeWire",
-                                           "BRepBuilderAPI_MakeFace")
-    GC_MakeArcOfCircle = XL._occ("GC", "GC_MakeArcOfCircle")
-    MakeRevol = XL._occ("BRepPrimAPI", "BRepPrimAPI_MakeRevol")
+        return CK.cylinder((hub.x_base, 0.0, 0.0), (1.0, 0.0, 0.0), hub.base, hub.height)
     x_c, rho = hub.nose
-    p0, p1 = gp_Pnt(hub.x_base, 0.0, 0.0), gp_Pnt(hub.x_base, hub.base, 0.0)
-    pt, ptip = gp_Pnt(hub.x_tangent, hub.top, 0.0), gp_Pnt(hub.x_tip, 0.0, 0.0)
+    p0, p1 = (hub.x_base, 0.0, 0.0), (hub.x_base, hub.base, 0.0)
+    pt, ptip = (hub.x_tangent, hub.top, 0.0), (hub.x_tip, 0.0, 0.0)
     a = 0.5 * np.arctan2(hub.top, hub.x_tangent - x_c)            # the arc's middle point
-    pm = gp_Pnt(x_c + rho * np.cos(a), rho * np.sin(a), 0.0)
-    arc = MakeEdge(GC_MakeArcOfCircle(pt, pm, ptip).Value()).Edge()
-    edges = [MakeEdge(p0, p1).Edge()]
+    pm = (x_c + rho * np.cos(a), rho * np.sin(a), 0.0)
+    arc = CK.arc_edge(pt, pm, ptip)
+    edges = [CK.line_edge(p0, p1)]
     if hub.x_tangent - hub.x_base > 1e-9 * hub.height:
-        edges.append(MakeEdge(p1, pt).Edge())
-    edges += [arc, MakeEdge(ptip, p0).Edge()]
-    wire = MakeWire()
-    for e in edges:
-        wire.Add(e)
-    face = MakeFace(wire.Wire(), True).Face()
-    return MakeRevol(face, gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0)), 2.0 * np.pi).Shape()
+        edges.append(CK.line_edge(p1, pt))
+    edges += [arc, CK.line_edge(ptip, p0)]
+    face = CK.planar_face(CK.wire(edges))
+    return CK.revolve(face, (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), 2.0 * np.pi)
 
 
 def _boolean(name, a, b, fuzzy=FUZZY_MM):
-    XL = _xl()
-    op = XL._occ("BRepAlgoAPI", f"BRepAlgoAPI_{name}")(a, b)
+    """cad_kernel's Cut, Common or Fuse of a and b with the fuzzy value."""
     try:
-        op.SetFuzzyValue(float(fuzzy))
-        op.Build()
-    except Exception:
-        pass
-    if not op.IsDone():
-        raise RuntimeError(f"the hub's boolean {name} failed")
-    return op.Shape()
-
-
-def _polyline(edge, n):
-    XL = _xl()
-    BRepAdaptor_Curve = XL._occ("BRepAdaptor", "BRepAdaptor_Curve")
-    c = BRepAdaptor_Curve(edge)
-    ts = np.linspace(c.FirstParameter(), c.LastParameter(), n)
-    return np.array([[c.Value(float(t)).X(), c.Value(float(t)).Y(), c.Value(float(t)).Z()] for t in ts])
+        return getattr(_ck(), name.lower())(a, b, fuzzy)
+    except RuntimeError:
+        raise RuntimeError(f"the hub's boolean {name} failed") from None
 
 
 def footprint(blade_out, n=400):
     """Points (mm) of the blade's footprint on the hub: the boundary of the faces the hub's surface left on
     the blade cut by it (the hub's analytic faces, not the blade's B-spline ones)."""
-    XL = _xl()
-    GeomAdaptor_Surface = XL._occ("GeomAdaptor", "GeomAdaptor_Surface")
-    GeomAbs_BSplineSurface = XL._occ("GeomAbs", "GeomAbs_BSplineSurface")
-    surface = XL._static(XL._occ("BRep", "BRep_Tool"), "Surface")
+    CK = _ck()
     import vehicle_cad as VC
-    faces = [f for f in VC._shapes(blade_out, "FACE")
-             if GeomAdaptor_Surface(surface(f)).GetType() != GeomAbs_BSplineSurface]
+    faces = [f for f in VC._shapes(blade_out, "FACE") if CK.surface_kind(f) != "bspline"]
     if not faces:
         raise RuntimeError("the blade cut by the hub has no face on the hub: does its root reach into the hub?")
-    return np.vstack([_polyline(e, n) for f in faces for e in VC._shapes(f, "EDGE")])
+    return np.vstack([CK.edge_points(e, n) for f in faces for e in VC._shapes(f, "EDGE")])
 
 
 def sector_wedge(p_h, th_ref, x_lo, x_hi, r_out, n_blades, k=1):
@@ -264,9 +237,8 @@ def sector_wedge(p_h, th_ref, x_lo, x_hi, r_out, n_blades, k=1):
     caps from grids sharing their edges point for point (X_CAD_new.grid_to_bspline_surface), sewn."""
     from X_CAD_new import grid_to_bspline_surface
     import vehicle_cad as VC
-    XL = _xl()
+    CK = _ck()
     n_r, n_s, n_x = SECTOR_N
-    MakeFace = XL._occ("BRepBuilderAPI", "BRepBuilderAPI_MakeFace")
     x = np.linspace(x_lo, x_hi, n_x)
     s = np.linspace(0.0, 1.0, n_s)
     rho = np.linspace(0.0, r_out, n_r)
@@ -281,7 +253,7 @@ def sector_wedge(p_h, th_ref, x_lo, x_hi, r_out, n_blades, k=1):
              point(x[None, :], r_out, ph(x)[None, :] + (lo + (hi - lo) * s)[:, None])]
     for xe in (x_lo, x_hi):
         grids.append(point(xe, rho[:, None], (ph(xe) + lo + (hi - lo) * s)[None, :]))
-    faces = [MakeFace(grid_to_bspline_surface(g / 1000.0), 1.0e-6).Face() for g in grids]
+    faces = [CK.natural_face(grid_to_bspline_surface(g / 1000.0), 1.0e-6) for g in grids]
     solid, free = VC._sewn_solid(faces)
     if free:
         raise RuntimeError(f"the periodic wedge has {free} free edges")
@@ -339,11 +311,4 @@ def _root_ring(blade, n=400):
 
 def write_iges_solids(shape, path):
     """IGES in BRep mode (manifold solids, shells, faces with their trim loops), mm."""
-    XL = _xl()
-    IGESControl_Writer = XL._occ("IGESControl", "IGESControl_Writer")
-    w = IGESControl_Writer("MM", 1)
-    w.AddShape(shape)
-    w.ComputeModel()
-    if not w.Write(str(path)):
-        raise IOError(f"cannot write {path}")
-    return path
+    return _ck().write_iges(shape, path, brep=True)

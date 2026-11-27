@@ -45,7 +45,7 @@ Vehicle tab. Each component is an adapter class that the window drives through t
 | `blade_control.py` | A blade from a component file, built with the MSc blade code | X_geom, web | through blade_modify |
 | `blade_sections.py` | Blades whose section shape changes along the span (one section table per radius) | X_geom, web | blade |
 | `blade_vary.py` | What changes in a blade file: its vary lines (and their ranges), or its free var lines (`read_free`); standard library only, for `Initial_sampling.py` | X_geom | blade |
-| `prop_hub.py` | The propeller's hub: the DRDC cylinder, or a cone with a rounded nose | X_geom, web | blade |
+| `prop_hub.py` | The propeller's hub: the DRDC cylinder, or a cone with a rounded nose (its CAD through cad_kernel) | X_geom, web | blade, kernel |
 | `hull_modify.py` | Hulls with elliptical sections from a few CST curves: fit, design space, sections, CAD | X_geom, web | hull_modify, hull, files, wing, contract |
 | `suboff.py` | The DARPA SUBOFF bare hull from its equations (the public example) | X_geom | hull_modify, hull_eq |
 | `airfoils.py` | Airfoil sections by name from the offline UIUC database in `airfoils/`, and the NACA 4- and 5-digit equations | X_geom, web | airfoils, wing, contract |
@@ -54,10 +54,10 @@ Vehicle tab. Each component is an adapter class that the window drives through t
 
 | Module | What it does | Where | Tests |
 | --- | --- | --- | --- |
-| `cad_kernel.py` | The CAD kernel (27 Nov 2026, Eddie's request): the one module that calls OpenCascade, pythonocc-core or cadquery-ocp. Plain data in (points, pole grids, knots, numbers, paths), shapes out as opaque handles: edges, wires, faces, B-spline surface faces, lofts, sewing into a solid, box, common, measures (faces, volume and area, validity, bounding box, triangles), STEP and IGES. Its function list is the seam a browser build reimplements. xcad_loft is on it; the other CAD modules still reach OpenCascade through its binding helpers (`_occ`, `_static`, `_topods`) until they move | both, web | kernel, tool, wing, hull, blade |
+| `cad_kernel.py` | The CAD kernel (27 Nov 2026, Eddie's request): the one module that calls OpenCascade, pythonocc-core or cadquery-ocp. Plain data in (points, pole grids, knots, numbers, paths), shapes out as opaque handles: edges (straight, arcs, B-spline), wires, faces, B-spline surfaces and their faces, lofts, sewing (a shell, or a solid), compounds, box, cylinder, revolve, common, cut and fuse, measures (faces, points along an edge or on a surface, the kind of a face's surface, volume and area, validity, bounding box, triangles), STEP and IGES. Its function list is the seam a browser build reimplements. xcad_loft, X_CAD_new and prop_hub are on it; vehicle_cad, wing_modify, hull_modify and the extraction modules still reach OpenCascade through its binding helpers (`_occ`, `_static`, `_topods`) until they move | both, web | kernel, tool, wing, hull, blade, tip_new |
 | `xcad_loft.py` | The solid through section loops (XCAD files): four patches along the span, the tip patch over the cap, the flat root; two lofts joined at a section (`loft_split`); half bodies; STEP and IGES (through cad_kernel, whose functions it keeps under their old names) | both | tool, wing, hull, hull_modify, hull_eq |
 | `temp_rudder_cad.py` | A stopgap: the CAD of a file of modified sections with the original above them, as two lofts joined at H (the modified part, the unmodified part); sections of any number of points put onto the original's layout | both | tool |
-| `X_CAD_new.py` | The MSc blade's CAD by the DRDC five-surface method (supersedes `X_CAD.py`) | X_geom | tip_new |
+| `X_CAD_new.py` | The MSc blade's CAD by the DRDC five-surface method (supersedes `X_CAD.py`); OpenCascade through cad_kernel, so either binding | X_geom | tip_new, blade, kernel |
 | `X_CAD.py` | The original loft-and-cap blade CAD, kept | X_geom | none |
 | `cad_worker.py` | One CAD case in a subprocess, so a pythonocc hang stops only that case | X_geom | none |
 | `iges_writer_new.py` | A minimal IGES 5.3 writer for B-spline surfaces | X_geom | none |

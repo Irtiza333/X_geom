@@ -15,10 +15,11 @@ Input to X_CAD is the five structured surface grids produced by
 tip_surfaces_new.build_drdc_grids(). Each grid is interpolated by a
 tensor-product cubic B-spline (scipy, s=0 so the grid points are ON the
 surface), converted to an OCC Geom_BSplineSurface, made into a face, sewed,
-and written to IGES. Because adjacent grids share identical boundary
-point rows/columns, the faces match along their common edges and the sewing
-merges them; there is no filling solver, no loft, no cap, and no degenerate
-tip ring anywhere.
+and written to IGES (OpenCascade through cad_kernel since 27 Nov 2026, so
+pythonocc-core or cadquery-ocp; this module imports no OCC itself). Because
+adjacent grids share identical boundary point rows/columns, the faces match
+along their common edges and the sewing merges them; there is no filling
+solver, no loft, no cap, and no degenerate tip ring anywhere.
 
 Surface naming follows TM 2013-180 Annex B:
   Blade 1 = trailing edge surface   ('te_strip')
@@ -31,35 +32,10 @@ conventions of Annex B) are collected in ORIENTATIONS below so they can be
 adjusted in one place once checked in the target CAD/mesh tool.
 """
 
-import os, sys
-if hasattr(os, "add_dll_directory"):
-    try:
-        os.add_dll_directory(os.path.join(sys.prefix, "Library", "bin"))
-    except (FileNotFoundError, OSError):
-        pass
-
 import numpy as np
 from scipy.interpolate import RectBivariateSpline
 
-from OCC.Core.Geom import Geom_BSplineSurface
-from OCC.Core.gp import gp_Pnt
-from OCC.Core.TColgp import TColgp_Array2OfPnt
-from OCC.Core.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger
-from OCC.Core.BRepBuilderAPI import (BRepBuilderAPI_MakeFace,
-                                     BRepBuilderAPI_Sewing)
-from OCC.Core.ShapeFix import ShapeFix_Shape
-from OCC.Extend.DataExchange import write_iges_file
-# for the root trim experiment
-from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeCylinder
-from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Cut
-from OCC.Core.gp import gp_Ax2, gp_Dir
-from OCC.Core.BRep import BRep_Builder
-from OCC.Core.TopoDS import TopoDS_Compound
-from OCC.Core.TopExp import TopExp_Explorer
-from OCC.Core.TopAbs import TopAbs_FACE
-from OCC.Core.IGESControl import IGESControl_Writer
-from OCC.Core.Interface import Interface_Static
-
+import cad_kernel as CK
 from pipeline_config import cad_output_paths
 
 MM_PER_M = 1000.0
@@ -84,25 +60,19 @@ ANNEX_B_ORDER = [
 ]
 
 
-def _knots_to_occ_arrays(t):
-    """Full clamped knot vector -> (TColStd knots, TColStd mults)."""
-    uniq, mult = [], []
+def _clamped_knots(t):
+    """Full clamped knot vector with every knot within 1e-12 of the first of
+    its run made equal to it: the kernel counts equal knots as one knot of
+    that multiplicity."""
+    out = []
     for kn in t:
-        if uniq and abs(kn - uniq[-1]) < 1e-12:
-            mult[-1] += 1
-        else:
-            uniq.append(float(kn))
-            mult.append(1)
-    kn_arr = TColStd_Array1OfReal(1, len(uniq))
-    ml_arr = TColStd_Array1OfInteger(1, len(mult))
-    for i, (kn, ml) in enumerate(zip(uniq, mult), start=1):
-        kn_arr.SetValue(i, kn)
-        ml_arr.SetValue(i, ml)
-    return kn_arr, ml_arr
+        out.append(out[-1] if out and abs(kn - out[-1]) < 1e-12 else float(kn))
+    return np.array(out)
 
 
 def _occ_surface_from_tck(tu, tv, coeffs, ku, kv, transpose=False):
-    """Build a Geom_BSplineSurface from scipy tck data.
+    """Build a Geom_BSplineSurface (cad_kernel.bspline_surface) from scipy
+    tck data.
 
     coeffs : (n_cu, n_cv, 3). transpose=True swaps the role of the two
     parameter directions (used by the runtime self-check below).
@@ -111,17 +81,9 @@ def _occ_surface_from_tck(tu, tv, coeffs, ku, kv, transpose=False):
         coeffs = np.transpose(coeffs, (1, 0, 2))
         tu, tv = tv, tu
         ku, kv = kv, ku
-    n_cu, n_cv, _ = coeffs.shape
-    poles = TColgp_Array2OfPnt(1, n_cu, 1, n_cv)
-    for i in range(n_cu):
-        for j in range(n_cv):
-            poles.SetValue(i + 1, j + 1,
-                           gp_Pnt(float(coeffs[i, j, 0]),
-                                  float(coeffs[i, j, 1]),
-                                  float(coeffs[i, j, 2])))
-    uk, um = _knots_to_occ_arrays(tu)
-    vk, vm = _knots_to_occ_arrays(tv)
-    return Geom_BSplineSurface(poles, uk, vk, um, vm, ku, kv, False, False)
+    # the kernel's pole grid holds n_v rows of n_u poles
+    return CK.bspline_surface(np.transpose(coeffs, (1, 0, 2)), _clamped_knots(tu),
+                              _clamped_knots(tv), ku, kv)
 
 
 def grid_to_bspline_surface(grid, u_params=None, v_params=None,
@@ -164,13 +126,9 @@ def grid_to_bspline_surface(grid, u_params=None, v_params=None,
         srf = _occ_surface_from_tck(tu, tv, coeffs, ku, kv, transpose)
         worst = 0.0
         for i in range(nu):
-            for j in range(nv):
-                uu, vv = (u[i], v[j]) if not transpose else (v[j], u[i])
-                p = srf.Value(float(uu), float(vv))
-                d = max(abs(p.X() - grid[i, j, 0] * MM_PER_M),
-                        abs(p.Y() - grid[i, j, 1] * MM_PER_M),
-                        abs(p.Z() - grid[i, j, 2] * MM_PER_M))
-                worst = max(worst, d)
+            ui = np.full(nv, u[i])
+            p = CK.surface_points(srf, *((ui, v) if not transpose else (v, ui)))
+            worst = max(worst, float(np.abs(p - grid[i] * MM_PER_M).max()))
             if worst > check_tol_mm:
                 break
         if worst <= check_tol_mm:
@@ -195,14 +153,6 @@ def _apply_orientation(grid, name):
     return np.ascontiguousarray(g)
 
 
-def _count_faces(shape):
-    n, ex = 0, TopExp_Explorer(shape, TopAbs_FACE)
-    while ex.More():
-        n += 1
-        ex.Next()
-    return n
-
-
 def _trim_blade_at_hub(blade_shape, hub_radius_m, ring_x_mm):
     """Cut away the blade portion INSIDE the hub cylinder.
 
@@ -215,14 +165,12 @@ def _trim_blade_at_hub(blade_shape, hub_radius_m, ring_x_mm):
     R = hub_radius_m * MM_PER_M
     x_lo = float(ring_x_mm[0]) - 200.0
     x_hi = float(ring_x_mm[1]) + 200.0
-    ax = gp_Ax2(gp_Pnt(x_lo, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0))
-    tool = BRepPrimAPI_MakeCylinder(ax, R, x_hi - x_lo).Solid()
-    cut = BRepAlgoAPI_Cut(blade_shape, tool)
-    cut.Build()
-    if not cut.IsDone():
-        raise RuntimeError("root trim failed: BRepAlgoAPI_Cut did not build")
-    out = cut.Shape()
-    n = _count_faces(out)
+    tool = CK.cylinder((x_lo, 0.0, 0.0), (1.0, 0.0, 0.0), R, x_hi - x_lo)
+    try:
+        out = CK.cut(blade_shape, tool)
+    except RuntimeError:
+        raise RuntimeError("root trim failed: the cut did not build") from None
+    n = CK.count_faces(out)
     if n < 5:
         raise RuntimeError(f"root trim produced only {n} faces; refusing")
     return out
@@ -236,12 +184,7 @@ def _write_iges_brep(shape, path):
     documented unbounded-cylinder failure earlier in this project). BRep
     mode writes trimmed faces as MSBO entities, which carry the loops.
     """
-    Interface_Static.SetCVal("write.iges.unit", "MM")
-    w = IGESControl_Writer("MM", 1)
-    w.AddShape(shape)
-    w.ComputeModel()
-    if not w.Write(str(path)):
-        raise RuntimeError(f"IGES write failed: {path}")
+    CK.write_iges(shape, path, brep=True)
 
 
 def X_CAD(grids, x1, output_dir=None, hub=True, hub_height=None,
@@ -291,7 +234,6 @@ def X_CAD(grids, x1, output_dir=None, hub=True, hub_height=None,
         hgrids, hinfo = hub_grids(grids, hub_height=hub_height,
                                   hub_center=hub_center, n_blades=n_blades)
 
-    sewing = BRepBuilderAPI_Sewing(SEW_TOL)
     faces = []
     for label, key in ANNEX_B_ORDER:
         grid = _apply_orientation(np.asarray(grids[key], dtype=float), key)
@@ -301,24 +243,17 @@ def X_CAD(grids, x1, output_dir=None, hub=True, hub_height=None,
         if key in ("te_strip", "le_strip", "tip") and t_common is not None:
             v_params = t_common
         srf = grid_to_bspline_surface(grid, v_params=v_params)
-        face = BRepBuilderAPI_MakeFace(srf, 1.0e-6).Face()
-        faces.append((label, face))
-        sewing.Add(face)
+        faces.append((label, CK.natural_face(srf, 1.0e-6)))
 
     if hub:
         for label, key in (("Hub", "hub_sector"),
                            ("Hub cap lo", "hub_cap_lo"),
                            ("Hub cap hi", "hub_cap_hi")):
             srf = grid_to_bspline_surface(hgrids[key])
-            face = BRepBuilderAPI_MakeFace(srf, 1.0e-6).Face()
-            faces.append((label, face))
-            sewing.Add(face)
+            faces.append((label, CK.natural_face(srf, 1.0e-6)))
 
-    sewing.Perform()
-    sewed = sewing.SewedShape()
-    fixer = ShapeFix_Shape(sewed)
-    fixer.Perform()
-    shape = fixer.Shape()
+    # sewed, then ShapeFix_Shape
+    shape = CK.sew([f for _, f in faces], SEW_TOL)
 
     paths = cad_output_paths(x1, output_dir)
     paths["dir"].mkdir(parents=True, exist_ok=True)
@@ -348,14 +283,8 @@ def X_CAD(grids, x1, output_dir=None, hub=True, hub_height=None,
                 f"blade_surface_new, or trim_root_at_hub=False.")
         # blade faces only: separate the blade shell from the already-added
         # hub faces by rebuilding the blade shell alone
-        blade_sew = BRepBuilderAPI_Sewing(SEW_TOL)
-        for label, f in faces:
-            if label.startswith("Blade"):
-                blade_sew.Add(f)
-        blade_sew.Perform()
-        blade_fix = ShapeFix_Shape(blade_sew.SewedShape())
-        blade_fix.Perform()
-        blade_shape = blade_fix.Shape()
+        blade_shape = CK.sew([f for label, f in faces
+                              if label.startswith("Blade")], SEW_TOL)
 
         ring = np.vstack([np.asarray(grids[k], dtype=float)[0, :, :]
                           for k in ("te_strip", "central_pressure",
@@ -364,29 +293,23 @@ def X_CAD(grids, x1, output_dir=None, hub=True, hub_height=None,
                      ring[:, 0].max() * MM_PER_M)
         blade_trimmed = _trim_blade_at_hub(blade_shape, hub_radius, ring_x_mm)
 
-        comp = TopoDS_Compound()
-        bb = BRep_Builder()
-        bb.MakeCompound(comp)
-        bb.Add(comp, blade_trimmed)
-        if hub:
-            hub_sew = BRepBuilderAPI_Sewing(SEW_TOL)
-            for label, f in faces:
-                if label.startswith("Hub"):
-                    hub_sew.Add(f)
-            hub_sew.Perform()
-            bb.Add(comp, hub_sew.SewedShape())
-        shape = comp
+        parts = [blade_trimmed]
+        if hub:                     # the hub's faces sewed, not fixed
+            parts.append(CK.sew([f for label, f in faces
+                                 if label.startswith("Hub")], SEW_TOL,
+                                fix=False))
+        shape = CK.compound(parts)
 
         _write_iges_brep(shape, iges_path)
         print(f"[X_CAD] blade root TRIMMED at the hub cylinder "
               f"(R = {hub_radius:.6f} m); trimmed blade faces: "
-              f"{_count_faces(blade_trimmed)}. Written in IGES BRep mode "
+              f"{CK.count_faces(blade_trimmed)}. Written in IGES BRep mode "
               f"(trim loops preserved).")
         print(f"IGES file written (trimmed blade"
               + (" + hub sector + 2 caps" if hub else "") + f"): {iges_path}")
         return shape
 
-    write_iges_file(shape, str(iges_path))
+    CK.write_iges(shape, iges_path)        # Faces mode: untrimmed surfaces
     n_srf = len(faces)
     print(f"IGES file written ({n_srf} faces: 5 blade, untrimmed"
           + (" + hub sector + 2 caps" if hub else "") + f"): {iges_path}")

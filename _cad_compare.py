@@ -8,14 +8,15 @@ faces, volume, area, validity and bounding box, and a digest of the STEP
 file's DATA section (its header carries the time) and of an IGES file's
 directory and parameter lines.
 
-    python _cad_compare.py before.json           record (about 5 minutes)
+    python _cad_compare.py before.json           record (about 7 minutes)
     python _cad_compare.py after.json            ... after the change, on the same machine
     python _cad_compare.py --diff before.json after.json
 
 The cases: the rudder modified below H (one loft, two lofts, the half body),
 the wing, the fin, the planar rudders (rudder.txt, the wind-tunnel rudder with
 its tilted tip and cap), the blended wing body, SUBOFF's hull, the MSc blade
-(the DRDC sector, the whole propeller as a solid, a cone hub's sector). Needs
+(the DRDC sector, the whole propeller as a solid, a cone hub's sector, the
+cylinder hub's sector as a solid, X_CAD_new's root trimmed at the hub). Needs
 pythonocc-core or cadquery-ocp. The digests depend on the OCCT version: compare
 records made on one machine.
 """
@@ -90,11 +91,29 @@ def record(path):
                 raise RuntimeError(res.get("message", "no CAD"))
             return measure(res["view"])
 
-        def blade(part, case, cone=False):
+        def blade(part, case, cone=False, **kw):
             ad = XBL.BladeAdapter(params=os.path.join(HERE, "msc_blade.txt"))
             if cone:
                 ad.set_hub_shape("cone")
-            return built(ad, case, part=part)
+            return built(ad, case, part=part, **kw)
+
+        def x_cad_trimmed():
+            """X_CAD_new's root trim (trim_root_at_hub): the MSc blade 10 mm below its root, cut by the hub's
+            cylinder, beside the hub sector's faces; IGES in BRep mode."""
+            import blade_modify as BM
+            import cad_kernel as CK
+            from blade_surface_new import BladeSurface
+            from pipeline_config import cad_output_paths
+            from tip_surfaces_new import TipConfig, build_drdc_grids
+            from X_CAD_new import X_CAD
+            p = BM.read_params(os.path.join(HERE, "msc_blade.txt"))
+            design, _ = BM.fit_design(p)
+            surf = BladeSurface(*design.props(), d=design.diameter, r_root=design.r0, airfoil_path=p.section_path(),
+                                root_extension=0.01)
+            sub = os.path.join(tmp, "trim")
+            shape = X_CAD(build_drdc_grids(surf, TipConfig(), verbose=False), 0, output_dir=sub, trim_root_at_hub=True)
+            iges = str(cad_output_paths(0, sub)["iges"])
+            return measure(CK.write_step(shape, os.path.splitext(iges)[0] + ".step"))
 
         run("rudder_one_loft", lambda: rudder("r1"))
         run("rudder_two_lofts", lambda: rudder("r2", g0=True))
@@ -109,6 +128,8 @@ def record(path):
         run("blade_sector_drdc", lambda: blade("sector", "bs"))
         run("blade_whole", lambda: blade("whole", "bw"))
         run("blade_cone_sector", lambda: blade("sector", "bc", cone=True))
+        run("blade_sector_solid", lambda: blade("sector", "bss", half=False))
+        run("x_cad_trimmed", x_cad_trimmed)
     with open(path, "w") as fh:
         json.dump(out, fh, indent=1)
     return out

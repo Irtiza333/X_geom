@@ -19,21 +19,37 @@ Edges, wires, faces and solids
                                       the B-spline edge of the poles (n, 3) and the knot vector (repeated
                                       knots: their multiplicity)
     line_edge(a, b)                   the straight edge from point a to point b
+    arc_edge(a, m, b)                 the circular arc from a through m to b
     wire(edges)                       the edges chained into one wire
     planar_face(wire)                 the plane face bounded by a closed flat wire
     wire_face(edges)                  the plane face bounded by the edges (one wire), its orientation fixed
-    surface_face(grid, uknots, vknots, udeg=3, vdeg=3)
-                                      the face of the B-spline surface of the pole grid (n_v rows of n_u
+    bspline_surface(grid, uknots, vknots, udeg=3, vdeg=3)
+                                      the B-spline surface (a handle) of the pole grid (n_v rows of n_u
                                       poles, 3), u along a row
+    natural_face(surface, tol=1e-6)   the face of the whole surface
+    surface_face(grid, uknots, vknots, udeg=3, vdeg=3)
+                                      natural_face(bspline_surface(...))
     loft(wires, solid, ruled, max_degree=None)
                                       the surface through the wires (solid: closed by the end wires)
+    sew(faces, tol, fix=True)         the faces sewn (a shell, or shells), fixed (ShapeFix_Shape)
     sew_solid(faces, tol)             the faces sewn into one shell and made a solid, fixed:
                                       (solid, the edges the sewing left free)
+    compound(shapes)                  the shapes as one compound
     box(lo, hi)                       the box between two corners
-    common(a, b)                      the part of a inside b
+    cylinder(base, axis, radius, height)
+                                      the solid cylinder from the point base along the direction axis
+    revolve(shape, origin, axis, angle)
+                                      the shape turned about the axis through origin (a face: a solid)
+    common(a, b, fuzzy=None), cut(a, b, fuzzy=None), fuse(a, b, fuzzy=None)
+                                      the part of a inside b, a outside b, a and b together (fuzzy: the
+                                      boolean's fuzzy value)
 
 Measures
     faces(shape), count_faces(shape)  a shape's faces (handles), how many
+    edge_points(edge, n)              n points (n, 3) along an edge, evenly in its parameter, ends included
+    surface_points(surface, u, v)     the surface's points (n, 3) at the parameter pairs (u[i], v[i])
+    surface_kind(face)                its surface's kind: 'plane', 'cylinder', 'cone', 'sphere', 'torus',
+                                      'bezier', 'bspline', 'revolution', 'extrusion', 'offset' or 'other'
     mass_properties(shape, eps=1e-7)  (volume, area), adaptive integration to the relative error eps
     is_valid(shape)                   BRepCheck_Analyzer's verdict
     bounding_box(shape)               (2, 3): the lowest and the highest corner, on the surfaces (not
@@ -50,10 +66,11 @@ Files
     read_iges(path)                   one shape
     view(shape, title)                the pythonocc viewer (desktop; blocks until closed)
 
-Moving over (27 Nov 2026): xcad_loft calls only these. vehicle_cad, prop_hub,
-wing_modify, hull_modify, X_CAD_new and the extraction modules still reach
-OpenCascade through the binding helpers _occ, _static and _topods (also as
-xcad_loft._occ, ...), until they move to the kernel's functions too.
+Moving over (27 Nov 2026): xcad_loft (step 1), X_CAD_new and prop_hub (step
+2) call only these. vehicle_cad, wing_modify, hull_modify and the extraction
+modules still reach OpenCascade through the binding helpers _occ, _static and
+_topods (also as xcad_loft._occ, ...), until they move to the kernel's
+functions too.
 _cad_kernel_test.py checks the kernel on its own, and that the modules moved
 over call no OpenCascade themselves.
 """
@@ -172,6 +189,15 @@ def line_edge(a, b):
     return BRepBuilderAPI_MakeEdge(gp_Pnt(*[float(v) for v in a]), gp_Pnt(*[float(v) for v in b])).Edge()
 
 
+def arc_edge(a, m, b):
+    """The circular arc from point a through point m to point b."""
+    gp_Pnt = _occ("gp", "gp_Pnt")
+    GC_MakeArcOfCircle = _occ("GC", "GC_MakeArcOfCircle")
+    BRepBuilderAPI_MakeEdge = _occ("BRepBuilderAPI", "BRepBuilderAPI_MakeEdge")
+    pa, pm, pb = (gp_Pnt(*[float(v) for v in p]) for p in (a, m, b))
+    return BRepBuilderAPI_MakeEdge(GC_MakeArcOfCircle(pa, pm, pb).Value()).Edge()
+
+
 def wire(edges):
     """The edges, in order, chained into one wire."""
     BRepBuilderAPI_MakeWire = _occ("BRepBuilderAPI", "BRepBuilderAPI_MakeWire")
@@ -207,13 +233,13 @@ def wire_face(edges):
     return fix.Face()
 
 
-def surface_face(grid, uknots, vknots, udeg=3, vdeg=3):
-    """The face of the B-spline surface with the pole grid (n_v rows of n_u poles, 3), u along a row; knot
-    vectors with their repeated knots."""
+def bspline_surface(grid, uknots, vknots, udeg=3, vdeg=3):
+    """The B-spline surface (a handle: natural_face, surface_points) of the pole grid (n_v rows of n_u poles,
+    3), u along a row; knot vectors with their repeated knots."""
     gp_Pnt = _occ("gp", "gp_Pnt")
     TColgp_Array2OfPnt = _occ("TColgp", "TColgp_Array2OfPnt")
     Geom_BSplineSurface = _occ("Geom", "Geom_BSplineSurface")
-    BRepBuilderAPI_MakeFace = _occ("BRepBuilderAPI", "BRepBuilderAPI_MakeFace")
+    grid = np.asarray(grid, dtype=float)
     n_v, n_u = grid.shape[0], grid.shape[1]
     arr = TColgp_Array2OfPnt(1, n_u, 1, n_v)
     for i in range(n_u):
@@ -222,9 +248,21 @@ def surface_face(grid, uknots, vknots, udeg=3, vdeg=3):
             arr.SetValue(i + 1, j + 1, gp_Pnt(float(p[0]), float(p[1]), float(p[2])))
     uk, um = _unique_mults(uknots)
     vk, vm = _unique_mults(vknots)
-    surf = Geom_BSplineSurface(arr, _real_array(uk), _real_array(vk), _int_array(um), _int_array(vm),
+    return Geom_BSplineSurface(arr, _real_array(uk), _real_array(vk), _int_array(um), _int_array(vm),
                                int(udeg), int(vdeg))
-    return BRepBuilderAPI_MakeFace(surf, 1.0e-6).Face()
+
+
+def natural_face(surface, tol=1.0e-6):
+    """The face of the whole surface (bspline_surface), bounded by its parameter range; tol: the tolerance
+    for degenerate edges."""
+    BRepBuilderAPI_MakeFace = _occ("BRepBuilderAPI", "BRepBuilderAPI_MakeFace")
+    return BRepBuilderAPI_MakeFace(surface, float(tol)).Face()
+
+
+def surface_face(grid, uknots, vknots, udeg=3, vdeg=3):
+    """The face of the B-spline surface with the pole grid (n_v rows of n_u poles, 3), u along a row; knot
+    vectors with their repeated knots."""
+    return natural_face(bspline_surface(grid, uknots, vknots, udeg, vdeg))
 
 
 def loft(wires, solid, ruled, max_degree=None):
@@ -241,6 +279,22 @@ def loft(wires, solid, ruled, max_degree=None):
     if not ts.IsDone():
         raise RuntimeError("BRepOffsetAPI_ThruSections failed")
     return ts.Shape()
+
+
+def sew(faces, tol, fix=True):
+    """The faces sewn (BRepBuilderAPI_Sewing, tolerance tol): a shell, or a compound of shells and faces
+    left apart; with fix, ShapeFix_Shape run on it."""
+    BRepBuilderAPI_Sewing = _occ("BRepBuilderAPI", "BRepBuilderAPI_Sewing")
+    sewing = BRepBuilderAPI_Sewing(float(tol))
+    for f in faces:
+        sewing.Add(f)
+    sewing.Perform()
+    shape = sewing.SewedShape()
+    if not fix:
+        return shape
+    fixer = _occ("ShapeFix", "ShapeFix_Shape")(shape)
+    fixer.Perform()
+    return fixer.Shape()
 
 
 def sew_solid(faces, tol):
@@ -279,14 +333,63 @@ def box(lo, hi):
     return BRepPrimAPI_MakeBox(gp_Pnt(*[float(v) for v in lo]), gp_Pnt(*[float(v) for v in hi])).Shape()
 
 
-def common(a, b):
-    """The part of shape a inside shape b (BRepAlgoAPI_Common); RuntimeError when it fails."""
-    Common = _occ("BRepAlgoAPI", "BRepAlgoAPI_Common")
-    algo = Common(a, b)
-    algo.Build()
+def compound(shapes):
+    """The shapes as one compound."""
+    BRep_Builder = _occ("BRep", "BRep_Builder")
+    comp, builder = _occ("TopoDS", "TopoDS_Compound")(), BRep_Builder()
+    builder.MakeCompound(comp)
+    for s in shapes:
+        builder.Add(comp, s)
+    return comp
+
+
+def cylinder(base, axis, radius, height):
+    """The solid cylinder of the radius from the point base along the direction axis, height long."""
+    gp_Pnt, gp_Ax2, gp_Dir = _occ("gp", "gp_Pnt", "gp_Ax2", "gp_Dir")
+    BRepPrimAPI_MakeCylinder = _occ("BRepPrimAPI", "BRepPrimAPI_MakeCylinder")
+    ax = gp_Ax2(gp_Pnt(*[float(v) for v in base]), gp_Dir(*[float(v) for v in axis]))
+    return BRepPrimAPI_MakeCylinder(ax, float(radius), float(height)).Solid()
+
+
+def revolve(shape, origin, axis, angle):
+    """The shape turned through the angle (rad) about the axis (a direction) through the point origin: a
+    face sweeps a solid."""
+    gp_Pnt, gp_Ax1, gp_Dir = _occ("gp", "gp_Pnt", "gp_Ax1", "gp_Dir")
+    BRepPrimAPI_MakeRevol = _occ("BRepPrimAPI", "BRepPrimAPI_MakeRevol")
+    ax = gp_Ax1(gp_Pnt(*[float(v) for v in origin]), gp_Dir(*[float(v) for v in axis]))
+    return BRepPrimAPI_MakeRevol(shape, ax, float(angle)).Shape()
+
+
+def _boolean(kind, a, b, fuzzy):
+    """BRepAlgoAPI_<kind> of a and b, built again with the fuzzy value when one is given (a binding without
+    it keeps the first build)."""
+    algo = _occ("BRepAlgoAPI", f"BRepAlgoAPI_{kind}")(a, b)
+    if fuzzy is None:
+        algo.Build()
+    else:
+        try:
+            algo.SetFuzzyValue(float(fuzzy))
+            algo.Build()
+        except Exception:                                   # noqa: BLE001 - as prop_hub has done since 13 Nov
+            pass
     if not algo.IsDone():
-        raise RuntimeError("the common of two shapes failed")
+        raise RuntimeError(f"the {kind.lower()} of two shapes failed")
     return algo.Shape()
+
+
+def common(a, b, fuzzy=None):
+    """The part of shape a inside shape b (BRepAlgoAPI_Common); RuntimeError when it fails."""
+    return _boolean("Common", a, b, fuzzy)
+
+
+def cut(a, b, fuzzy=None):
+    """The part of shape a outside shape b (BRepAlgoAPI_Cut); RuntimeError when it fails."""
+    return _boolean("Cut", a, b, fuzzy)
+
+
+def fuse(a, b, fuzzy=None):
+    """Shapes a and b together (BRepAlgoAPI_Fuse); RuntimeError when it fails."""
+    return _boolean("Fuse", a, b, fuzzy)
 
 
 # --------------------------------------------------------------------------
@@ -308,6 +411,43 @@ def faces(shape):
 def count_faces(shape):
     """Number of faces of a shape."""
     return len(faces(shape))
+
+
+def edge_points(edge, n):
+    """n points (n, 3) along an edge, evenly in its curve's parameter, its ends included."""
+    c = _occ("BRepAdaptor", "BRepAdaptor_Curve")(edge)
+    out = []
+    for t in np.linspace(c.FirstParameter(), c.LastParameter(), n):
+        p = c.Value(float(t))
+        out.append((p.X(), p.Y(), p.Z()))
+    return np.array(out)
+
+
+def surface_points(surface, u, v):
+    """The points (n, 3) of a surface (bspline_surface) at the parameter pairs (u[i], v[i])."""
+    out = []
+    for a, b in zip(u, v):
+        p = surface.Value(float(a), float(b))
+        out.append((p.X(), p.Y(), p.Z()))
+    return np.array(out, dtype=float).reshape(-1, 3)
+
+
+_SURFACE_KINDS = (("Plane", "plane"), ("Cylinder", "cylinder"), ("Cone", "cone"), ("Sphere", "sphere"),
+                  ("Torus", "torus"), ("BezierSurface", "bezier"), ("BSplineSurface", "bspline"),
+                  ("SurfaceOfRevolution", "revolution"), ("SurfaceOfExtrusion", "extrusion"),
+                  ("OffsetSurface", "offset"))
+
+
+def surface_kind(face):
+    """The kind of the face's surface: 'plane', 'cylinder', 'cone', 'sphere', 'torus', 'bezier', 'bspline',
+    'revolution', 'extrusion', 'offset' or 'other'."""
+    GeomAdaptor_Surface = _occ("GeomAdaptor", "GeomAdaptor_Surface")
+    abs_ = importlib.import_module(f"{_PKG}.GeomAbs")
+    kind = GeomAdaptor_Surface(_static(_occ("BRep", "BRep_Tool"), "Surface")(face)).GetType()
+    for name, word in _SURFACE_KINDS:
+        if kind == getattr(abs_, f"GeomAbs_{name}", None):
+            return word
+    return "other"
 
 
 def mass_properties(shape, eps=1.0e-7):

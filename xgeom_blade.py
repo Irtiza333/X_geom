@@ -59,7 +59,6 @@ The adapter has the methods of xgeom_rudder.RudderAdapter that the tool uses.
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import time
 
@@ -580,8 +579,9 @@ class BladeAdapter(REL.AdapterRelations):
             if res["problems"]:
                 out.update(message=f"{files}; no CAD: {res['problems'][0]}", error=True)
                 return out
-            if importlib.util.find_spec("OCC") is None:
-                out.update(message=f"{files}; no CAD: needs pythonocc-core", error=True)
+            import cad_kernel as CK
+            if not CK.available():
+                out.update(message=f"{files}; no CAD: needs pythonocc-core or cadquery-ocp", error=True)
                 return out
             cad = BM.write_cad(out_dir, case, design, params, cad_st)
             res["paths"].update(cad["cad_paths"])

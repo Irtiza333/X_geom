@@ -7,8 +7,9 @@ Stage 1 (no pythonOCC needed): builds the BladeSurface for a benign midpoint
 design, verifies the geometric invariants, builds the five surface grids and
 checks that all shared edges are identical point sets.
 
-Stage 2 (requires pythonOCC, i.e. your normal CAD environment): converts the
-grids to B-spline faces, sews, writes IGES and reports topology counts.
+Stage 2 (requires pythonocc-core or cadquery-ocp, i.e. your normal CAD
+environment; through cad_kernel): converts the grids to B-spline faces, sews,
+writes IGES and reports topology counts.
 
 Run:  python _tip_test_new.py [--coarse] [--no-cad]
 """
@@ -131,23 +132,17 @@ def main():
         print("== Stage 2 skipped (--no-cad) ==")
     else:
         print("== Stage 2: OCC faces + IGES ==")
-        try:
-            from X_CAD_new import X_CAD
-        except ImportError as exc:
-            print(f"  pythonOCC not available here ({exc}); "
+        import cad_kernel as CK
+        if not CK.available():
+            print("  no pythonocc-core or cadquery-ocp here; "
                   "run stage 2 in the CAD environment.")
         else:
+            from X_CAD_new import X_CAD
             shape = X_CAD(grids, CASE_ID)
-            from OCC.Core.TopExp import TopExp_Explorer
-            from OCC.Core.TopAbs import TopAbs_FACE
-            from OCC.Core.BRepCheck import BRepCheck_Analyzer
-            nf, ex = 0, TopExp_Explorer(shape, TopAbs_FACE)
-            while ex.More():
-                nf += 1
-                ex.Next()
-            all_ok &= check("five faces", nf == 5, f"got {nf}")
-            all_ok &= check("BRepCheck valid",
-                            BRepCheck_Analyzer(shape).IsValid())
+            nf = CK.count_faces(shape)
+            all_ok &= check("eight faces (the five and the hub sector's three)",
+                            nf == 8, f"got {nf}")
+            all_ok &= check("BRepCheck valid", CK.is_valid(shape))
 
     print("== RESULT:", "ALL PASS" if all_ok else "FAILURES PRESENT", "==")
     return 0 if all_ok else 1
