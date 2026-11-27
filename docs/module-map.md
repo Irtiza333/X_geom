@@ -86,7 +86,7 @@ The DRDC blade pipeline (DRDC TM 2013-177 and -178), which the blade builds on:
 | `Rudder_geom_extraction.py` | The rudder's sections, tilted tip section, cap and spanwise parameters from its STEP or IGES | both | rudder_param |
 | `rot_axis.py`, `skew_symmetric_matrix.py` | Rotation about an axis (the user's helpers) | both | rudder_param, blade |
 | `blade_extraction.py` | A propeller blade's six distributions, section shapes and diameter from its CAD | X_geom | blade |
-| `hull_extraction.py` | A hull's stations and hydrostatics from its CAD, or from SUBOFF's equations | X_geom | hull_modify, hull_eq, hull |
+| `hull_extraction.py` | A hull's stations and hydrostatics from its CAD, or from SUBOFF's equations; its solids' properties and validity through cad_kernel (the rest of From CAD still on the binding helpers) | X_geom | hull_modify, hull_eq, hull |
 
 ## Rudder section fit
 

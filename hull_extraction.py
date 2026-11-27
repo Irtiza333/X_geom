@@ -54,13 +54,13 @@ use Rudder_geom_extraction's section code.
 from __future__ import annotations
 
 import argparse
-import importlib
 import math
 import os
 from dataclasses import dataclass
 
 import numpy as np
 
+import cad_kernel as CK                                 # the CAD kernel (solid_properties, is_valid)
 import xcad_loft as XL                                  # the OCC binding shim, STEP files
 
 OUT_DIR = os.path.join("outputs", "hull")
@@ -209,22 +209,11 @@ def load_cad(path):
 def solid_properties(shape, eps=1.0e-10):
     """(volume m^3, surface area m^2, centre of volume (3,) m) of a solid in mm,
     by adaptive integration to the relative error eps (on the SUBOFF solid,
-    eps 1e-7 leaves the volume 5e-6 off at its poles; 1e-10 gives 3e-9)."""
-    GProp_GProps = XL._occ("GProp", "GProp_GProps")
-    mod = importlib.import_module(f"{XL._PKG}.BRepGProp")
-    owner = getattr(mod, "brepgprop", None) or getattr(mod, "BRepGProp")
-    out = []
-    for kind in ("VolumeProperties", "SurfaceProperties"):
-        props = GProp_GProps()
-        fn = XL._static(owner, kind)
-        try:
-            fn(shape, props, float(eps))
-        except TypeError:                                # a binding without the eps overload
-            fn(shape, props)
-        out.append(props)
-    c = out[0].CentreOfMass()
-    return (abs(out[0].Mass()) / CAD_SCALE ** 3, out[1].Mass() / CAD_SCALE ** 2,
-            np.array([c.X(), c.Y(), c.Z()]) / CAD_SCALE)
+    eps 1e-7 leaves the volume 5e-6 off at its poles; 1e-10 gives 3e-9);
+    through cad_kernel (27 Nov 2026, Eddie's request: the CAD output all on
+    the kernel)."""
+    vol, area = CK.mass_properties(shape, eps)
+    return vol / CAD_SCALE ** 3, area / CAD_SCALE ** 2, CK.centroid(shape, eps) / CAD_SCALE
 
 
 def stations_from_cad(shape, n=201, inset=1.0e-6, loop_points=2000, source=""):
@@ -288,8 +277,8 @@ def revolve(segments, tangents):
 
 
 def is_valid(shape):
-    """BRepCheck_Analyzer's verdict."""
-    return bool(XL._occ("BRepCheck", "BRepCheck_Analyzer")(shape).IsValid())
+    """BRepCheck_Analyzer's verdict (cad_kernel.is_valid)."""
+    return CK.is_valid(shape)
 
 
 # --------------------------------------------------------------------------

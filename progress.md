@@ -1153,6 +1153,15 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   DRDC sector and the vehicle the same. Tests: kernel 26, blade 91 with the window and the CAD (the cone
   sector's IGES: one 144 a face, no 186, all B-splines, the solid's area), contract 271, tool 83; the Rudder
   folder kernel 26, tool 82.
+- The hull's CAD checks on the kernel (27 Nov 2026; Eddie's request: the CAD output all on the kernel).
+  hull_modify.write_cad measured its solid with hull_extraction's `solid_properties` and `is_valid`, which
+  called OpenCascade through xcad_loft's binding helpers; they now call `cad_kernel` (`mass_properties` and
+  `centroid` at the same eps, 1e-10; the conversion to m stays in hull_extraction), so From CAD uses the
+  kernel's too. The rest of hull_extraction, blade_extraction, Rudder_geom_extraction and X_CAD.py stay as they
+  are (the From CAD import, which the web app does not offer yet). The same numbers bit for bit: the volume,
+  area, centre and validity of SUBOFF's whole and half body before and after, on pythonocc-core and on
+  cadquery-ocp alone; `_cad_compare.py` hull and hull_half the same. Tests: hull 65, hull_modify 17, hull_eq 15,
+  files 60, contract 271.
 
 ## Next steps
 
