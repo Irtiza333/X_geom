@@ -54,7 +54,8 @@ Vehicle tab. Each component is an adapter class that the window drives through t
 
 | Module | What it does | Where | Tests |
 | --- | --- | --- | --- |
-| `xcad_loft.py` | The solid through section loops (XCAD files): four patches along the span, the tip patch over the cap, the flat root; two lofts joined at a section (`loft_split`); half bodies; STEP and IGES | both | tool, wing, hull, hull_modify, hull_eq |
+| `cad_kernel.py` | The CAD kernel (27 Nov 2026, Eddie's request): the one module that calls OpenCascade, pythonocc-core or cadquery-ocp. Plain data in (points, pole grids, knots, numbers, paths), shapes out as opaque handles: edges, wires, faces, B-spline surface faces, lofts, sewing into a solid, box, common, measures (faces, volume and area, validity, bounding box, triangles), STEP and IGES. Its function list is the seam a browser build reimplements. xcad_loft is on it; the other CAD modules still reach OpenCascade through its binding helpers (`_occ`, `_static`, `_topods`) until they move | both, web | kernel, tool, wing, hull, blade |
+| `xcad_loft.py` | The solid through section loops (XCAD files): four patches along the span, the tip patch over the cap, the flat root; two lofts joined at a section (`loft_split`); half bodies; STEP and IGES (through cad_kernel, whose functions it keeps under their old names) | both | tool, wing, hull, hull_modify, hull_eq |
 | `temp_rudder_cad.py` | A stopgap: the CAD of a file of modified sections with the original above them, as two lofts joined at H (the modified part, the unmodified part); sections of any number of points put onto the original's layout | both | tool |
 | `X_CAD_new.py` | The MSc blade's CAD by the DRDC five-surface method (supersedes `X_CAD.py`) | X_geom | tip_new |
 | `X_CAD.py` | The original loft-and-cap blade CAD, kept | X_geom | none |
@@ -144,15 +145,17 @@ suites without OCC; the cloud runs them with cadquery-ocp under Xvfb).
 | section_fit | `_section_fit_test.py` | Main_PSO, the replica, retruncate, temp_funcs | both |
 | rudder_param | `_rudder_param_test.py` | Rudder_geom_extraction's spanwise parameters | both |
 | tip_cap | `_tip_cap_test.py` | tip_cap | both |
+| kernel | `_cad_kernel_test.py` | cad_kernel: each function on shapes whose answers are known; the modules moved over to it call no OpenCascade themselves | both |
 | hull_modify | `_hull_modify_test.py` | hull_modify | X_geom |
 | hull_eq | `_hull_test.py` | suboff, hull_extraction | X_geom |
 | airfoils | `_airfoils_test.py` | airfoils, para's section tables | X_geom |
 | hub_center | `_hub_center_test.py` | the DRDC hub sector's centring | X_geom |
 | tip_new | `_tip_test_new.py` | the DRDC tip pipeline | X_geom |
 
-Tools, not checks: `_diag_new.py` (one-run diagnostic of the DRDC tip pipeline), `_iges_de.py` and
-`_iges_faces.py` (what an IGES file holds), `_tmp_summarize_chats.py` (a scratch script for chat transcripts,
-unrelated to XGeom).
+Tools, not checks: `_cad_compare.py` (the samples' CAD recorded before and after a change to the CAD code,
+and the two records compared: faces, volume, area, validity, bounding box, the STEP and IGES data),
+`_diag_new.py` (one-run diagnostic of the DRDC tip pipeline), `_iges_de.py` and `_iges_faces.py` (what an IGES
+file holds), `_tmp_summarize_chats.py` (a scratch script for chat transcripts, unrelated to XGeom).
 
 ## Folders and data
 
@@ -176,15 +179,14 @@ On the user's machine but not in the repository: copies named `*-1.py` (`blade_m
 
 ## The Rudder folder
 
-Its 31 modules are all copies of X_geom's: `xgeom_tool.py`, `xgeom_common.py`, `xgeom_relations.py`,
+Its 32 modules are all copies of X_geom's: `cad_kernel.py`, `xgeom_tool.py`, `xgeom_common.py`, `xgeom_relations.py`,
 `xgeom_files.py` (since 26 Nov 2026: the rudder's set-up is a component file), `xgeom_from_cad.py`,
 `xgeom_rudder.py`, `rudder_modify.py`, `modify_control.py`, `rudder_laws_setup.py`, `bezier_section.py`, `tip_cap.py`, `xcad_loft.py`,
 `temp_rudder_cad.py`, `Rudder_geom_extraction.py`, `rot_axis.py`, `skew_symmetric_matrix.py`, the section fit's
 nine (`control.py`, `match_rudder_section.py`, `replica_funcs.py`, `retruncate.py`, `temp_funcs.py`,
-`Main_PSO.py`, `bound_check.py`, `penalty.py`, `repair.py`) and six self-checks (`_xgeom_tool_test.py`,
+`Main_PSO.py`, `bound_check.py`, `penalty.py`, `repair.py`) and seven self-checks (`_xgeom_tool_test.py`,
 `_xgeom_relations_test.py`, `_rudder_modify_test.py`, `_section_fit_test.py`, `_rudder_param_test.py`,
-`_tip_cap_test.py`), all
-byte-identical.
+`_tip_cap_test.py`, `_cad_kernel_test.py`), all byte-identical.
 
 ## Before handing a change over
 

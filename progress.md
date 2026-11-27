@@ -1077,9 +1077,36 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   `hub_x_m` alone, needs this version to read. Tests: blade 90 with the window and the CAD (82 before) (an
   off-centre cylinder's DRDC sector and 1/Z solid from -250 to 550 mm, as placed), relations 138, files 60,
   contract 271, tool 83, hull 65, wing 80.
+- The CAD kernel, step 1 (27 Nov 2026; Eddie's request, which the user took up in Eddie's order: one module,
+  `cad_kernel.py`, the only place that imports OpenCascade, the rest calling it with plain data and keeping the
+  shapes it returns as opaque handles, so CAD in the browser or under another binding means reimplementing its
+  functions). New module `cad_kernel.py` (both folders): the binding found as before (pythonocc-core or
+  cadquery-ocp; conda's DLLs on Windows) and its functions `available`, `binding`, `bspline_edge`, `line_edge`,
+  `wire`, `planar_face`, `wire_face`, `surface_face`, `loft`, `sew_solid`, `box`, `common`, `faces`,
+  `count_faces`, `mass_properties`, `is_valid`, `bounding_box`, `tessellate`, `write_step`, `read_step`,
+  `write_iges` (`brep` for BRep solids), `read_iges`, `view`; for the modules not yet on it, the binding helpers
+  `_occ`, `_static`, `_topods`. `xcad_loft.py` calls only the kernel: its OpenCascade code moved there as it was
+  (the helpers, the half body's cut, the validity checks, the files, the triangles, the viewer), and its old
+  names stay as the kernel's functions (`_bspline_edge`, `_thru`, `_sew_solid`, `write_step`, `occ_available`,
+  `_occ`, `_PKG`, ...) for the modules and scripts that call them through it. Nothing changed in what the CAD
+  gives: the new tool `_cad_compare.py` built twelve samples' CAD before and after (the rudder modified below H
+  with one loft, two lofts and its half body; the wing, the fin, the planar rudder, the wind-tunnel rudder, the
+  blended wing body, SUBOFF's hull; the MSc blade's DRDC sector, the whole propeller, a cone hub's sector): the
+  same faces, volumes, areas, boxes and validity, and the STEP files' DATA sections and the IGES files' entities
+  byte for byte. New self-check `_cad_kernel_test.py` (both folders): each function on shapes whose answers are
+  known (a box, a cube sewn from six faces, a loft between two squares, a B-spline patch, STEP and IGES read
+  back, the triangles facing out), and that the modules moved over (xcad_loft) call no OpenCascade themselves.
+  For the web app: additive (a new module to copy, which xcad_loft imports; the kernel's function list, its
+  docstring, is the seam). Tests: kernel 9, tool 83 with the window and OCC, wing 80, hull 65, blade 90 with the
+  window and the CAD, hull_eq 15, hull_modify 17, files 60, contract 271, relations 138; the Rudder folder tool
+  82, kernel 9.
 
 ## Next steps
 
+- The CAD kernel (cad_kernel.py), Eddie's order: step 2, X_CAD_new.py (imports pythonocc directly: the DRDC
+  blade CAD runs on pythonocc only; its IGES for the CFD pipeline must stay the same) and prop_hub.py onto
+  the kernel; then vehicle_cad, wing_modify and hull_modify; the extraction modules last, if From CAD has
+  to run in the browser. `_cad_compare.py` before and after each, and `_cad_kernel_test.MOVED` grows with them.
 - Wings and fins: the tips (next; user, 8 Oct 2026), then a check on the user's machine of the wing, the fin and
   the vehicle with them (pythonocc-core).
 - Vehicle: the placement is not loaded back yet (the set-up JSON records it); the blended wing body

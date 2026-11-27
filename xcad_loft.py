@@ -196,62 +196,35 @@ point files in metres are scaled by 1000, as X_CAD.py does.
 save_cad writes a built STEP file to a file of the user's choice, as STEP or
 IGES (the design tool's Save CAD).
 
-Needs pythonocc-core (OCC.Core, conda-forge) or cadquery-ocp (OCP).
+Its CAD goes through cad_kernel.py (27 Nov 2026), the one module that calls
+OpenCascade (pythonocc-core or cadquery-ocp): this module hands it points,
+poles and knots and keeps the shapes it gets back as opaque handles. The
+kernel's functions are also here under their old names (_bspline_edge,
+_thru, write_step, ...), and its binding helpers (_occ, _static, _topods,
+_PKG, occ_available), for the modules that still use them through
+xcad_loft.
 """
 
 from __future__ import annotations
 
 import argparse
-import importlib
 import os
-import sys
 import time
 from dataclasses import dataclass, field
 
 import numpy as np
 
-if os.name == "nt" and hasattr(os, "add_dll_directory"):          # conda's OCCT DLLs (as X_CAD.py does)
-    _lib = os.path.join(sys.prefix, "Library", "bin")
-    if os.path.isdir(_lib):
-        os.add_dll_directory(_lib)
+import cad_kernel as CK
+from cad_kernel import _PKG, _occ, _static, _topods              # noqa: F401  the binding, for the modules that
+                                                                 # still reach OpenCascade through xcad_loft
 
-_PKG = None
-for _cand in ("OCC.Core", "OCP"):
-    try:
-        importlib.import_module(_cand + ".gp")
-        if not hasattr(importlib.import_module(_cand + ".TColgp"), "TColgp_Array1OfPnt"):
-            continue                                            # OCCT 8 bindings: arrays not exposed this way
-        _PKG = _cand
-        break
-    except ImportError:
-        continue
-
-
-def occ_available():
-    """True when pythonocc-core or cadquery-ocp can be imported."""
-    return _PKG is not None
-
-
-def _occ(module, *names):
-    if _PKG is None:
-        raise ImportError("no OCCT binding: install pythonocc-core (conda install -c conda-forge "
-                          "pythonocc-core) or cadquery-ocp")
-    mod = importlib.import_module(f"{_PKG}.{module}")
-    objs = tuple(getattr(mod, n) for n in names)
-    return objs[0] if len(objs) == 1 else objs
-
-
-def _static(owner, name):
-    """OCP spells static methods Name_s, pythonocc Name."""
-    for cand in (name, name + "_s"):
-        if hasattr(owner, cand):
-            return getattr(owner, cand)
-    raise AttributeError(f"{owner!r} has no static method {name!r}")
-
-
-def _topods(kind):
-    mod = importlib.import_module(f"{_PKG}.TopoDS")
-    return _static(getattr(mod, "topods", None) or getattr(mod, "TopoDS"), kind)
+occ_available = CK.available                                     # the kernel's functions under their old names,
+_bspline_edge, _line_edge, _planar_face, _wire_face = (          # for the modules that call them here
+    CK.bspline_edge, CK.line_edge, CK.planar_face, CK.wire_face)
+_surface_face, _thru, _sew_solid, _faces_of, _box = (
+    CK.surface_face, CK.loft, CK.sew_solid, CK.faces, CK.bounding_box)
+count_faces, mass_properties, tessellate, view = CK.count_faces, CK.mass_properties, CK.tessellate, CK.view
+write_step, read_step, write_iges, read_iges = CK.write_step, CK.read_step, CK.write_iges, CK.read_iges
 
 
 XCAD_UNITS = {"m": 1.0e-3, "mm": 1.0}
@@ -310,24 +283,6 @@ def _fit_poles(pts, a):
     return poles
 
 
-def _bspline_edge(poles, knots, degree):
-    gp_Pnt = _occ("gp", "gp_Pnt")
-    TColgp_Array1OfPnt = _occ("TColgp", "TColgp_Array1OfPnt")
-    TColStd_Array1OfReal, TColStd_Array1OfInteger = _occ("TColStd", "TColStd_Array1OfReal",
-                                                         "TColStd_Array1OfInteger")
-    Geom_BSplineCurve = _occ("Geom", "Geom_BSplineCurve")
-    BRepBuilderAPI_MakeEdge = _occ("BRepBuilderAPI", "BRepBuilderAPI_MakeEdge")
-    arr = TColgp_Array1OfPnt(1, len(poles))
-    for i, p in enumerate(poles):
-        arr.SetValue(i + 1, gp_Pnt(float(p[0]), float(p[1]), float(p[2])))
-    uk, mult = np.unique(knots, return_counts=True)
-    k_arr, m_arr = TColStd_Array1OfReal(1, len(uk)), TColStd_Array1OfInteger(1, len(uk))
-    for i, (kv, mv) in enumerate(zip(uk, mult)):
-        k_arr.SetValue(i + 1, float(kv))
-        m_arr.SetValue(i + 1, int(mv))
-    return BRepBuilderAPI_MakeEdge(Geom_BSplineCurve(arr, k_arr, m_arr, degree)).Edge()
-
-
 class _SectionFitter:
     """Wires for loops of one point layout, both sides on common knots."""
 
@@ -347,22 +302,18 @@ class _SectionFitter:
 
     def wire(self, loop):
         """(wire, largest distance of the loop's points from it, mm)."""
-        BRepBuilderAPI_MakeWire = _occ("BRepBuilderAPI", "BRepBuilderAPI_MakeWire")
         p_up, p_lo, err = self.sides(loop)
-        w = BRepBuilderAPI_MakeWire()
-        w.Add(_bspline_edge(p_up, self.k_up, self.degree))
-        w.Add(_bspline_edge(p_lo, self.k_lo, self.degree))
-        return w.Wire(), err
+        return CK.wire([CK.bspline_edge(p_up, self.k_up, self.degree),
+                        CK.bspline_edge(p_lo, self.k_lo, self.degree)]), err
 
     def closing_face(self, loop):
         """The face across a loop that is not flat: the ruled surface between
         its two sides, straight lines from one side to the other (the knots
         are symmetric, so the lower side reversed is the same curve)."""
-        BRepBuilderAPI_MakeWire = _occ("BRepBuilderAPI", "BRepBuilderAPI_MakeWire")
         p_up, p_lo, _ = self.sides(loop)
-        e_up = _bspline_edge(p_up, self.k_up, self.degree)
-        e_lo = _bspline_edge(p_lo[::-1], self.k_lo, self.degree)
-        return _thru([BRepBuilderAPI_MakeWire(e_up).Wire(), BRepBuilderAPI_MakeWire(e_lo).Wire()], False, True)
+        e_up = CK.bspline_edge(p_up, self.k_up, self.degree)
+        e_lo = CK.bspline_edge(p_lo[::-1], self.k_lo, self.degree)
+        return CK.loft([CK.wire([e_up]), CK.wire([e_lo])], False, True)
 
 
 # --------------------------------------------------------------------------
@@ -371,8 +322,8 @@ class _SectionFitter:
 
 @dataclass
 class LoftResult:
-    shape: object                  # the solid (TopoDS_Shape), None when it failed
-    valid: bool                    # BRepCheck_Analyzer
+    shape: object                  # the solid (a cad_kernel shape), None when it failed
+    valid: bool                    # cad_kernel.is_valid
     volume: float                  # mm^3
     area: float                    # mm^2
     free_edges: int                # edges the sewing left open (0 for a closed solid)
@@ -404,85 +355,6 @@ class LoftResult:
     strip_knots: object = None     # the knots across the strips (and the tip patch across them)
     tip_turn: float = 0.0          # the largest turn of the normal across the tip patch's four edges, deg (its
                                    # normal against its neighbour's along each edge; _edge_turn)
-
-
-def _thru(wires, solid, ruled, max_degree=None):
-    BRepOffsetAPI_ThruSections = _occ("BRepOffsetAPI", "BRepOffsetAPI_ThruSections")
-    ts = BRepOffsetAPI_ThruSections(solid, ruled, 1.0e-6)
-    ts.CheckCompatibility(False)
-    if max_degree is not None:
-        ts.SetMaxDegree(int(max_degree))
-    for w in wires:
-        ts.AddWire(w)
-    ts.Build()
-    if not ts.IsDone():
-        raise RuntimeError("BRepOffsetAPI_ThruSections failed")
-    return ts.Shape()
-
-
-def _planar_face(wire):
-    BRepBuilderAPI_MakeFace = _occ("BRepBuilderAPI", "BRepBuilderAPI_MakeFace")
-    mk = BRepBuilderAPI_MakeFace(wire, True)
-    if not mk.IsDone():
-        raise RuntimeError("a flat end loop did not give a planar face")
-    return mk.Face()
-
-
-def _faces_of(shape):
-    """The faces of a shape."""
-    TopExp_Explorer = _occ("TopExp", "TopExp_Explorer")
-    TopAbs_FACE = _occ("TopAbs", "TopAbs_FACE")
-    as_face = _topods("Face")
-    out, ex = [], TopExp_Explorer(shape, TopAbs_FACE)
-    while ex.More():
-        out.append(as_face(ex.Current()))
-        ex.Next()
-    return out
-
-
-def count_faces(shape):
-    """Number of faces of a shape."""
-    return len(_faces_of(shape))
-
-
-def mass_properties(shape, eps=1.0e-7):
-    """(volume mm^3, area mm^2) of a shape, by adaptive integration to the
-    relative error eps (the default Gauss rule is 0.4 % off on these
-    many-span B-spline faces)."""
-    GProp_GProps = _occ("GProp", "GProp_GProps")
-    mod = importlib.import_module(f"{_PKG}.BRepGProp")
-    owner = getattr(mod, "brepgprop", None) or getattr(mod, "BRepGProp")
-    out = []
-    for kind in ("VolumeProperties", "SurfaceProperties"):
-        props = GProp_GProps()
-        fn = _static(owner, kind)
-        try:
-            fn(shape, props, float(eps))
-        except TypeError:                                   # a binding without the eps overload
-            fn(shape, props)
-        out.append(props.Mass())
-    return abs(out[0]), out[1]
-
-
-def _unique_mults(knots):
-    uk, mult = np.unique(np.asarray(knots, dtype=float), return_counts=True)
-    return uk, mult
-
-
-def _real_array(vals):
-    TColStd_Array1OfReal = _occ("TColStd", "TColStd_Array1OfReal")
-    a = TColStd_Array1OfReal(1, len(vals))
-    for i, v in enumerate(vals, start=1):
-        a.SetValue(i, float(v))
-    return a
-
-
-def _int_array(vals):
-    TColStd_Array1OfInteger = _occ("TColStd", "TColStd_Array1OfInteger")
-    a = TColStd_Array1OfInteger(1, len(vals))
-    for i, v in enumerate(vals, start=1):
-        a.SetValue(i, int(v))
-    return a
 
 
 EASE_DEG = 0.1                             # a step between loops is eased out until it tilts the surface by
@@ -662,49 +534,6 @@ def _wall_loops(flats, z_axis, v_poles, tol):
     fit[0], fit[-1] = rows[0], rows[-1]
     fit[:, :, z_axis] = z[:, None]
     return [lp for lp in fit], float(np.linalg.norm(fit - rows, axis=2).max())
-
-
-def _surface_face(grid, uknots, vknots, udeg=3, vdeg=3):
-    """The face of the bicubic B-spline surface with the pole grid (n_v rows
-    of n_u poles), u along the section."""
-    gp_Pnt = _occ("gp", "gp_Pnt")
-    TColgp_Array2OfPnt = _occ("TColgp", "TColgp_Array2OfPnt")
-    Geom_BSplineSurface = _occ("Geom", "Geom_BSplineSurface")
-    BRepBuilderAPI_MakeFace = _occ("BRepBuilderAPI", "BRepBuilderAPI_MakeFace")
-    n_v, n_u = grid.shape[0], grid.shape[1]
-    arr = TColgp_Array2OfPnt(1, n_u, 1, n_v)
-    for i in range(n_u):
-        for j in range(n_v):
-            p = grid[j, i]
-            arr.SetValue(i + 1, j + 1, gp_Pnt(float(p[0]), float(p[1]), float(p[2])))
-    uk, um = _unique_mults(uknots)
-    vk, vm = _unique_mults(vknots)
-    surf = Geom_BSplineSurface(arr, _real_array(uk), _real_array(vk), _int_array(um), _int_array(vm),
-                               int(udeg), int(vdeg))
-    return BRepBuilderAPI_MakeFace(surf, 1.0e-6).Face()
-
-
-def _line_edge(a, b):
-    gp_Pnt = _occ("gp", "gp_Pnt")
-    BRepBuilderAPI_MakeEdge = _occ("BRepBuilderAPI", "BRepBuilderAPI_MakeEdge")
-    return BRepBuilderAPI_MakeEdge(gp_Pnt(*[float(v) for v in a]), gp_Pnt(*[float(v) for v in b])).Edge()
-
-
-def _wire_face(edges):
-    """The planar face bounded by the edges (chained into one wire), its
-    orientation fixed (a wire chained from edges of other faces can come out
-    unorientable otherwise)."""
-    BRepBuilderAPI_MakeWire = _occ("BRepBuilderAPI", "BRepBuilderAPI_MakeWire")
-    ShapeFix_Face = _occ("ShapeFix", "ShapeFix_Face")
-    w = BRepBuilderAPI_MakeWire()
-    for e in edges:
-        w.Add(e)
-    fix = ShapeFix_Face(_planar_face(w.Wire()))
-    fix.FixOrientation()
-    fix.Perform()
-    return fix.Face()
-
-
 
 
 # --------------------------------------------------------------------------
@@ -1874,9 +1703,6 @@ def _half_cut(solid, loops, thick, cen_a_row):
     """The half body: the solid cut by the plane of symmetry, keeping the
     LE-to-TE side (the side of the loops' indices 0 to i_te). The six faces
     keep the full body's surfaces, trimmed; the section face closes it."""
-    BRepPrimAPI_MakeBox = _occ("BRepPrimAPI", "BRepPrimAPI_MakeBox")
-    gp_Pnt = _occ("gp", "gp_Pnt")
-    Common = _occ("BRepAlgoAPI", "BRepAlgoAPI_Common")
     pts = np.vstack(loops)
     lo = pts.min(axis=0) - (0.05 * np.ptp(pts, axis=0) + 10.0)
     hi = pts.max(axis=0) + (0.05 * np.ptp(pts, axis=0) + 10.0)
@@ -1884,39 +1710,10 @@ def _half_cut(solid, loops, thick, cen_a_row):
         lo[thick] = 0.0
     else:
         hi[thick] = 0.0
-    algo = Common(solid, BRepPrimAPI_MakeBox(gp_Pnt(*[float(v) for v in lo]),
-                                             gp_Pnt(*[float(v) for v in hi])).Shape())
-    algo.Build()
-    if not algo.IsDone():
-        raise RuntimeError("the half body's cut on the plane of symmetry failed")
-    return algo.Shape()
-
-
-def _sew_solid(parts, sew_tol):
-    """The faces sewn into one shell and made a solid: (solid, free edges)."""
-    BRepBuilderAPI_Sewing, BRepBuilderAPI_MakeSolid = _occ("BRepBuilderAPI", "BRepBuilderAPI_Sewing",
-                                                           "BRepBuilderAPI_MakeSolid")
-    sew = BRepBuilderAPI_Sewing(sew_tol)
-    for p in parts:
-        sew.Add(p)
-    sew.Perform()
-    free = int(sew.NbFreeEdges())
-    TopExp_Explorer = _occ("TopExp", "TopExp_Explorer")
-    TopAbs_SHELL = _occ("TopAbs", "TopAbs_SHELL")
-    ex = TopExp_Explorer(sew.SewedShape(), TopAbs_SHELL)
-    shells = []
-    while ex.More():
-        shells.append(_topods("Shell")(ex.Current()))
-        ex.Next()
-    if len(shells) != 1:
-        raise RuntimeError(f"sewing left {len(shells)} shells, expected 1")
-    ShapeFix_Shell, ShapeFix_Solid = _occ("ShapeFix", "ShapeFix_Shell", "ShapeFix_Solid")
-    fs = ShapeFix_Shell(shells[0])
-    fs.Perform()
-    solid = BRepBuilderAPI_MakeSolid(fs.Shell()).Solid()
-    fx = ShapeFix_Solid(solid)
-    fx.Perform()
-    return fx.Solid(), free
+    try:
+        return CK.common(solid, CK.box(lo, hi))
+    except RuntimeError:
+        raise RuntimeError("the half body's cut on the plane of symmetry failed") from None
 
 
 def _symmetric(levels, thick, sym_tol):
@@ -2351,36 +2148,26 @@ def _loft_once(loops, n_poles, height_axis, flat_tol, sew_tol, v_poles, strip_fr
 
     # the faces
     edges = (("le", k_strip), ("cen_a", k_cen), ("te", k_strip), ("cen_b", k_cen))
-    parts = [_surface_face(grids[name], uk, vk, 3, vd) for name, uk in edges]
+    parts = [CK.surface_face(grids[name], uk, vk, 3, vd) for name, uk in edges]
     if k < n:
-        parts.append(_surface_face(tip, k_tu, k_tv, 3, 3))
+        parts.append(CK.surface_face(tip, k_tu, k_tv, 3, 3))
     else:
-        parts.append(_wire_face([_bspline_edge(grids[nm][-1], uk, 3) for nm, uk in edges]))
-    parts.append(_wire_face([_bspline_edge(grids[nm][0], uk, 3) for nm, uk in edges]))
+        parts.append(CK.wire_face([CK.bspline_edge(grids[nm][-1], uk, 3) for nm, uk in edges]))
+    parts.append(CK.wire_face([CK.bspline_edge(grids[nm][0], uk, 3) for nm, uk in edges]))
 
-    solid, free = _sew_solid(parts, sew_tol)
+    solid, free = CK.sew_solid(parts, sew_tol)
     if half:                                           # cut on the plane of symmetry: the surfaces stay the
         solid = _half_cut(solid, loops, thick, first_a)              # full body's, the volume exactly half
         notes.append("half body: the LE-to-TE side, cut on the plane of symmetry")
-    BRepCheck_Analyzer = _occ("BRepCheck", "BRepCheck_Analyzer")
-    valid = bool(BRepCheck_Analyzer(solid).IsValid())
-    vol, area = mass_properties(solid)
+    valid = CK.is_valid(solid)
+    vol, area = CK.mass_properties(solid)
     return LoftResult(solid, valid, vol, area, free, err, k, n - k, time.time() - t0, notes,
-                      count_faces(solid), v_err, bool(half), steps, (w_le, w_te), te_round,
+                      CK.count_faces(solid), v_err, bool(half), steps, (w_le, w_te), te_round,
                       drops, float(tip_err),
                       (int(tip.shape[1]), int(tip.shape[0])) if tip is not None else (0, 0), tip_angle,
                       None if tip_info is None else {kk: np.array(vv) for kk, vv in tip_info["corners"].items()},
                       (float(tip_blend[0]), float(tip_blend[1])), tip_edges=(float(t_edges[0]), float(t_edges[1])),
                       strip_knots=np.array(k_strip), tip_turn=float(tip_turn))
-
-
-def _box(shape):
-    """The shape's bounding box, (2, 3): the surfaces, not their control nets."""
-    Bnd_Box = _occ("Bnd", "Bnd_Box")
-    mod = importlib.import_module(f"{_PKG}.BRepBndLib")
-    b = Bnd_Box()
-    _static(getattr(mod, "brepbndlib", None) or getattr(mod, "BRepBndLib"), "AddOptimal")(shape, b, False, False)
-    return np.array(b.Get(), dtype=float).reshape(2, 3)
 
 
 def loft_split(loops, split, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol=1.0e-3, v_poles=30,
@@ -2456,20 +2243,19 @@ def loft_split(loops, split, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol
     tol = max(1.0e-6 * max(1.0, size), 10.0 * flat_tol * max(1.0, size))
     parts, dropped = [], 0
     for res in (lower, upper):
-        for f in _faces_of(res.shape):
-            box = _box(f)
+        for f in CK.faces(res.shape):
+            box = CK.bounding_box(f)
             if abs(box[0, z_axis] - z_j) <= tol and abs(box[1, z_axis] - z_j) <= tol:
                 dropped += 1
                 continue
             parts.append(f)
     if dropped != 2:
         raise RuntimeError(f"the two lofts have {dropped} flat faces on the joint, not 2")
-    solid, free = _sew_solid(parts, sew_tol)
+    solid, free = CK.sew_solid(parts, sew_tol)
     if half:
         solid = _half_cut(solid, loops, thick, loops[0][1:i_te])
-    BRepCheck_Analyzer = _occ("BRepCheck", "BRepCheck_Analyzer")
-    valid = bool(BRepCheck_Analyzer(solid).IsValid())
-    vol, area = mass_properties(solid)
+    valid = CK.is_valid(solid)
+    vol, area = CK.mass_properties(solid)
 
     notes = [f"two lofts meeting at loop {split + 1} (z {z_j:.6g} mm): the {split + 1} loops up to it and the "
              f"{n - split} from it on, each lofted on its own, so the surface turns there as the loops do; both "
@@ -2483,7 +2269,7 @@ def loft_split(loops, split, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol
     steps = list(lower.steps) + [(at + split, *rest) for at, *rest in upper.steps]
     return LoftResult(solid, valid, vol, area, free, max(lower.fit_error, upper.fit_error),
                       lower.n_smooth + upper.n_smooth - 1, upper.n_ruled, time.time() - t0, notes,
-                      count_faces(solid), max(lower.v_error, upper.v_error), bool(half), steps, (w_le, w_te),
+                      CK.count_faces(solid), max(lower.v_error, upper.v_error), bool(half), steps, (w_le, w_te),
                       te_round and w_te == upper.strips[1] and not match, upper.drops, upper.tip_error,
                       upper.tip_poles, upper.tip_angle, upper.corners, upper.tip_blend, split + 1, upper.tip_edges,
                       upper.strip_knots, upper.tip_turn)
@@ -2492,45 +2278,6 @@ def loft_split(loops, split, n_poles=40, height_axis=2, flat_tol=1.0e-6, sew_tol
 # --------------------------------------------------------------------------
 # Files and display
 # --------------------------------------------------------------------------
-
-def write_step(shape, path):
-    STEPControl_Writer, STEPControl_AsIs = _occ("STEPControl", "STEPControl_Writer", "STEPControl_AsIs")
-    w = STEPControl_Writer()
-    w.Transfer(shape, STEPControl_AsIs)
-    if int(w.Write(str(path))) != 1:                       # IFSelect_RetDone
-        raise RuntimeError(f"writing {path} failed")
-    return path
-
-
-def read_step(path):
-    STEPControl_Reader = _occ("STEPControl", "STEPControl_Reader")
-    r = STEPControl_Reader()
-    if int(r.ReadFile(str(path))) != 1:
-        raise RuntimeError(f"reading {path} failed")
-    r.TransferRoots()
-    return r.OneShape()
-
-
-def write_iges(shape, path):
-    """Write a shape as IGES in mm, its faces as trimmed surfaces (entity 144, the form CAD and meshing
-    tools read)."""
-    IGESControl_Writer = _occ("IGESControl", "IGESControl_Writer")
-    w = IGESControl_Writer("MM", 0)                      # 0: faces as trimmed surfaces (1: BRep solids)
-    w.AddShape(shape)
-    w.ComputeModel()
-    if not w.Write(str(path)):
-        raise RuntimeError(f"writing {path} failed")
-    return path
-
-
-def read_iges(path):
-    IGESControl_Reader = _occ("IGESControl", "IGESControl_Reader")
-    r = IGESControl_Reader()
-    if int(r.ReadFile(str(path))) != 1:
-        raise RuntimeError(f"reading {path} failed")
-    r.TransferRoots()
-    return r.OneShape()
-
 
 CAD_EXTENSIONS = {".step": "STEP", ".stp": "STEP", ".igs": "IGES", ".iges": "IGES"}
 
@@ -2545,57 +2292,11 @@ def save_cad(step, path, iges=None):
         raise ValueError(f"{path}: a .step, .stp, .igs or .iges file")
     src = step if kind == "STEP" else iges if iges and os.path.exists(iges) else None
     if src is None:
-        write_iges(read_step(step), path)
+        CK.write_iges(CK.read_step(step), path)
         return f"IGES converted from {os.path.basename(step)}"
     if not (os.path.exists(path) and os.path.samefile(src, path)):
         shutil.copyfile(src, path)
     return f"{kind}, a copy of {os.path.basename(src)}"
-
-
-def tessellate(shape, linear=0.5, angular=0.5):
-    """Triangles of a shape for display: (vertices (n, 3), triangles (m, 3)),
-    outward-facing (reversed faces flipped)."""
-    BRepMesh_IncrementalMesh = _occ("BRepMesh", "BRepMesh_IncrementalMesh")
-    TopExp_Explorer = _occ("TopExp", "TopExp_Explorer")
-    TopAbs_FACE, TopAbs_REVERSED = _occ("TopAbs", "TopAbs_FACE", "TopAbs_REVERSED")
-    BRep_Tool = _occ("BRep", "BRep_Tool")
-    TopLoc_Location = _occ("TopLoc", "TopLoc_Location")
-    triangulation = _static(BRep_Tool, "Triangulation")
-    as_face = _topods("Face")
-    BRepMesh_IncrementalMesh(shape, float(linear), False, float(angular), True)
-    verts, tris, base = [], [], 0
-    ex = TopExp_Explorer(shape, TopAbs_FACE)
-    while ex.More():
-        face = as_face(ex.Current())
-        loc = TopLoc_Location()
-        tri = triangulation(face, loc)
-        if tri is not None:
-            trsf = loc.Transformation()
-            n = tri.NbNodes()
-            pts = [tri.Node(i).Transformed(trsf) for i in range(1, n + 1)]
-            verts.append(np.array([[p.X(), p.Y(), p.Z()] for p in pts]))
-            t = np.array([tri.Triangle(i).Get() for i in range(1, tri.NbTriangles() + 1)]) - 1
-            if face.Orientation() == TopAbs_REVERSED:
-                t = t[:, ::-1]
-            tris.append(t + base)
-            base += n
-        ex.Next()
-    if not verts:
-        return np.zeros((0, 3)), np.zeros((0, 3), dtype=int)
-    return np.vstack(verts), np.vstack(tris).astype(int)
-
-
-def view(shape, title="XGeom CAD"):
-    """Show a shape in the pythonocc viewer (needs pythonocc-core and a Qt or
-    wx backend; blocks until the window is closed)."""
-    if _PKG != "OCC.Core":
-        raise ImportError("the viewer needs pythonocc-core (OCC.Display)")
-    from OCC.Display.SimpleGui import init_display
-    display, start_display, _, _ = init_display()
-    display.DisplayShape(shape, update=True)
-    display.FitAll()
-    print(f"{title}: close the viewer window to go on")
-    start_display()
 
 
 def main():
@@ -2612,13 +2313,13 @@ def main():
     ap.add_argument("--view-step", default=None, help="only show this STEP file")
     args = ap.parse_args()
     if args.view_step:
-        view(read_step(args.view_step), os.path.basename(args.view_step))
+        CK.view(CK.read_step(args.view_step), os.path.basename(args.view_step))
         return
     if not args.xcad:
         ap.error("give an XCAD point file or --view-step")
     res = loft_loops(read_loops(args.xcad, args.units), args.poles, half=args.half, ease=args.ease)
     step = args.step or os.path.splitext(args.xcad)[0] + ".step"
-    write_step(res.shape, step)
+    CK.write_step(res.shape, step)
     print(f"{args.xcad}: {res.n_smooth} horizontal + {res.n_ruled} tip loops, {res.faces} faces"
           f"{' (half body)' if res.half else ''}, valid {res.valid}, volume {res.volume:.1f} mm^3, "
           f"area {res.area:.1f} mm^2, open edges {res.free_edges}, the rows' curves within "
@@ -2627,7 +2328,7 @@ def main():
     for note in res.notes:
         print(f"  {note}")
     if args.view:
-        view(res.shape, os.path.basename(step))
+        CK.view(res.shape, os.path.basename(step))
 
 
 if __name__ == "__main__":
