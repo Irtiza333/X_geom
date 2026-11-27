@@ -47,6 +47,7 @@ Edges, wires, faces and solids
                                       the shape turned about the axis through origin (a face: a solid)
     prism(shape, vector)              the shape swept along the vector: (prism, its first, its last shape)
     transformed(shape, m, t)          a copy moved by x -> m x + t
+    nurbs(shape)                      a copy with every surface and curve a B-spline
     mirrored(shape, origin, normal)   a copy mirrored in the plane
     common(a, b, fuzzy=None), cut(a, b, fuzzy=None), fuse(a, b, fuzzy=None)
                                       the part of a inside b, a outside b, a and b together (fuzzy: the
@@ -440,6 +441,12 @@ def transformed(shape, m, t):
     tr = gp_Trsf()
     tr.SetValues(*(float(v) for v in np.column_stack((m, t)).ravel()))
     return BRepBuilderAPI_Transform(shape, tr, True).Shape()
+
+
+def nurbs(shape):
+    """A copy of the shape with every face's surface and every edge's curve converted to a B-spline
+    (BRepBuilderAPI_NurbsConvert): planes, cylinders, cones and spheres bounded to the faces' extent."""
+    return _occ("BRepBuilderAPI", "BRepBuilderAPI_NurbsConvert")(shape, True).Shape()
 
 
 def mirrored(shape, origin, normal):

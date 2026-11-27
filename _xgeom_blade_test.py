@@ -1144,15 +1144,25 @@ def test_cad(tmp, table):
     dc = design.with_hub("cone", base=0.2, top=0.07, x=-0.4)
     t0 = time.time()
     out2 = BM.write_cad(tmp, "cone", dc, p, {"part": "sector"})
-    back = CK.read_iges(out2["cad_paths"]["iges"])
-    n_solids, valid, vol = VC.solid_report(back)
+    solid = CK.read_step(out2["cad_paths"]["step"])
+    n_solids, valid, vol = VC.solid_report(solid)
     print(f"       the cone sector in {time.time() - t0:.0f} s: {out2['faces']} faces, {vol / 1e6:.3f} dm^3, the "
           f"footprint {out2['footprint_gap_deg']:.1f} deg from the sector's edges")
-    check("the cone hub, one blade on 1/5 of the hub: a valid solid, its IGES read back as one solid of the same "
+    check("the cone hub, one blade on 1/5 of the hub: a valid solid, its STEP read back as one solid of the same "
           "volume; the root ring below the hub's radius there; the footprint clear of the sector's edges",
           [out2["part"] == "sector", out2["valid"], n_solids, valid, vol / out2["volume_mm3"],
            out2["root_ring_mm"] < 1000.0 * dc.hub.min_radius(*BM.root_extent(dc, p)),
            out2["footprint_gap_deg"] > 1.0], [1, 1, 1, 1, 1, 1, 1], 1e-6)
+    back = CK.read_iges(out2["cad_paths"]["iges"])
+    with open(out2["cad_paths"]["iges"]) as fh:
+        d = [ln for ln in fh.read().splitlines() if len(ln) >= 73 and ln[72] == "D"]
+    ents = [int(d[i][:8]) for i in range(0, len(d), 2)]
+    check("... its IGES face by face, as the DRDC IGES (a mesher takes each face as its own model): one trimmed "
+          "surface (144) a face, no solid (186); read back, the solid's faces, all B-splines, of the solid's area",
+          [ents.count(144), ents.count(186), len(CK.shapes(back, "SOLID")), CK.count_faces(back),
+           all(CK.surface_kind(f) == "bspline" for f in CK.faces(back)),
+           CK.mass_properties(back)[1] / CK.mass_properties(solid)[1]], [out2["faces"], 0, 0, out2["faces"], 1, 1],
+          1e-5)                                                     # (the integration on rational faces: 1e-5)
 
 
 def main():

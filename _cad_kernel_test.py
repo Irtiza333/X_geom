@@ -5,8 +5,8 @@ Self-check for cad_kernel.py, XGeom's CAD kernel (the one module that calls
 OpenCascade): each function on simple shapes whose answers are known (a box, a
 cube sewn from six faces, a loft between two squares, a B-spline face, a
 cylinder, a turned rectangle, the booleans of two boxes, an arc, a prism, a
-patch of a cylinder, a rational quarter cylinder, a curve through points, STEP
-and IGES written and read back), and that the modules moved over to it call no
+patch of a cylinder, a rational quarter cylinder, a curve through points, a
+cylinder made B-splines, STEP and IGES written and read back), and that the modules moved over to it call no
 OpenCascade themselves. Without pythonocc-core or cadquery-ocp only the second
 part runs.
 
@@ -152,6 +152,12 @@ def test_kernel(tmp):
     check("fuse_all, unify: three boxes in a row, 15 x 10 x 10; the split faces merged back into 6",
           [CK.volume(union), CK.count_faces(union) > 6, CK.volume(one), CK.count_faces(one), CK.is_valid(one)],
           [1500.0, 1, 1500.0, 6, 1], 1e-6)
+    conv = CK.nurbs(CK.cylinder((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 2.0, 10.0))
+    v_c, a_c = CK.mass_properties(conv)
+    check("nurbs: the cylinder of radius 2, 10 long, its three faces B-splines (rational, exact), its volume and "
+          "area kept (to the integration's 1e-5 on rational faces)",
+          [[CK.surface_kind(f) for f in CK.faces(conv)] == ["bspline"] * 3, v_c / (40.0 * np.pi),
+           a_c / (48.0 * np.pi)], [1, 1, 1], 1e-5)
     box6 = CK.box((0.0, 0.0, 0.0), (10.0, 20.0, 30.0))
     check("volume, centroid: the box 10 x 20 x 30, 6000 mm^3 about (5, 10, 15)",
           [CK.volume(box6), *CK.centroid(box6)], [6000.0, 5.0, 10.0, 15.0], 1e-6)

@@ -328,7 +328,8 @@ XCAD points, design JSON) and the CAD the Output box's "CAD writes" names: one
 blade on its 1/Z of the hub (with a cylinder hub the DRDC five-surface blade
 and the hub sector of the MSc pipeline, untrimmed surfaces; with a cone the
 periodic sector as a solid), half the propeller (an even Z) or the whole, as
-solids, IGES and STEP (blade_modify.write_cad). CAD (hull) writes the case (component file, design JSON,
+solids: the STEP the solid, the IGES face by face, each face its own trimmed
+B-spline surface as in the DRDC files (blade_modify.write_cad). CAD (hull) writes the case (component file, design JSON,
 stations, hydrostatics, section points, check plot) and the STEP. CAD (wing,
 fin) writes the case (component file, XCAD file, sections table, design JSON,
 check plot) to outputs/wing or outputs/fin and the loft of the

@@ -45,7 +45,7 @@ Vehicle tab. Each component is an adapter class that the window drives through t
 | `blade_control.py` | A blade from a component file, built with the MSc blade code | X_geom, web | through blade_modify |
 | `blade_sections.py` | Blades whose section shape changes along the span (one section table per radius) | X_geom, web | blade |
 | `blade_vary.py` | What changes in a blade file: its vary lines (and their ranges), or its free var lines (`read_free`); standard library only, for `Initial_sampling.py` | X_geom | blade |
-| `prop_hub.py` | The propeller's hub: the DRDC cylinder, or a cone with a rounded nose (its CAD through cad_kernel) | X_geom, web | blade, kernel |
+| `prop_hub.py` | The propeller's hub: the DRDC cylinder, or a cone with a rounded nose (its CAD through cad_kernel); the propeller's solids and their IGES face by face (each face its own trimmed B-spline surface, as the DRDC IGES) | X_geom, web | blade, kernel |
 | `hull_modify.py` | Hulls with elliptical sections from a few CST curves: fit, design space, sections, CAD (through cad_kernel) | X_geom, web | hull_modify, hull, files, wing, contract, kernel |
 | `suboff.py` | The DARPA SUBOFF bare hull from its equations (the public example) | X_geom | hull_modify, hull_eq |
 | `airfoils.py` | Airfoil sections by name from the offline UIUC database in `airfoils/`, and the NACA 4- and 5-digit equations | X_geom, web | airfoils, wing, contract |

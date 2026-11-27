@@ -1140,6 +1140,19 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   All 18 the same before and after, and the same on cadquery-ocp alone. For the web app: additive. Tests: kernel
   25, tool 83 with the window and OCC, wing 80, hull 65, blade 90 with the window and the CAD, hull_eq 15,
   hull_modify 17, files 60, contract 271, relations 138; the Rudder folder tool 82, kernel 25.
+- The blade's IGES face by face (27 Nov 2026; Noah's request through the user: each quilt its own model, as in
+  the ORCA samples). The DRDC IGES of the cylinder hub's sector (X_CAD_new, the MSc pipeline's sample_blade
+  files) holds each face as its own trimmed surface (entity 144 on a B-spline, 128), which a mesher takes as a
+  model each; the solids (a cone hub's sector, half or the whole propeller, the 'solids' setting) went out as
+  one BRep solid (186), one model. Now their IGES is written face by face too (prop_hub.write_iges_faces: Faces
+  mode, every face made a B-spline first, the cone, the nose's sphere, the planes and cylinders included, so no
+  unbounded analytic surface reaches the mesher); the STEP keeps the solid, and the vehicle reads the STEP. New
+  kernel function `nurbs` (BRepBuilderAPI_NurbsConvert; additive). Checked: the trims survive (the faces read
+  back from the IGES have the solid's area; the blade's root, trimmed by the cone, stays trimmed); in
+  `_cad_compare.py` only those three cases' IGES changed (their STEP, faces, volumes and boxes the same), the
+  DRDC sector and the vehicle the same. Tests: kernel 26, blade 91 with the window and the CAD (the cone
+  sector's IGES: one 144 a face, no 186, all B-splines, the solid's area), contract 271, tool 83; the Rudder
+  folder kernel 26, tool 82.
 
 ## Next steps
 

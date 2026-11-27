@@ -55,6 +55,10 @@ CAD (pythonocc-core or cadquery-ocp through cad_kernel, 27 Nov 2026; mm):
                                   one blade on its 1/Z of the hub and k = Z/2
                                   half the propeller; Z turned copies of the
                                   1/Z sector tile the whole.
+    write_iges_faces(shape, path) IGES face by face (27 Nov 2026, Noah's request):
+                                  each face its own trimmed B-spline surface,
+                                  as the DRDC files of X_CAD_new, so a mesher
+                                  takes each face as its own model; mm.
     write_iges_solids(shape, path) IGES in BRep mode (solids with their trimmed
                                   faces), mm.
 """
@@ -307,6 +311,14 @@ def _one_solid(shape, what):
 def _root_ring(blade, n=400):
     """The blade solid's root ring (mm): the boundary of its face on the hub cylinder (the non-B-spline face)."""
     return footprint(blade, n)
+
+
+def write_iges_faces(shape, path):
+    """IGES face by face (Faces mode): each face its own trimmed surface (entity 144) on a B-spline surface
+    (128), the planes, cones, spheres and cylinders converted, as X_CAD_new's DRDC files have them; not one
+    solid, so a mesher takes each face as its own model. mm."""
+    CK = _ck()
+    return CK.write_iges(CK.nurbs(shape), path)
 
 
 def write_iges_solids(shape, path):
