@@ -70,8 +70,8 @@ from math import comb
 
 import numpy as np
 
+import cad_kernel as CK
 import hull_extraction as HE
-import xcad_loft as XL
 import xgeom_files as XF
 import xgeom_relations as REL
 
@@ -931,77 +931,25 @@ def build_solid(design, n=150, scale=1000.0, half=False):
     (GeomAPI_Interpolate, n points evenly spaced along it, its end tangents) times the rational unit circle,
     so every section is an exact ellipse; the faces sewn into a shell and made a solid. half=True: the
     starboard half body (y >= 0): each part a half revolution, closed by one planar face on the plane of
-    symmetry (its boundary the top and bottom meridians)."""
-    occ = XL._occ
-    gp_Pnt, gp_Vec = occ("gp", "gp_Pnt", "gp_Vec")
-    TColgp_HArray1OfPnt, TColgp_Array2OfPnt = occ("TColgp", "TColgp_HArray1OfPnt", "TColgp_Array2OfPnt")
-    TColStd_Array1OfReal, TColStd_Array2OfReal, TColStd_Array1OfInteger = occ(
-        "TColStd", "TColStd_Array1OfReal", "TColStd_Array2OfReal", "TColStd_Array1OfInteger")
-    GeomAPI_Interpolate = occ("GeomAPI", "GeomAPI_Interpolate")
-    Geom_BSplineSurface = occ("Geom", "Geom_BSplineSurface")
-    MakeFace, Sewing, MakeSolid = occ("BRepBuilderAPI", "BRepBuilderAPI_MakeFace", "BRepBuilderAPI_Sewing",
-                                      "BRepBuilderAPI_MakeSolid")
-    TopExp_Explorer = occ("TopExp", "TopExp_Explorer")
-    TopAbs_SHELL = occ("TopAbs", "TopAbs_SHELL")
-    ShapeFix_Shell, ShapeFix_Solid = occ("ShapeFix", "ShapeFix_Shell", "ShapeFix_Solid")
-
-    def array1(vals, cls):
-        a = cls(1, len(vals))
-        for i, v in enumerate(vals, start=1):
-            a.SetValue(i, v)
-        return a
-
+    symmetry (its boundary the top and bottom meridians). OpenCascade through cad_kernel."""
     circle = _HALF_CIRCLE if half else _CIRCLE
-    vknots = array1(list(_HALF_KNOTS[0]) if half else [0.0, 0.25, 0.5, 0.75, 1.0], TColStd_Array1OfReal)
-    vmults = array1(list(_HALF_KNOTS[1]) if half else [3, 2, 2, 2, 3], TColStd_Array1OfInteger)
-    sew = Sewing(1e-4 * scale)
-    sym_edges = []
+    vknots = np.repeat(*(_HALF_KNOTS if half else ((0.0, 0.25, 0.5, 0.75, 1.0), (3, 2, 2, 2, 3))))
+    faces, sym_edges = [], []
     for pts, t0, t1 in _profile_parts(design, int(n)):
-        arr = TColgp_HArray1OfPnt(1, len(pts))
-        for i, p in enumerate(pts * scale, start=1):
-            arr.SetValue(i, gp_Pnt(float(p[0]), float(p[1]), float(p[2])))
-        it = GeomAPI_Interpolate(arr, False, 1e-9)
         t0 = np.asarray(t0, dtype=float) / np.linalg.norm(t0)
         t1 = np.asarray(t1, dtype=float) / np.linalg.norm(t1)
-        it.Load(gp_Vec(*t0), gp_Vec(*t1), False)          # unit tangents: the parameter is the chord length
-        it.Perform()
-        if not it.IsDone():
-            raise RuntimeError("the B-spline through a profile part failed")
-        c = it.Curve()
-        nu = c.NbPoles()
-        poles = TColgp_Array2OfPnt(1, nu, 1, len(circle))
-        w = TColStd_Array2OfReal(1, nu, 1, len(circle))
-        for i in range(1, nu + 1):
-            q = c.Pole(i)
-            for jj, (cy, cz, cw) in enumerate(circle, start=1):
-                poles.SetValue(i, jj, gp_Pnt(q.X(), q.Y() * cy, q.Z() * cz))
-                w.SetValue(i, jj, c.Weight(i) * cw)
-        uk = array1([c.Knot(k) for k in range(1, c.NbKnots() + 1)], TColStd_Array1OfReal)
-        um = array1([c.Multiplicity(k) for k in range(1, c.NbKnots() + 1)], TColStd_Array1OfInteger)
-        surf = Geom_BSplineSurface(poles, w, uk, vknots, um, vmults, c.Degree(), 2, False, False)
-        sew.Add(MakeFace(surf, 1e-7).Face())
+        # unit tangents: the parameter is the chord length
+        q, wq, knots, degree = CK.interpolate(pts * scale, t0, t1, 1e-9)
+        grid = np.stack([np.column_stack((q[:, 0], q[:, 1] * cy, q[:, 2] * cz)) for cy, cz, _ in circle])
+        weights = np.stack([wq * cw for _, _, cw in circle])
+        faces.append(CK.natural_face(CK.bspline_surface(grid, knots, vknots, degree, 2, weights), 1e-7))
         if half:                                   # the part's top and bottom meridians, on the plane y = 0
-            cp = np.array([[c.Pole(i).X(), 0.0, c.Pole(i).Z()] for i in range(1, nu + 1)])
-            full = np.concatenate([[c.Knot(k)] * c.Multiplicity(k) for k in range(1, c.NbKnots() + 1)])
-            sym_edges.append((cp, full, c.Degree()))
+            sym_edges.append((np.column_stack((q[:, 0], np.zeros(len(q)), q[:, 2])), knots, degree))
     if half:                                       # one planar face on the plane of symmetry
-        edges = [XL._bspline_edge(cp, kn, dg) for cp, kn, dg in sym_edges]
-        edges += [XL._bspline_edge(cp * np.array([1.0, 1.0, -1.0]), kn, dg) for cp, kn, dg in sym_edges]
-        sew.Add(XL._wire_face(edges))
-    sew.Perform()
-    ex = TopExp_Explorer(sew.SewedShape(), TopAbs_SHELL)
-    shells = []
-    while ex.More():
-        shells.append(XL._topods("Shell")(ex.Current()))
-        ex.Next()
-    if len(shells) != 1:
-        raise RuntimeError(f"sewing left {len(shells)} shells, expected 1")
-    fs = ShapeFix_Shell(shells[0])
-    fs.Perform()
-    solid = MakeSolid(fs.Shell()).Solid()
-    fx = ShapeFix_Solid(solid)
-    fx.Perform()
-    return fx.Solid()
+        edges = [CK.bspline_edge(cp, kn, dg) for cp, kn, dg in sym_edges]
+        edges += [CK.bspline_edge(cp * np.array([1.0, 1.0, -1.0]), kn, dg) for cp, kn, dg in sym_edges]
+        faces.append(CK.wire_face(edges))
+    return CK.sew_solid(faces, 1e-4 * scale)[0]
 
 
 # --------------------------------------------------------------------------
@@ -1091,7 +1039,7 @@ def write_cad(out_dir, case, design, half=False):
     """<case>.step (half=True: the starboard half body); returns (path, valid, volume m^3, area m^2,
     centre (m))."""
     solid = build_solid(design, half=half)
-    path = XL.write_step(solid, os.path.join(out_dir, f"{case}.step"))
+    path = CK.write_step(solid, os.path.join(out_dir, f"{case}.step"))
     vol, area, c = HE.solid_properties(solid)
     return path, HE.is_valid(solid), vol, area, c
 
@@ -1111,7 +1059,7 @@ def write_case(out_dir, case, design, params=None, space=None, cad=True, plot=Tr
     st = stations(design, 401)
     exact = {"pmb_start": design.joins[1], "pmb_end": design.joins[2]}
     cadline = None
-    if cad and XL.occ_available():
+    if cad and CK.available():
         path, valid, vol, area, c = write_cad(out_dir, case, design, half=half)
         files["step"] = path
         if half:

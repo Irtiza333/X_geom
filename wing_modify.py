@@ -1529,41 +1529,20 @@ def body_properties(design, params, n=201, m=POINTS):
 def mirror_fused(shape):
     """A blended wing body's whole solid (mm, the XCAD frame): the loft of its half (its root face on the centre
     line, the plane Z = 0) and that mirrored in the plane, fused into one solid (the root faces go)."""
-    import xcad_loft as XL
-    gp_Trsf, gp_Ax2, gp_Pnt, gp_Dir = XL._occ("gp", "gp_Trsf", "gp_Ax2", "gp_Pnt", "gp_Dir")
-    BRepBuilderAPI_Transform = XL._occ("BRepBuilderAPI", "BRepBuilderAPI_Transform")
-    BRepAlgoAPI_Fuse = XL._occ("BRepAlgoAPI", "BRepAlgoAPI_Fuse")
-    tr = gp_Trsf()
-    tr.SetMirror(gp_Ax2(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)))
-    other = BRepBuilderAPI_Transform(shape, tr, True).Shape()
-    op = BRepAlgoAPI_Fuse(shape, other)
-    errors = getattr(op, "HasErrors", None)                     # not in every binding
-    if not op.IsDone() or (errors is not None and errors()):
-        raise RuntimeError("the fuse of the two halves failed")
-    return op.Shape()
+    import cad_kernel as CK
+    other = CK.mirrored(shape, (0.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+    try:
+        return CK.fuse(shape, other)
+    except RuntimeError:
+        raise RuntimeError("the fuse of the two halves failed") from None
 
 
 def solid_properties(shape):
     """(solids, valid, volume mm^3, area mm^2, centroid mm in the wing's frame) of a solid in the XCAD frame."""
-    import importlib
-    import xcad_loft as XL
-    GProp_GProps = XL._occ("GProp", "GProp_GProps")
-    BRepCheck_Analyzer = XL._occ("BRepCheck", "BRepCheck_Analyzer")
-    TopExp_Explorer, TopAbs_SOLID = XL._occ("TopExp", "TopExp_Explorer"), XL._occ("TopAbs", "TopAbs_SOLID")
-    vol, area = XL.mass_properties(shape)
-    mod = importlib.import_module(f"{XL._PKG}.BRepGProp")
-    fn = XL._static(getattr(mod, "brepgprop", None) or getattr(mod, "BRepGProp"), "VolumeProperties")
-    props = GProp_GProps()
-    try:
-        fn(shape, props, 1.0e-7)
-    except TypeError:                                           # a binding without the eps overload
-        fn(shape, props)
-    c = props.CentreOfMass()
-    n, ex = 0, TopExp_Explorer(shape, TopAbs_SOLID)
-    while ex.More():
-        n += 1
-        ex.Next()
-    return n, bool(BRepCheck_Analyzer(shape).IsValid()), vol, area, (c.X(), c.Z(), -c.Y())
+    import cad_kernel as CK
+    vol, area = CK.mass_properties(shape)
+    c = CK.centroid(shape, 1.0e-7)
+    return len(CK.shapes(shape, "SOLID")), CK.is_valid(shape), vol, area, (float(c[0]), float(c[2]), -float(c[1]))
 
 
 def write_cad(out_dir, case, xcad_path, half=False, mirror=False):

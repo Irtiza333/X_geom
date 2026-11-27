@@ -39,15 +39,14 @@ stays responsive through the fuse:
     python vehicle_cad.py outputs/vehicle/<case>_vehicle_setup.json      the vehicle again from that file
 
 Output (outputs/vehicle): <case>_vehicle.step (the fused solid), <case>_vehicle_parts.step (the parts placed, not
-fused) and <case>_vehicle.json (the set-up and the result). Works on pythonocc-core or cadquery-ocp through
-xcad_loft's binding helpers; the propeller's own CAD needs pythonocc-core (X_CAD_new).
+fused) and <case>_vehicle.json (the set-up and the result). Works on pythonocc-core or cadquery-ocp, as do the
+components' own CAD: OpenCascade through cad_kernel (27 Nov 2026).
 """
 
 from __future__ import annotations
 
 import argparse
 import dataclasses
-import importlib
 import json
 import os
 import subprocess
@@ -56,7 +55,7 @@ import time
 
 import numpy as np
 
-import xcad_loft as XL
+import cad_kernel as CK
 
 FUZZY_MM = 1.0e-3                  # the fuse's fuzzy value: the sewing tolerance of the blade and the rudder
 FUZZY_RETRY_MM = (1.0e-2, 5.0e-2)  # a fuse that leaves parts apart is tried again with these (13 Nov 2026): a
@@ -67,34 +66,14 @@ ROOT_LIFT_MM = 0.2                 # each appendage this far off the hull on its
 
 
 # --------------------------------------------------------------------------
-# Small OCC helpers (either binding)
+# Small helpers: cad_kernel's, under the names other modules call them by
 # --------------------------------------------------------------------------
 
-def _shapes(shape, kind):
-    """The sub-shapes of a kind ('SOLID', 'SHELL', 'FACE', 'WIRE', 'EDGE'), each cast to its type."""
-    TopExp_Explorer = XL._occ("TopExp", "TopExp_Explorer")
-    top = XL._occ("TopAbs", f"TopAbs_{kind}")
-    cast = XL._topods(kind.capitalize())
-    out, ex = [], TopExp_Explorer(shape, top)
-    while ex.More():
-        out.append(cast(ex.Current()))
-        ex.Next()
-    return out
-
-
-def _trsf(m, t):
-    """gp_Trsf of x -> m x + t (m a rotation times a positive scale, t in mm)."""
-    gp_Trsf = XL._occ("gp", "gp_Trsf")
-    m, t = np.asarray(m, dtype=float), np.asarray(t, dtype=float)
-    tr = gp_Trsf()
-    tr.SetValues(*(float(v) for v in np.column_stack((m, t)).ravel()))
-    return tr
-
-
-def transformed(shape, m, t):
-    """A copy of the shape moved by x -> m x + t."""
-    BRepBuilderAPI_Transform = XL._occ("BRepBuilderAPI", "BRepBuilderAPI_Transform")
-    return BRepBuilderAPI_Transform(shape, _trsf(m, t), True).Shape()
+_shapes = CK.shapes                # the sub-shapes of a kind ('SOLID', 'SHELL', 'FACE', 'WIRE', 'EDGE'), cast
+transformed = CK.transformed       # a copy of the shape moved by x -> m x + t
+_bbox = CK.bounding_box            # (2, 3): the surfaces' box, not their control nets'
+is_valid = CK.is_valid
+compound = CK.compound
 
 
 def turn_x(angle):
@@ -103,60 +82,14 @@ def turn_x(angle):
     return np.array([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]])
 
 
-def _bbox(shape):
-    Bnd_Box = XL._occ("Bnd", "Bnd_Box")
-    mod = importlib.import_module(f"{XL._PKG}.BRepBndLib")
-    owner = getattr(mod, "brepbndlib", None) or getattr(mod, "BRepBndLib")
-    b = Bnd_Box()
-    XL._static(owner, "AddOptimal")(shape, b, False, False)        # the surfaces, not their control nets
-    return np.array(b.Get(), dtype=float).reshape(2, 3)
-
-
-def is_valid(shape):
-    BRepCheck_Analyzer = XL._occ("BRepCheck", "BRepCheck_Analyzer")
-    return bool(BRepCheck_Analyzer(shape).IsValid())
-
-
 def _sewn_solid(faces, tol=SEW_MM):
-    """One solid from faces that close a volume (sewing, ShapeFix)."""
-    Sewing, MakeSolid = XL._occ("BRepBuilderAPI", "BRepBuilderAPI_Sewing", "BRepBuilderAPI_MakeSolid")
-    ShapeFix_Shell, ShapeFix_Solid = XL._occ("ShapeFix", "ShapeFix_Shell", "ShapeFix_Solid")
-    sew = Sewing(tol)
-    for f in faces:
-        sew.Add(f)
-    sew.Perform()
-    shells = _shapes(sew.SewedShape(), "SHELL")
-    if len(shells) != 1:
-        raise RuntimeError(f"sewing left {len(shells)} shells, expected 1")
-    fs = ShapeFix_Shell(shells[0])
-    fs.Perform()
-    solid = MakeSolid(fs.Shell()).Solid()
-    fx = ShapeFix_Solid(solid)
-    fx.Perform()
-    return fx.Solid(), int(sew.NbFreeEdges())
+    """One solid from faces that close a volume (sewing, ShapeFix): (solid, the free edges)."""
+    return CK.sew_solid(faces, tol)
 
 
 def fuse(shapes, fuzzy=FUZZY_MM):
     """The union of the shapes (the first the argument, the others the tools), same-domain faces unified."""
-    TopTools_ListOfShape = XL._occ("TopTools", "TopTools_ListOfShape")
-    BRepAlgoAPI_Fuse = XL._occ("BRepAlgoAPI", "BRepAlgoAPI_Fuse")
-    ShapeUpgrade_UnifySameDomain = XL._occ("ShapeUpgrade", "ShapeUpgrade_UnifySameDomain")
-    args, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
-    args.Append(shapes[0])
-    for s in shapes[1:]:
-        tools.Append(s)
-    op = BRepAlgoAPI_Fuse()
-    op.SetArguments(args)
-    op.SetTools(tools)
-    op.SetFuzzyValue(float(fuzzy))
-    op.SetRunParallel(True)
-    op.Build()
-    errors = getattr(op, "HasErrors", None)                     # not in every binding
-    if not op.IsDone() or (errors is not None and errors()):
-        raise RuntimeError("the boolean fuse failed")
-    unify = ShapeUpgrade_UnifySameDomain(op.Shape(), True, True, False)
-    unify.Build()
-    return unify.Shape()
+    return CK.unify(CK.fuse_all(shapes, fuzzy))
 
 
 # --------------------------------------------------------------------------
@@ -165,13 +98,9 @@ def fuse(shapes, fuzzy=FUZZY_MM):
 
 def _root_face(solid, axis=2):
     """The rudder's flat root face: the planar face lowest along axis."""
-    BRep_Tool = XL._occ("BRep", "BRep_Tool")
-    GeomAdaptor_Surface = XL._occ("GeomAdaptor", "GeomAdaptor_Surface")
-    GeomAbs_Plane = XL._occ("GeomAbs", "GeomAbs_Plane")
-    surface = XL._static(BRep_Tool, "Surface")
     best, low = None, np.inf
-    for f in _shapes(solid, "FACE"):
-        if GeomAdaptor_Surface(surface(f)).GetType() != GeomAbs_Plane:
+    for f in CK.faces(solid):
+        if CK.surface_kind(f) != "plane":
             continue
         mid = _bbox(f).mean(axis=0)[axis]
         if mid < low:
@@ -185,8 +114,6 @@ def extended_rudder(solid, depth, axis=2, direction=None):
     """The rudder with its root extrusion, one solid: its faces but the root face, sewn to the sides and the
     end of the root face's prism (depth mm down the axis, or back along direction, a vector pointing up from
     the root, the TE line's for a set TE rake); the same as the union of the two, without a boolean."""
-    BRepPrimAPI_MakePrism = XL._occ("BRepPrimAPI", "BRepPrimAPI_MakePrism")
-    gp_Vec = XL._occ("gp", "gp_Vec")
     root = _root_face(solid, axis)
     if direction is None:
         v = [0.0, 0.0, 0.0]
@@ -194,10 +121,9 @@ def extended_rudder(solid, depth, axis=2, direction=None):
     else:
         u = np.asarray(direction, dtype=float)
         v = list(-float(depth) * u / np.linalg.norm(u))
-    mk = BRepPrimAPI_MakePrism(root, gp_Vec(*v))
-    first, last = mk.FirstShape(), mk.LastShape()
-    sides = [f for f in _shapes(mk.Shape(), "FACE") if not (f.IsSame(first) or f.IsSame(last))]
-    faces = [f for f in _shapes(solid, "FACE") if not f.IsSame(root)] + sides + _shapes(last, "FACE")
+    swept, first, last = CK.prism(root, v)
+    sides = [f for f in CK.faces(swept) if not (CK.is_same(f, first) or CK.is_same(f, last))]
+    faces = [f for f in CK.faces(solid) if not CK.is_same(f, root)] + sides + CK.faces(last)
     out, free = _sewn_solid(faces)
     if free:
         raise RuntimeError(f"the rudder with its root extrusion has {free} free edges")
@@ -216,11 +142,7 @@ def rudder_trsf(frame, scale, xa, y0):
 
 def mirrored(shape):
     """A copy of the shape mirrored in the plane y = 0 (y to -y)."""
-    gp_Trsf, gp_Ax2, gp_Pnt, gp_Dir = XL._occ("gp", "gp_Trsf", "gp_Ax2", "gp_Pnt", "gp_Dir")
-    BRepBuilderAPI_Transform = XL._occ("BRepBuilderAPI", "BRepBuilderAPI_Transform")
-    tr = gp_Trsf()
-    tr.SetMirror(gp_Ax2(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 1.0, 0.0)))
-    return BRepBuilderAPI_Transform(shape, tr, True).Shape()
+    return CK.mirrored(shape, (0.0, 0.0, 0.0), (0.0, 1.0, 0.0))
 
 
 # --------------------------------------------------------------------------
@@ -231,30 +153,23 @@ def blade_solid(cad_shape, hub_radius):
     """The blade as a solid (mm, the blade's frame): the five DRDC blade faces of blade_modify.write_cad's shape
     (the shell that is not the hub sector) closed at the root by the piece of the hub cylinder (radius
     hub_radius, mm) inside the root ring, which lies on that cylinder."""
-    gp_Pnt, gp_Dir, gp_Ax3 = XL._occ("gp", "gp_Pnt", "gp_Dir", "gp_Ax3")
-    Geom_CylindricalSurface = XL._occ("Geom", "Geom_CylindricalSurface")
-    MakeFace = XL._occ("BRepBuilderAPI", "BRepBuilderAPI_MakeFace")
-    ShapeFix_Face = XL._occ("ShapeFix", "ShapeFix_Face")
-    ShapeAnalysis_FreeBounds = XL._occ("ShapeAnalysis", "ShapeAnalysis_FreeBounds")
     shells = _shapes(cad_shape, "SHELL")
     reach = [_bbox(s) for s in shells]
     k = int(np.argmax([np.abs(b[:, 1:]).max() for b in reach]))      # the blade reaches out to the tip
     blade = shells[k]
-    faces = _shapes(blade, "FACE")
-    wires = _shapes(ShapeAnalysis_FreeBounds(blade, SEW_MM, False, False).GetClosedWires(), "WIRE")
+    faces = CK.faces(blade)
+    wires = CK.free_wires(blade, SEW_MM)
     if len(wires) != 1:
         raise RuntimeError(f"the blade's open boundary has {len(wires)} loops, expected 1 (the root ring)")
     ring = _bbox(wires[0])
     mid = ring.mean(axis=0)
     away = -mid[1:] / max(np.hypot(*mid[1:]), 1e-12)                  # the cylinder's seam opposite the root
-    surf = Geom_CylindricalSurface(gp_Ax3(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0),
-                                          gp_Dir(0.0, float(away[0]), float(away[1]))), float(hub_radius))
-    mk = MakeFace(surf, wires[0], True)
-    if not mk.IsDone():
-        raise RuntimeError("the blade's root face on the hub cylinder failed")
-    fix = ShapeFix_Face(mk.Face())
-    fix.Perform()
-    solid, free = _sewn_solid(faces + [fix.Face()])
+    try:
+        root = CK.cylinder_face((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, float(away[0]), float(away[1])),
+                                float(hub_radius), wires[0])
+    except RuntimeError:
+        raise RuntimeError("the blade's root face on the hub cylinder failed") from None
+    solid, free = _sewn_solid(faces + [root])
     if free:
         raise RuntimeError(f"the blade closed at its root still has {free} free edges")
     return solid
@@ -263,10 +178,7 @@ def blade_solid(cad_shape, hub_radius):
 def propeller_solid(blade, n_blades, hub_radius, hub_height, hub_center=0.0):
     """Z copies of the blade solid around +x (360/Z apart, as the Vehicle tab draws them) fused with the hub
     cylinder (radius, height and centre in mm)."""
-    gp_Pnt, gp_Dir, gp_Ax2 = XL._occ("gp", "gp_Pnt", "gp_Dir", "gp_Ax2")
-    BRepPrimAPI_MakeCylinder = XL._occ("BRepPrimAPI", "BRepPrimAPI_MakeCylinder")
-    hub = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(float(hub_center - 0.5 * hub_height), 0.0, 0.0),
-                                          gp_Dir(1.0, 0.0, 0.0)), float(hub_radius), float(hub_height)).Solid()
+    hub = CK.cylinder((float(hub_center - 0.5 * hub_height), 0.0, 0.0), (1.0, 0.0, 0.0), hub_radius, hub_height)
     blades = [transformed(blade, turn_x(2.0 * np.pi * k / n_blades), np.zeros(3)) for k in range(int(n_blades))]
     return fuse([hub] + blades)
 
@@ -277,15 +189,7 @@ def propeller_solid(blade, n_blades, hub_radius, hub_height, hub_center=0.0):
 
 def volume(shape, eps=1.0e-5):
     """The volume (mm^3), adaptive integration to the relative error eps."""
-    GProp_GProps = XL._occ("GProp", "GProp_GProps")
-    mod = importlib.import_module(f"{XL._PKG}.BRepGProp")
-    fn = XL._static(getattr(mod, "brepgprop", None) or getattr(mod, "BRepGProp"), "VolumeProperties")
-    props = GProp_GProps()
-    try:
-        fn(shape, props, float(eps))
-    except TypeError:                                           # a binding without the eps overload
-        fn(shape, props)
-    return abs(props.Mass())
+    return CK.volume(shape, eps)
 
 
 def solid_report(shape):
@@ -324,25 +228,15 @@ def place_parts(hull, rudder, propeller, setup, fin=None, wing=None):
     return out
 
 
-def compound(shapes):
-    BRep_Builder = XL._occ("BRep", "BRep_Builder")
-    TopoDS_Compound = XL._occ("TopoDS", "TopoDS_Compound")
-    c, b = TopoDS_Compound(), BRep_Builder()
-    b.MakeCompound(c)
-    for s in shapes:
-        b.Add(c, s)
-    return c
-
-
 def build_vehicle(out_dir, case, placed):
     """Fuse the placed parts and write <case>_vehicle.step (the fused solid) and <case>_vehicle_parts.step (the
     parts, placed, not fused). Returns the paths and the report."""
     os.makedirs(out_dir, exist_ok=True)
     t0 = time.time()
     names = list(placed)
-    paths = {"parts": XL.write_step(compound([placed[n] for n in names]),
+    paths = {"parts": CK.write_step(compound([placed[n] for n in names]),
                                     os.path.join(out_dir, f"{case}_vehicle_parts.step"))}
-    parts = _shapes(XL.read_step(paths["parts"]), "SOLID")       # as written: they fuse about 3 times faster
+    parts = _shapes(CK.read_step(paths["parts"]), "SOLID")       # as written: they fuse about 3 times faster
     if len(parts) != len(names):
         raise RuntimeError(f"{paths['parts']} holds {len(parts)} solids, not {len(names)}")
     shape = fuse(parts) if len(parts) > 1 else parts[0]
@@ -355,7 +249,7 @@ def build_vehicle(out_dir, case, placed):
         n2, valid2, vol2 = solid_report(again)
         if valid2 and (n2 < n or not valid):
             shape, n, valid, vol, fuzzy = again, n2, valid2, vol2, f
-    paths["vehicle"] = XL.write_step(shape, os.path.join(out_dir, f"{case}_vehicle.step"))
+    paths["vehicle"] = CK.write_step(shape, os.path.join(out_dir, f"{case}_vehicle.step"))
     return {"paths": paths, "shape": shape, "solids": n, "valid": valid, "volume": vol, "parts": names,
             "seconds": time.time() - t0, "fuzzy_mm": fuzzy}
 
@@ -418,13 +312,13 @@ def build_from_setup(setup, out_dir, progress=print):
     and <case>_vehicle.json (the set-up and the result). Returns that record."""
     case, steps = setup["case"], setup["steps"]
     progress("the parts as solids")
-    hull = _shapes(XL.read_step(steps["hull"]), "SOLID")[0]
-    solid = {k: _shapes(XL.read_step(steps[k]), "SOLID")[0] if k in steps and k in setup else None
+    hull = _shapes(CK.read_step(steps["hull"]), "SOLID")[0]
+    solid = {k: _shapes(CK.read_step(steps[k]), "SOLID")[0] if k in steps and k in setup else None
              for k in APPENDAGES}
     propeller = None
     pr = setup.get("propeller")
     if "propeller" in steps and pr:
-        shape = XL.read_step(steps["propeller"])
+        shape = CK.read_step(steps["propeller"])
         if _shapes(shape, "SOLID"):                  # the blade's own build: the part its panel writes, a solid
             progress(f"the propeller from the blade's own build: {part_text(pr)} (the "
                      f"{pr.get('hub', {}).get('shape', 'cylinder')} hub)")

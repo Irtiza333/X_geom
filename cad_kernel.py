@@ -23,14 +23,19 @@ Edges, wires, faces and solids
     wire(edges)                       the edges chained into one wire
     planar_face(wire)                 the plane face bounded by a closed flat wire
     wire_face(edges)                  the plane face bounded by the edges (one wire), its orientation fixed
-    bspline_surface(grid, uknots, vknots, udeg=3, vdeg=3)
+    interpolate(points, t0=None, t1=None, tol=1e-9)
+                                      the cubic B-spline curve through the points (end tangents t0, t1):
+                                      (poles, weights, knot vector, degree)
+    bspline_surface(grid, uknots, vknots, udeg=3, vdeg=3, weights=None)
                                       the B-spline surface (a handle) of the pole grid (n_v rows of n_u
-                                      poles, 3), u along a row
+                                      poles, 3), u along a row; rational with the weights (n_v, n_u)
     natural_face(surface, tol=1e-6)   the face of the whole surface
     surface_face(grid, uknots, vknots, udeg=3, vdeg=3)
                                       natural_face(bspline_surface(...))
     loft(wires, solid, ruled, max_degree=None)
                                       the surface through the wires (solid: closed by the end wires)
+    cylinder_face(origin, axis, xdir, radius, wire)
+                                      the face on a cylinder bounded by a wire on it, fixed
     sew(faces, tol, fix=True)         the faces sewn (a shell, or shells), fixed (ShapeFix_Shape)
     sew_solid(faces, tol)             the faces sewn into one shell and made a solid, fixed:
                                       (solid, the edges the sewing left free)
@@ -40,17 +45,27 @@ Edges, wires, faces and solids
                                       the solid cylinder from the point base along the direction axis
     revolve(shape, origin, axis, angle)
                                       the shape turned about the axis through origin (a face: a solid)
+    prism(shape, vector)              the shape swept along the vector: (prism, its first, its last shape)
+    transformed(shape, m, t)          a copy moved by x -> m x + t
+    mirrored(shape, origin, normal)   a copy mirrored in the plane
     common(a, b, fuzzy=None), cut(a, b, fuzzy=None), fuse(a, b, fuzzy=None)
                                       the part of a inside b, a outside b, a and b together (fuzzy: the
                                       boolean's fuzzy value)
+    fuse_all(shapes, fuzzy=None)      the union of the shapes in one boolean
+    unify(shape)                      same-domain faces and edges merged
 
 Measures
+    shapes(shape, kind)               a shape's sub-shapes of a kind ('SOLID', 'SHELL', 'FACE', 'WIRE', ...)
     faces(shape), count_faces(shape)  a shape's faces (handles), how many
+    is_same(a, b)                     a and b the same shape (any orientation)
+    free_wires(shape, tol)            the closed wires along which its faces have no neighbour
     edge_points(edge, n)              n points (n, 3) along an edge, evenly in its parameter, ends included
     surface_points(surface, u, v)     the surface's points (n, 3) at the parameter pairs (u[i], v[i])
     surface_kind(face)                its surface's kind: 'plane', 'cylinder', 'cone', 'sphere', 'torus',
                                       'bezier', 'bspline', 'revolution', 'extrusion', 'offset' or 'other'
     mass_properties(shape, eps=1e-7)  (volume, area), adaptive integration to the relative error eps
+    volume(shape, eps=1e-7), centroid(shape, eps=1e-7)
+                                      the volume alone; the volume's centre (3,)
     is_valid(shape)                   BRepCheck_Analyzer's verdict
     bounding_box(shape)               (2, 3): the lowest and the highest corner, on the surfaces (not
                                       their control nets)
@@ -67,10 +82,10 @@ Files
     view(shape, title)                the pythonocc viewer (desktop; blocks until closed)
 
 Moving over (27 Nov 2026): xcad_loft (step 1), X_CAD_new and prop_hub (step
-2) call only these. vehicle_cad, wing_modify, hull_modify and the extraction
-modules still reach OpenCascade through the binding helpers _occ, _static and
-_topods (also as xcad_loft._occ, ...), until they move to the kernel's
-functions too.
+2), vehicle_cad, wing_modify and hull_modify (step 3) call only these. The
+extraction modules still reach OpenCascade through the binding helpers _occ,
+_static and _topods (also as xcad_loft._occ, ...), until they move to the
+kernel's functions too.
 _cad_kernel_test.py checks the kernel on its own, and that the modules moved
 over call no OpenCascade themselves.
 """
@@ -233,9 +248,34 @@ def wire_face(edges):
     return fix.Face()
 
 
-def bspline_surface(grid, uknots, vknots, udeg=3, vdeg=3):
+def interpolate(points, t0=None, t1=None, tol=1.0e-9):
+    """The cubic B-spline curve through the points (n, 3) (GeomAPI_Interpolate, not periodic; tol: its
+    tolerance for coincident points), with the end tangents t0 and t1 when given (as given: their length
+    scales the parameter): (poles (m, 3), weights (m,), the knot vector (repeated knots: their
+    multiplicity), degree)."""
+    gp_Pnt, gp_Vec = _occ("gp", "gp_Pnt", "gp_Vec")
+    TColgp_HArray1OfPnt = _occ("TColgp", "TColgp_HArray1OfPnt")
+    GeomAPI_Interpolate = _occ("GeomAPI", "GeomAPI_Interpolate")
+    arr = TColgp_HArray1OfPnt(1, len(points))
+    for i, p in enumerate(points, start=1):
+        arr.SetValue(i, gp_Pnt(float(p[0]), float(p[1]), float(p[2])))
+    it = GeomAPI_Interpolate(arr, False, float(tol))
+    if t0 is not None:
+        it.Load(gp_Vec(*[float(v) for v in t0]), gp_Vec(*[float(v) for v in t1]), False)
+    it.Perform()
+    if not it.IsDone():
+        raise RuntimeError("the B-spline through the points failed")
+    c = it.Curve()
+    n = c.NbPoles()
+    poles = np.array([[c.Pole(i).X(), c.Pole(i).Y(), c.Pole(i).Z()] for i in range(1, n + 1)])
+    weights = np.array([c.Weight(i) for i in range(1, n + 1)])
+    knots = np.concatenate([[c.Knot(k)] * c.Multiplicity(k) for k in range(1, c.NbKnots() + 1)])
+    return poles, weights, knots, c.Degree()
+
+
+def bspline_surface(grid, uknots, vknots, udeg=3, vdeg=3, weights=None):
     """The B-spline surface (a handle: natural_face, surface_points) of the pole grid (n_v rows of n_u poles,
-    3), u along a row; knot vectors with their repeated knots."""
+    3), u along a row; knot vectors with their repeated knots; rational with the weights (n_v, n_u)."""
     gp_Pnt = _occ("gp", "gp_Pnt")
     TColgp_Array2OfPnt = _occ("TColgp", "TColgp_Array2OfPnt")
     Geom_BSplineSurface = _occ("Geom", "Geom_BSplineSurface")
@@ -248,8 +288,15 @@ def bspline_surface(grid, uknots, vknots, udeg=3, vdeg=3):
             arr.SetValue(i + 1, j + 1, gp_Pnt(float(p[0]), float(p[1]), float(p[2])))
     uk, um = _unique_mults(uknots)
     vk, vm = _unique_mults(vknots)
-    return Geom_BSplineSurface(arr, _real_array(uk), _real_array(vk), _int_array(um), _int_array(vm),
-                               int(udeg), int(vdeg))
+    if weights is None:
+        return Geom_BSplineSurface(arr, _real_array(uk), _real_array(vk), _int_array(um), _int_array(vm),
+                                   int(udeg), int(vdeg))
+    w = _occ("TColStd", "TColStd_Array2OfReal")(1, n_u, 1, n_v)
+    for i in range(n_u):
+        for j in range(n_v):
+            w.SetValue(i + 1, j + 1, float(weights[j][i]))
+    return Geom_BSplineSurface(arr, w, _real_array(uk), _real_array(vk), _int_array(um), _int_array(vm),
+                               int(udeg), int(vdeg), False, False)
 
 
 def natural_face(surface, tol=1.0e-6):
@@ -279,6 +326,22 @@ def loft(wires, solid, ruled, max_degree=None):
     if not ts.IsDone():
         raise RuntimeError("BRepOffsetAPI_ThruSections failed")
     return ts.Shape()
+
+
+def cylinder_face(origin, axis, xdir, radius, wire):
+    """The face on the cylinder of the radius (its axis through the point origin along axis, its seam the
+    line at xdir from the axis) bounded by the wire, which lies on it; fixed (ShapeFix_Face). RuntimeError
+    when it fails."""
+    gp_Pnt, gp_Dir, gp_Ax3 = _occ("gp", "gp_Pnt", "gp_Dir", "gp_Ax3")
+    BRepBuilderAPI_MakeFace = _occ("BRepBuilderAPI", "BRepBuilderAPI_MakeFace")
+    ax = gp_Ax3(gp_Pnt(*[float(v) for v in origin]), gp_Dir(*[float(v) for v in axis]),
+                gp_Dir(*[float(v) for v in xdir]))
+    mk = BRepBuilderAPI_MakeFace(_occ("Geom", "Geom_CylindricalSurface")(ax, float(radius)), wire, True)
+    if not mk.IsDone():
+        raise RuntimeError("a face on a cylinder bounded by a wire failed")
+    fix = _occ("ShapeFix", "ShapeFix_Face")(mk.Face())
+    fix.Perform()
+    return fix.Face()
 
 
 def sew(faces, tol, fix=True):
@@ -360,19 +423,46 @@ def revolve(shape, origin, axis, angle):
     return BRepPrimAPI_MakeRevol(shape, ax, float(angle)).Shape()
 
 
+def prism(shape, vector):
+    """The shape swept along the vector (a face sweeps a solid): (the prism, its first shape, the shape it
+    starts from, and its last shape, where it ends)."""
+    BRepPrimAPI_MakePrism = _occ("BRepPrimAPI", "BRepPrimAPI_MakePrism")
+    mk = BRepPrimAPI_MakePrism(shape, _occ("gp", "gp_Vec")(*[float(v) for v in vector]))
+    first, last = mk.FirstShape(), mk.LastShape()
+    return mk.Shape(), first, last
+
+
+def transformed(shape, m, t):
+    """A copy of the shape moved by x -> m x + t (m (3, 3): a rotation times a positive scale; t (3,))."""
+    gp_Trsf = _occ("gp", "gp_Trsf")
+    BRepBuilderAPI_Transform = _occ("BRepBuilderAPI", "BRepBuilderAPI_Transform")
+    m, t = np.asarray(m, dtype=float), np.asarray(t, dtype=float)
+    tr = gp_Trsf()
+    tr.SetValues(*(float(v) for v in np.column_stack((m, t)).ravel()))
+    return BRepBuilderAPI_Transform(shape, tr, True).Shape()
+
+
+def mirrored(shape, origin, normal):
+    """A copy of the shape mirrored in the plane through the point origin with the normal given."""
+    gp_Trsf, gp_Ax2, gp_Pnt, gp_Dir = _occ("gp", "gp_Trsf", "gp_Ax2", "gp_Pnt", "gp_Dir")
+    BRepBuilderAPI_Transform = _occ("BRepBuilderAPI", "BRepBuilderAPI_Transform")
+    tr = gp_Trsf()
+    tr.SetMirror(gp_Ax2(gp_Pnt(*[float(v) for v in origin]), gp_Dir(*[float(v) for v in normal])))
+    return BRepBuilderAPI_Transform(shape, tr, True).Shape()
+
+
 def _boolean(kind, a, b, fuzzy):
-    """BRepAlgoAPI_<kind> of a and b, built again with the fuzzy value when one is given (a binding without
-    it keeps the first build)."""
+    """BRepAlgoAPI_<kind> of a and b (its constructor builds it), built again with the fuzzy value when one is
+    given (a binding without it keeps the first build)."""
     algo = _occ("BRepAlgoAPI", f"BRepAlgoAPI_{kind}")(a, b)
-    if fuzzy is None:
-        algo.Build()
-    else:
+    if fuzzy is not None:
         try:
             algo.SetFuzzyValue(float(fuzzy))
             algo.Build()
         except Exception:                                   # noqa: BLE001 - as prop_hub has done since 13 Nov
             pass
-    if not algo.IsDone():
+    errors = getattr(algo, "HasErrors", None)                   # not in every binding
+    if not algo.IsDone() or (errors is not None and errors()):
         raise RuntimeError(f"the {kind.lower()} of two shapes failed")
     return algo.Shape()
 
@@ -392,20 +482,66 @@ def fuse(a, b, fuzzy=None):
     return _boolean("Fuse", a, b, fuzzy)
 
 
+def fuse_all(shapes, fuzzy=None):
+    """The union of the shapes in one boolean (BRepAlgoAPI_Fuse: the first the argument, the others the
+    tools; run in parallel) with the fuzzy value when one is given; RuntimeError when it fails."""
+    TopTools_ListOfShape = _occ("TopTools", "TopTools_ListOfShape")
+    args, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
+    args.Append(shapes[0])
+    for s in shapes[1:]:
+        tools.Append(s)
+    op = _occ("BRepAlgoAPI", "BRepAlgoAPI_Fuse")()
+    op.SetArguments(args)
+    op.SetTools(tools)
+    if fuzzy is not None:
+        op.SetFuzzyValue(float(fuzzy))
+    op.SetRunParallel(True)
+    op.Build()
+    errors = getattr(op, "HasErrors", None)                     # not in every binding
+    if not op.IsDone() or (errors is not None and errors()):
+        raise RuntimeError("the boolean fuse failed")
+    return op.Shape()
+
+
+def unify(shape):
+    """The shape with its same-domain faces and edges merged (ShapeUpgrade_UnifySameDomain, B-splines not
+    concatenated)."""
+    u = _occ("ShapeUpgrade", "ShapeUpgrade_UnifySameDomain")(shape, True, True, False)
+    u.Build()
+    return u.Shape()
+
+
 # --------------------------------------------------------------------------
 # Measures
 # --------------------------------------------------------------------------
 
-def faces(shape):
-    """The faces of a shape."""
+def shapes(shape, kind):
+    """The sub-shapes of a kind ('SOLID', 'SHELL', 'FACE', 'WIRE', 'EDGE', 'VERTEX'), each cast to its type, in
+    the order TopExp_Explorer finds them (a shared one once for each shape that holds it: a box's 24 edges)."""
     TopExp_Explorer = _occ("TopExp", "TopExp_Explorer")
-    TopAbs_FACE = _occ("TopAbs", "TopAbs_FACE")
-    as_face = _topods("Face")
-    out, ex = [], TopExp_Explorer(shape, TopAbs_FACE)
+    cast = _topods(kind.capitalize())
+    out, ex = [], TopExp_Explorer(shape, _occ("TopAbs", f"TopAbs_{kind}"))
     while ex.More():
-        out.append(as_face(ex.Current()))
+        out.append(cast(ex.Current()))
         ex.Next()
     return out
+
+
+def faces(shape):
+    """The faces of a shape."""
+    return shapes(shape, "FACE")
+
+
+def is_same(a, b):
+    """Are a and b the same shape (the same piece of topology in the same place, any orientation)?"""
+    return bool(a.IsSame(b))
+
+
+def free_wires(shape, tol):
+    """The closed wires of the shape's free boundary (ShapeAnalysis_FreeBounds, tolerance tol): the loops
+    along which its faces have no neighbour."""
+    bounds = _occ("ShapeAnalysis", "ShapeAnalysis_FreeBounds")(shape, float(tol), False, False)
+    return shapes(bounds.GetClosedWires(), "WIRE")
 
 
 def count_faces(shape):
@@ -450,22 +586,34 @@ def surface_kind(face):
     return "other"
 
 
+def _gprops(shape, kind, eps):
+    """BRepGProp's VolumeProperties or SurfaceProperties of the shape, adaptive to the relative error eps."""
+    mod = importlib.import_module(f"{_PKG}.BRepGProp")
+    fn = _static(getattr(mod, "brepgprop", None) or getattr(mod, "BRepGProp"), kind)
+    props = _occ("GProp", "GProp_GProps")()
+    try:
+        fn(shape, props, float(eps))
+    except TypeError:                                       # a binding without the eps overload
+        fn(shape, props)
+    return props
+
+
 def mass_properties(shape, eps=1.0e-7):
     """(volume, area) of a shape (the volume's absolute value), by adaptive integration to the relative error
     eps (the default Gauss rule is 0.4 % off on many-span B-spline faces)."""
-    GProp_GProps = _occ("GProp", "GProp_GProps")
-    mod = importlib.import_module(f"{_PKG}.BRepGProp")
-    owner = getattr(mod, "brepgprop", None) or getattr(mod, "BRepGProp")
-    out = []
-    for kind in ("VolumeProperties", "SurfaceProperties"):
-        props = GProp_GProps()
-        fn = _static(owner, kind)
-        try:
-            fn(shape, props, float(eps))
-        except TypeError:                                   # a binding without the eps overload
-            fn(shape, props)
-        out.append(props.Mass())
-    return abs(out[0]), out[1]
+    vol = _gprops(shape, "VolumeProperties", eps).Mass()
+    return abs(vol), _gprops(shape, "SurfaceProperties", eps).Mass()
+
+
+def volume(shape, eps=1.0e-7):
+    """The shape's volume (its absolute value), adaptive integration to the relative error eps."""
+    return abs(_gprops(shape, "VolumeProperties", eps).Mass())
+
+
+def centroid(shape, eps=1.0e-7):
+    """The centre of the shape's volume (3,), adaptive integration to the relative error eps."""
+    c = _gprops(shape, "VolumeProperties", eps).CentreOfMass()
+    return np.array([c.X(), c.Y(), c.Z()])
 
 
 def is_valid(shape):

@@ -1121,13 +1121,32 @@ XGeom: rudder parametrization, propeller blades, hulls, wings and fins. Updated 
   For the web app: additive. Tests: kernel 16, tool 83 with the window and OCC, wing 80, hull 65, blade 90 with
   the window and the CAD, hull_eq 15, hull_modify 17, files 60, contract 271, relations 138, tip_new all pass
   (stage 2 on cadquery-ocp alone too); the Rudder folder tool 82, kernel 16.
+- The CAD kernel, step 3 (27 Nov 2026; Eddie's order): `vehicle_cad.py`, `wing_modify.py` and `hull_modify.py`
+  call only the kernel. New kernel functions (additive): `shapes` (the sub-shapes of a kind), `is_same`,
+  `free_wires`, `cylinder_face`, `prism`, `transformed`, `mirrored`, `fuse_all` (many shapes in one boolean, in
+  parallel), `unify`, `volume`, `centroid`, `interpolate` (GeomAPI_Interpolate's curve as its poles, weights,
+  knots and degree), and weights for `bspline_surface` (rational surfaces). vehicle_cad keeps its helpers' names
+  (`_shapes`, `_bbox`, `_sewn_solid`, `transformed`, `fuse`, `volume`, `compound`, ...), now the kernel's
+  functions, since bb2's scripts, the tests, blade_modify, prop_hub and blade_extraction call them. wing_modify:
+  the blended wing body's mirror image and fuse, its solid's properties. hull_modify: the hull's NURBS faces
+  (the profile through the interpolated curve times the rational circle), the half body's face on the plane of
+  symmetry, the sewing; it no longer imports xcad_loft. The kernel's booleans without a fuzzy value now build
+  once (their constructor builds them; xcad_loft's common and X_CAD_new's cut were built a second time): the
+  same shapes. The two docstrings that said the propeller's CAD needs pythonocc-core (vehicle_cad, xgeom_tool's
+  Vehicle CAD) now say either binding. `_cad_compare.py`: a STEP file's product name counts the shapes written
+  so far in the run, so its digest now leaves the count out (a run of some cases, named after the file, compares
+  with a whole one); four more cases (SUBOFF's half body, vehicle_cad's own propeller of an older set-up, two
+  vehicles fused: the hull with four rudders and the propeller's 1/Z, the hull with two fins and the wing pair).
+  All 18 the same before and after, and the same on cadquery-ocp alone. For the web app: additive. Tests: kernel
+  25, tool 83 with the window and OCC, wing 80, hull 65, blade 90 with the window and the CAD, hull_eq 15,
+  hull_modify 17, files 60, contract 271, relations 138; the Rudder folder tool 82, kernel 25.
 
 ## Next steps
 
-- The CAD kernel (cad_kernel.py), Eddie's order: step 3, vehicle_cad, wing_modify and hull_modify onto the
-  kernel (and the docstrings of vehicle_cad and xgeom_tool that still say the propeller's CAD needs
-  pythonocc-core); the extraction modules last, if From CAD has to run in the browser; bb2_build and the tests
-  that import OCC themselves when it suits. `_cad_compare.py` before and after each, and
+- The CAD kernel (cad_kernel.py): Eddie's three steps are done (xcad_loft; X_CAD_new and prop_hub; vehicle_cad,
+  wing_modify and hull_modify). Left on the binding helpers: the extraction modules (Rudder_geom_extraction,
+  blade_extraction, hull_extraction: From CAD), if From CAD has to run in the browser; bb2's scripts and the
+  tests that import OCC themselves, when it suits. `_cad_compare.py` before and after each, and
   `_cad_kernel_test.MOVED` grows with them.
 - Wings and fins: the tips (next; user, 8 Oct 2026), then a check on the user's machine of the wing, the fin and
   the vehicle with them (pythonocc-core).

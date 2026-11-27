@@ -86,7 +86,8 @@ Vehicle
                             on it, so that the fuse is clean); the propeller its blades,
                             closed at the root on the hub cylinder, and the hub. A
                             component whose count is 0 is not built. A few minutes (the
-                            propeller's CAD takes most); needs pythonocc-core.
+                            propeller's CAD takes most); needs pythonocc-core or
+                            cadquery-ocp (through cad_kernel).
 Left panel (rudder)
     Rudder    the Rudder slot's two options (26 Nov 2026; where xgeom_wing.py is):
               modify an existing rudder (the panel below: the original stays

@@ -5,25 +5,30 @@ The samples' CAD, recorded so a change to the CAD code can be checked for
 changing nothing (27 Nov 2026, the CAD kernel: cad_kernel.py). Each case is
 built the way the design tool builds it and read back from its STEP file: its
 faces, volume, area, validity and bounding box, and a digest of the STEP
-file's DATA section (its header carries the time) and of an IGES file's
+file's DATA section (its header carries the time; the product's name the count
+of the shapes written so far in the run, left out) and of an IGES file's
 directory and parameter lines.
 
-    python _cad_compare.py before.json           record (about 7 minutes)
+    python _cad_compare.py before.json           record (about 12 minutes)
     python _cad_compare.py after.json            ... after the change, on the same machine
+    python _cad_compare.py some.json hull bwb    only the cases named
     python _cad_compare.py --diff before.json after.json
 
 The cases: the rudder modified below H (one loft, two lofts, the half body),
 the wing, the fin, the planar rudders (rudder.txt, the wind-tunnel rudder with
-its tilted tip and cap), the blended wing body, SUBOFF's hull, the MSc blade
-(the DRDC sector, the whole propeller as a solid, a cone hub's sector, the
-cylinder hub's sector as a solid, X_CAD_new's root trimmed at the hub). Needs
-pythonocc-core or cadquery-ocp. The digests depend on the OCCT version: compare
-records made on one machine.
+its tilted tip and cap), the blended wing body, SUBOFF's hull (whole, half),
+the MSc blade (the DRDC sector, the whole propeller as a solid, a cone hub's
+sector, the cylinder hub's sector as a solid, X_CAD_new's root trimmed at the
+hub, vehicle_cad's own propeller of an older set-up), two vehicles as the
+Vehicle CAD fuses them (the hull, four rudders and the propeller's 1/Z; the
+hull, two fins and the wing pair). Needs pythonocc-core or cadquery-ocp. The
+digests depend on the OCCT version: compare records made on one machine.
 """
 
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -36,7 +41,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 def step_digest(path):
     with open(path, errors="replace") as fh:
         text = fh.read()
-    return hashlib.sha1(text[text.index("DATA;"):].encode()).hexdigest()
+    data = re.sub(r"(Open CASCADE STEP translator [\d.]+) \d+", r"\1", text[text.index("DATA;"):])
+    return hashlib.sha1(data.encode()).hexdigest()
 
 
 def iges_digest(path):
@@ -58,7 +64,7 @@ def measure(step):
     return rec
 
 
-def record(path):
+def record(path, only=()):
     os.chdir(HERE)                                             # the adapters' files are relative to this folder
     sys.path.insert(0, HERE)
     import xgeom_blade as XBL
@@ -68,6 +74,8 @@ def record(path):
     out = {}
     with tempfile.TemporaryDirectory() as tmp:
         def run(name, fn):
+            if only and name not in only:
+                return
             t0 = time.time()
             try:
                 rec = fn()
@@ -128,8 +136,51 @@ def record(path):
         run("blade_sector_drdc", lambda: blade("sector", "bs"))
         run("blade_whole", lambda: blade("whole", "bw"))
         run("blade_cone_sector", lambda: blade("sector", "bc", cone=True))
+        def vc_propeller():
+            """vehicle_cad's propeller of an older set-up (the DRDC faces of one blade): the blade closed at its
+            root on the hub cylinder (blade_solid), five copies fused with the hub (propeller_solid)."""
+            import blade_modify as BM
+            import cad_kernel as CK
+            import vehicle_cad as VC
+            from tip_surfaces_new import TipConfig, build_drdc_grids
+            from X_CAD_new import X_CAD
+            p = BM.read_params(os.path.join(HERE, "msc_blade.txt"))
+            design, _ = BM.fit_design(p)
+            sub = os.path.join(tmp, "vcp")
+            shape = X_CAD(build_drdc_grids(BM.blade_surface(design, p), TipConfig(), verbose=False), 0,
+                          output_dir=sub, hub=False)
+            r = 1000.0 * design.hub_radius
+            prop = VC.propeller_solid(VC.blade_solid(shape, r), p.blades, r, 1000.0 * design.hub_height)
+            return measure(CK.write_step(prop, os.path.join(sub, "prop.step")))
+
+        def vehicle(case, kinds, **placement):
+            """A vehicle as the tool's Vehicle CAD builds it (vehicle_cad.run_vehicle, in this process): each
+            component's build (half=False), placed and fused."""
+            import vehicle_cad as VC
+            import xgeom_vehicle as XV
+            make = {"hull": XH.HullAdapter, "rudder": XR.RudderAdapter, "fin": XW.FinAdapter, "wing": XW.WingAdapter,
+                    "blade": XBL.BladeAdapter}
+            ads = {k: make[k]() for k in kinds}
+            for k, ad in ads.items():
+                ad.out_dir = os.path.join(tmp, case, k)
+                ad.settings["plot"] = False
+            parts = {k: XV.PARTS[k](ad) for k, ad in ads.items()}
+            pl = XV.default_placement(parts)
+            for key, val in placement.items():
+                setattr(pl, key, val)
+            segs, info = XV.assemble(parts, pl)
+            tasks = {k: ads[k].build_task(case, half=False) for k in XV.active(parts, pl)}
+            rec = VC.run_vehicle(os.path.join(tmp, case, "vehicle"), case, tasks, parts, info, pl, lambda t: None,
+                                 separate=False)["record"]
+            return measure(rec["files"]["vehicle"])
+
         run("blade_sector_solid", lambda: blade("sector", "bss", half=False))
         run("x_cad_trimmed", x_cad_trimmed)
+        run("hull_half", lambda: built(XH.HullAdapter(params=os.path.join(HERE, "suboff_hull.txt")), "hh",
+                                       half=True))
+        run("vc_propeller", vc_propeller)
+        run("vehicle_rudders_propeller", lambda: vehicle("vr", ("hull", "rudder", "blade")))
+        run("vehicle_fins_wings", lambda: vehicle("vf", ("hull", "fin", "wing"), fins=2, wing_angle=70.0))
     with open(path, "w") as fh:
         json.dump(out, fh, indent=1)
     return out
@@ -142,6 +193,8 @@ def diff(path_a, path_b):
         b = json.load(fh)
     same = 0
     for k in a:
+        if k not in b:
+            continue
         ka = {x: y for x, y in a[k].items() if x != "seconds"}
         kb = {x: y for x, y in b.get(k, {}).items() if x != "seconds"}
         if ka == kb and "error" not in ka:
@@ -151,16 +204,17 @@ def diff(path_a, path_b):
         else:
             print(f"  DIFFERENT {k}: " + "; ".join(f"{x} {ka.get(x)} -> {kb.get(x)}" for x in sorted(set(ka) | set(kb))
                                                    if ka.get(x) != kb.get(x)))
-    print(f"{same} of {len(a)} cases the same")
-    return same == len(a)
+    both = sum(1 for k in a if k in b)
+    print(f"{same} of {both} cases the same" + (f" ({len(a) - both} not in {path_b})" if both < len(a) else ""))
+    return same == both
 
 
 def main():
     if len(sys.argv) == 4 and sys.argv[1] == "--diff":
         raise SystemExit(0 if diff(sys.argv[2], sys.argv[3]) else 1)
-    if len(sys.argv) != 2:
+    if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
         raise SystemExit(__doc__)
-    record(sys.argv[1])
+    record(sys.argv[1], tuple(sys.argv[2:]))
 
 
 if __name__ == "__main__":
